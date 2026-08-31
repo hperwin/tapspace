@@ -62,6 +62,17 @@ python3 tap.py update 3f7de0b7af --image shot2.png --note "v2: moved the pills, 
 
 Same ticket, version 2, back to `waiting`. On v2+ the page pixel-diffs the new capture against the previous version and floats soft highlights over the regions that changed.
 
+## Setting it up with an AI agent
+
+You can hand this link to a coding agent (Claude Code or similar) and say "set this up." If you are that agent, the whole install is:
+
+1. Clone this repo somewhere stable (it must stay on disk; the server and state live in it).
+2. `python3 tap.py up`, then tell your human to open http://127.0.0.1:4747 in their own browser.
+3. Paste the **Agent duties** section of [`AGENTS.md`](AGENTS.md) into the prompt of every agent whose deliverable is something the human will look at.
+4. If one process coordinates several agents, give it the **Orchestrator duties** from the same file (the short version: tail `data/INBOX.jsonl` and relay each decision to the agent it names).
+
+There is nothing else: no packages, no build, no config. If port 4747 is taken on your machine, change `PORT` at the top of `server.py` and set `TAPSPACE_URL` to match for every `tap.py` caller.
+
 ## The loop
 
 | Actor | Action | Mechanism |
