@@ -1,0 +1,687 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TapSpace</title>
+<style>
+  :root{
+    --ink:#1d1d1f;
+    --dim:#86868b;
+    --faint:#c7c7cc;
+    --line:rgba(0,0,0,.055);
+    --green:#30a14e;
+    --hl:0,122,255;
+    --card:#ffffff;
+    --shadow:0 1px 2px rgba(0,0,0,.04), 0 8px 28px rgba(0,0,0,.07), 0 24px 64px rgba(0,0,0,.05);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{background:#fff}
+  body{
+    color:var(--ink);
+    font:14px/1.45 -apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",sans-serif;
+    -webkit-font-smoothing:antialiased;
+    min-height:100vh;
+    padding:64px 40px 72px;
+  }
+  header{
+    position:fixed;top:0;left:0;right:0;z-index:10;
+    display:flex;align-items:center;justify-content:space-between;
+    padding:18px 40px 12px;
+    background:linear-gradient(#fff 62%,rgba(255,255,255,0));
+    pointer-events:none;
+  }
+  .wordmark{font-size:12px;font-weight:600;letter-spacing:.34em;text-transform:uppercase;color:var(--faint)}
+  @keyframes breathe{0%,100%{opacity:.35}50%{opacity:1}}
+
+  /* ---- top-right presence HUD ---- */
+  #hud{display:flex;flex-direction:column;align-items:flex-end;gap:7px}
+  #sessrow{display:flex;align-items:center;gap:8px;font-size:10.5px;color:var(--faint);
+    letter-spacing:.06em;text-transform:uppercase}
+  #sessdots{display:flex;align-items:center;gap:5px}
+  .sdot2{width:5px;height:5px;border-radius:50%;background:var(--faint);opacity:.45;display:inline-block}
+  .sdot2.working{background:var(--green)}
+  #actrows{display:flex;flex-direction:column;align-items:flex-end;gap:5px}
+  .actrow{display:flex;align-items:center;gap:7px;font-size:10.5px;color:var(--dim);
+    letter-spacing:.05em}
+  .actrow .who{font-weight:600;text-transform:uppercase;letter-spacing:.08em}
+  .actrow .what{color:var(--faint)}
+  .actrow.waiting .what{color:rgba(var(--hl),.85)}
+  .actrow.fading{opacity:.38}
+  .actrow svg{width:14px;height:14px;overflow:visible}
+  .actrow circle{fill:none;stroke:var(--ink);stroke-width:1.8;stroke-linecap:round;opacity:.75}
+  .actrow.waiting circle{stroke:rgb(var(--hl))}
+  .actrow.decision circle{stroke:var(--green)}
+  .actrow.fading circle{stroke:var(--faint)}
+
+  #space{
+    display:flex;flex-wrap:wrap;gap:26px;align-items:flex-start;justify-content:center;
+    max-width:1720px;margin:0 auto;
+  }
+  #empty{
+    position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
+    color:var(--faint);font-size:13px;letter-spacing:.14em;text-transform:uppercase;
+    opacity:0;transition:opacity 1.2s ease;pointer-events:none;
+  }
+  #empty.show{opacity:.55}
+
+  .card{
+    width:clamp(260px,24vw,440px);
+    background:var(--card);border-radius:18px;box-shadow:var(--shadow);
+    overflow:hidden;
+    opacity:0;filter:blur(26px);transform:scale(.955) translateY(14px);
+    transition:opacity 1.05s cubic-bezier(.22,.9,.24,1),
+               filter 1.15s cubic-bezier(.22,.9,.24,1),
+               transform 1.05s cubic-bezier(.22,.9,.24,1);
+    will-change:opacity,filter,transform;
+  }
+  .card.in{opacity:1;filter:blur(0);transform:scale(1) translateY(0)}
+  .card.out{opacity:0;filter:blur(18px);transform:scale(.94) translateY(6px);
+    transition:opacity .7s ease,filter .7s ease,transform .7s ease}
+
+  .meta{display:flex;align-items:baseline;gap:7px;padding:10px 14px 8px}
+  .agent{font-size:10px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--dim)}
+  .title{font-size:11.5px;color:var(--faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+  .ver{font-size:10px;color:var(--faint);font-variant-numeric:tabular-nums}
+
+  .shotwrap{
+    position:relative;background:#f2f2f3;
+    height:calc(50vh - 96px);
+  }
+  .shot{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;cursor:zoom-in}
+  .shot.swap{animation:swapin 1.1s cubic-bezier(.22,.9,.24,1)}
+  @keyframes swapin{from{opacity:0;filter:blur(22px)}to{opacity:1;filter:blur(0)}}
+
+  #lightbox{
+    position:fixed;inset:0;z-index:50;display:none;
+    align-items:center;justify-content:center;flex-direction:column;gap:14px;
+    background:rgba(255,255,255,.88);backdrop-filter:blur(18px);
+    cursor:zoom-out;opacity:0;transition:opacity .35s ease;
+  }
+  #lightbox.open{display:flex}
+  #lightbox.in{opacity:1}
+  #lbstage{position:relative;filter:blur(24px);transform:scale(.965);
+    transition:filter .8s cubic-bezier(.22,.9,.24,1),transform .8s cubic-bezier(.22,.9,.24,1)}
+  #lightbox.in #lbstage{filter:blur(0);transform:scale(1)}
+  #lbimg{display:block;max-width:92vw;max-height:88vh;border-radius:14px;
+    box-shadow:0 12px 48px rgba(0,0,0,.14), 0 40px 120px rgba(0,0,0,.10)}
+  #lbcap{font-size:11px;color:var(--dim);letter-spacing:.06em;text-transform:uppercase}
+
+  .hls{position:absolute;pointer-events:none}
+  .hl{
+    position:absolute;border-radius:7px;
+    background:rgba(var(--hl),.10);
+    box-shadow:0 0 0 1px rgba(var(--hl),.28), 0 0 14px rgba(var(--hl),.14);
+    opacity:0;animation:hlin 1.4s ease .55s forwards;
+  }
+  @keyframes hlin{0%{opacity:0}45%{opacity:1}100%{opacity:.55}}
+
+  .acts{display:flex;gap:8px;padding:10px 12px 12px}
+  .btn{
+    appearance:none;border:0;cursor:pointer;border-radius:11px;
+    font:600 12.5px/1 -apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif;
+    padding:10px 0;flex:1;letter-spacing:.01em;
+    transition:transform .15s ease,opacity .15s ease,background .2s ease;
+  }
+  .btn:active{transform:scale(.965)}
+  .approve{background:var(--ink);color:#fff}
+  .approve:hover{opacity:.86}
+  .notquite{background:rgba(0,0,0,.045);color:var(--ink)}
+  .notquite:hover{background:rgba(0,0,0,.08)}
+
+  .chat{max-height:0;overflow:hidden;transition:max-height .45s cubic-bezier(.3,.8,.3,1);padding:0 12px}
+  .chat.open{max-height:200px}
+  .chat textarea{
+    width:100%;min-height:78px;resize:none;border:1px solid var(--line);border-radius:11px;
+    background:rgba(0,0,0,.025);padding:10px 11px;
+    font:13px/1.5 -apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif;color:var(--ink);
+    outline:none;transition:border-color .2s ease,background .2s ease;
+  }
+  .chat textarea:focus{border-color:rgba(0,0,0,.18);background:#fff}
+  .chat .send{
+    margin:8px 0 12px;width:100%;padding:10px 0;border:0;border-radius:11px;cursor:pointer;
+    background:var(--ink);color:#fff;font:600 12.5px/1 -apple-system,sans-serif;
+    transition:opacity .15s ease,transform .15s ease;
+  }
+  .chat .send:disabled{opacity:.3;cursor:default}
+  .chat .send:active{transform:scale(.975)}
+
+  .state{display:none;align-items:center;gap:8px;padding:11px 14px 13px;font-size:12px;color:var(--dim)}
+  .state .sdot{width:6px;height:6px;border-radius:50%;background:var(--faint);animation:breathe 2s ease-in-out infinite}
+  .card.changes .acts,.card.changes .chat{display:none}
+  .card.changes .state{display:flex}
+
+  .gonenote{position:absolute;inset:0;align-items:center;justify-content:center;
+    font-size:10.5px;color:var(--faint);letter-spacing:.09em;text-transform:uppercase}
+  .checkveil{
+    position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+    background:rgba(255,255,255,.82);backdrop-filter:blur(6px);
+    opacity:0;pointer-events:none;transition:opacity .5s ease;
+  }
+  .checkveil.show{opacity:1}
+  .checkveil svg{width:64px;height:64px}
+  .checkveil circle{fill:none;stroke:var(--green);stroke-width:2.6;stroke-dasharray:214;stroke-dashoffset:214}
+  .checkveil path{fill:none;stroke:var(--green);stroke-width:3.4;stroke-linecap:round;stroke-linejoin:round;
+    stroke-dasharray:48;stroke-dashoffset:48}
+  .checkveil.show circle{animation:draw 0.7s cubic-bezier(.4,0,.2,1) forwards}
+  .checkveil.show path{animation:draw 0.45s cubic-bezier(.4,0,.2,1) .5s forwards}
+  @keyframes draw{to{stroke-dashoffset:0}}
+
+  @media (max-width:900px){
+    body{padding:60px 14px 52px}
+    .card{width:clamp(240px,46vw,420px)}
+    header{padding:16px 18px 10px}
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="wordmark">TapSpace</div>
+  <div id="hud">
+    <div id="sessrow"><span id="sessdots"></span><span id="sesstext">connecting</span></div>
+    <div id="actrows"></div>
+  </div>
+</header>
+<div id="empty"><span>The space is clear</span></div>
+<main id="space"></main>
+<div id="lightbox"><div id="lbstage"><img id="lbimg" alt=""></div><div id="lbcap"></div></div>
+
+<script>
+const RIG = '__RIG__';   // baked by the server at serve time; drift vs /api/state -> self-reload
+const space = document.getElementById('space');
+const empty = document.getElementById('empty');
+const cards = new Map();     // id -> {el, version, status}
+const settled = new Set();
+let stagger = 0;
+
+function timeago(ts){
+  const s = Math.max(0, (Date.now()/1000) - ts);
+  if (s < 90) return 'now';
+  if (s < 3600) return Math.round(s/60) + 'm';
+  return Math.round(s/3600) + 'h';
+}
+
+function decide(id, action, message){
+  return fetch('/api/decide', {
+    method:'POST', headers:{'content-type':'application/json'},
+    body: JSON.stringify({id, action, message: message || ''})
+  });
+}
+
+/* ---- change highlighting ----
+   Diff the previous version's real pixels against the new version's,
+   then float soft rounded highlights over the regions that changed.
+   Skips when the change is most of the frame (a redesign, not a tweak). */
+const GRID = 28;               // cells across
+const CELL_THRESH = 14;        // mean abs channel diff to call a cell changed
+const SKIP_FRACTION = 0.55;
+
+function loadImg(src){
+  return new Promise((res, rej) => {
+    const im = new Image();
+    im.onload = () => res(im);
+    im.onerror = rej;
+    im.src = src;
+  });
+}
+
+async function diffRegions(prevSrc, curSrc){
+  const [a, b] = await Promise.all([loadImg(prevSrc), loadImg(curSrc)]);
+  if (!a.naturalWidth || !b.naturalWidth) return null;
+  const W = 168;
+  const H = Math.round(W * a.naturalHeight / a.naturalWidth);
+  const cv = document.createElement('canvas');
+  cv.width = W; cv.height = H;
+  const cx = cv.getContext('2d', {willReadFrequently:true});
+  cx.drawImage(a, 0, 0, W, H);
+  const da = cx.getImageData(0, 0, W, H).data;
+  cx.clearRect(0, 0, W, H);
+  cx.drawImage(b, 0, 0, W, H);
+  const db = cx.getImageData(0, 0, W, H).data;
+
+  const cw = Math.ceil(W / GRID);
+  const rows = Math.ceil(H / cw);
+  const changed = [];
+  let nChanged = 0;
+  for (let gy = 0; gy < rows; gy++){
+    changed[gy] = [];
+    for (let gx = 0; gx < GRID; gx++){
+      let sum = 0, n = 0;
+      for (let y = gy*cw; y < Math.min((gy+1)*cw, H); y++){
+        for (let x = gx*cw; x < Math.min((gx+1)*cw, W); x++){
+          const i = (y*W + x) * 4;
+          sum += Math.abs(da[i]-db[i]) + Math.abs(da[i+1]-db[i+1]) + Math.abs(da[i+2]-db[i+2]);
+          n++;
+        }
+      }
+      changed[gy][gx] = n && (sum / (n*3)) > CELL_THRESH;
+      if (changed[gy][gx]) nChanged++;
+    }
+  }
+  if (!nChanged || nChanged / (rows*GRID) > SKIP_FRACTION) return null;
+
+  // connected components -> bounding boxes (in fractions of the image)
+  const seen = changed.map(r => r.map(() => false));
+  const boxes = [];
+  for (let gy = 0; gy < rows; gy++){
+    for (let gx = 0; gx < GRID; gx++){
+      if (!changed[gy][gx] || seen[gy][gx]) continue;
+      let minx = gx, maxx = gx, miny = gy, maxy = gy;
+      const q = [[gx, gy]];
+      seen[gy][gx] = true;
+      while (q.length){
+        const [x, y] = q.pop();
+        minx = Math.min(minx,x); maxx = Math.max(maxx,x);
+        miny = Math.min(miny,y); maxy = Math.max(maxy,y);
+        for (const [dx,dy] of [[1,0],[-1,0],[0,1],[0,-1],[1,1],[-1,-1],[1,-1],[-1,1]]){
+          const nx = x+dx, ny = y+dy;
+          if (ny>=0 && ny<rows && nx>=0 && nx<GRID && changed[ny][nx] && !seen[ny][nx]){
+            seen[ny][nx] = true; q.push([nx,ny]);
+          }
+        }
+      }
+      boxes.push({
+        x: minx*cw/W, y: miny*cw/H,
+        w: Math.min((maxx+1)*cw, W)/W - minx*cw/W,
+        h: Math.min((maxy+1)*cw, H)/H - miny*cw/H,
+      });
+    }
+  }
+  return {boxes, aspect: a.naturalWidth / a.naturalHeight};
+}
+
+function paintHighlights(el, regions){
+  const wrap = el.querySelector('.shotwrap');
+  wrap.querySelectorAll('.hls').forEach(h => h.remove());
+  if (!regions || !regions.boxes.length) return;
+  // object-fit:contain -> compute the drawn image rect inside the well
+  const ww = wrap.clientWidth, wh = wrap.clientHeight;
+  const wellAspect = ww / wh;
+  let iw, ih, ox, oy;
+  if (regions.aspect > wellAspect){ iw = ww; ih = ww / regions.aspect; ox = 0; oy = (wh - ih)/2; }
+  else { ih = wh; iw = wh * regions.aspect; oy = 0; ox = (ww - iw)/2; }
+  const layer = document.createElement('div');
+  layer.className = 'hls';
+  layer.style.cssText = `left:${ox}px;top:${oy}px;width:${iw}px;height:${ih}px`;
+  const pad = 3;
+  for (const b of regions.boxes.slice(0, 12)){
+    const d = document.createElement('div');
+    d.className = 'hl';
+    d.style.cssText = `left:${b.x*iw - pad}px;top:${b.y*ih - pad}px;width:${b.w*iw + pad*2}px;height:${b.h*ih + pad*2}px`;
+    layer.appendChild(d);
+  }
+  wrap.appendChild(layer);
+}
+
+const regionCache = new Map();   // ticket id -> regions for its current version
+
+async function highlightChanges(el, t){
+  regionCache.delete(t.id);
+  if (t.version < 2) return;
+  // pixel-diff is image-vs-image only; any video version on either side skips it
+  const cur = verEntry(t, t.version), prev = verEntry(t, t.version - 1);
+  if ((cur.media || 'image') !== 'image' || (prev.media || 'image') !== 'image') return;
+  try{
+    const regions = await diffRegions(
+      '/shots/' + t.id + '/' + (t.version-1) + '.png',
+      '/shots/' + t.id + '/' + t.version + '.png');
+    if (regions) regionCache.set(t.id, regions);
+    paintHighlights(el, regions);
+  }catch(e){ /* highlight is best-effort, never block the card */ }
+}
+
+/* ---- lightbox ---- */
+const lightbox = document.getElementById('lightbox');
+const lbstage = document.getElementById('lbstage');
+const lbimg = document.getElementById('lbimg');
+const lbcap = document.getElementById('lbcap');
+
+function openLightbox(t){
+  lbimg.src = '/shots/' + t.id + '/' + t.version + '.png';
+  lbcap.textContent = t.agent + ' · ' + t.title + ' · v' + t.version;
+  lbstage.querySelectorAll('.hls').forEach(h => h.remove());
+  lightbox.classList.add('open');
+  requestAnimationFrame(() => requestAnimationFrame(() => lightbox.classList.add('in')));
+  const paint = () => {
+    const regions = regionCache.get(t.id);
+    if (!regions || !regions.boxes.length) return;
+    const iw = lbimg.clientWidth, ih = lbimg.clientHeight;
+    const layer = document.createElement('div');
+    layer.className = 'hls';
+    layer.style.cssText = `left:0;top:0;width:${iw}px;height:${ih}px`;
+    const pad = 5;
+    for (const b of regions.boxes.slice(0, 12)){
+      const d = document.createElement('div');
+      d.className = 'hl';
+      d.style.cssText = `left:${b.x*iw - pad}px;top:${b.y*ih - pad}px;width:${b.w*iw + pad*2}px;height:${b.h*ih + pad*2}px`;
+      layer.appendChild(d);
+    }
+    lbstage.appendChild(layer);
+  };
+  if (lbimg.complete && lbimg.naturalWidth) requestAnimationFrame(paint);
+  else lbimg.onload = () => requestAnimationFrame(paint);
+}
+
+function closeLightbox(){
+  lightbox.classList.remove('in');
+  setTimeout(() => lightbox.classList.remove('open'), 360);
+}
+lightbox.addEventListener('click', closeLightbox);
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && lightbox.classList.contains('open')) closeLightbox();
+});
+
+function buildCard(t){
+  const el = document.createElement('article');
+  el.className = 'card';
+  el.dataset.id = t.id;
+  el.innerHTML = `
+    <div class="meta">
+      <span class="agent"></span>
+      <span class="title"></span>
+      <span class="ver"></span>
+    </div>
+    <div class="shotwrap">
+      <img class="shot" alt="">
+      <video class="shot vid" controls muted playsinline preload="metadata" style="display:none"></video>
+      <div class="gonenote" style="display:none">video reviewed · deleted per house rule</div>
+      <div class="checkveil">
+        <svg viewBox="0 0 76 76">
+          <circle cx="38" cy="38" r="34"/>
+          <path d="M24 39.5 L34 49 L52 28"/>
+        </svg>
+      </div>
+    </div>
+    <div class="acts">
+      <button class="btn approve">Approve</button>
+      <button class="btn notquite">Not quite</button>
+    </div>
+    <div class="chat">
+      <textarea placeholder="Tell the agent what to change…"></textarea>
+      <button class="send">Send to agent</button>
+    </div>
+    <div class="state"><span class="sdot"></span><span class="statetxt"></span></div>`;
+
+  const chat = el.querySelector('.chat');
+  const ta = el.querySelector('textarea');
+  const send = el.querySelector('.send');
+
+  el.querySelector('.shot').addEventListener('click', () => {
+    const cur = cards.get(t.id);
+    openLightbox({...t, version: cur ? cur.version : t.version});
+  });
+  el.querySelector('.approve').addEventListener('click', () => {
+    decide(t.id, 'approve').then(() => settle(el, t.id));
+  });
+  el.querySelector('.notquite').addEventListener('click', () => {
+    chat.classList.toggle('open');
+    if (chat.classList.contains('open')) ta.focus();
+  });
+  send.addEventListener('click', () => {
+    const msg = ta.value.trim();
+    if (!msg) return;
+    send.disabled = true;
+    decide(t.id, 'change', msg).then(() => {
+      chat.classList.remove('open');
+      ta.value = ''; send.disabled = false;
+      setState(el, t, 'changes');
+    });
+  });
+  ta.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) send.click();
+  });
+  return el;
+}
+
+function settle(el, id){
+  settled.add(id);
+  el.querySelector('.checkveil').classList.add('show');
+  setTimeout(() => {
+    el.classList.add('out');
+    setTimeout(() => { el.remove(); cards.delete(id); toggleEmpty(); }, 750);
+  }, 1450);
+}
+
+function setState(el, t, status){
+  el.classList.toggle('changes', status === 'changes');
+  if (status === 'changes'){
+    el.querySelector('.statetxt').textContent = 'with ' + t.agent + ' — working on your notes';
+  }
+}
+
+function verEntry(t, v){
+  return t.versions.find(e => e.v === v) || {};
+}
+
+function fill(el, t, isNewVersion){
+  el.querySelector('.agent').textContent = t.agent;
+  el.querySelector('.title').textContent = t.title;
+  el.querySelector('.ver').textContent = 'v' + t.version + ' · ' + timeago(t.versions[t.versions.length-1].ts);
+  const img = el.querySelector('img.shot');
+  const vid = el.querySelector('video.shot');
+  const e = verEntry(t, t.version);
+  const isVideo = e.media === 'video';
+  const gone = el.querySelector('.gonenote');
+  gone.style.display = (isVideo && e.video_deleted) ? 'flex' : 'none';
+  const src = '/shots/' + t.id + '/' + t.version + '.' + (e.ext || 'png');
+  if (isVideo && e.video_deleted){
+    img.style.display = 'none';
+    if (vid.dataset.src){ vid.removeAttribute('src'); delete vid.dataset.src; vid.load(); }
+    vid.style.display = 'none';
+  } else if (isVideo){
+    img.style.display = 'none';
+    vid.style.display = '';
+    if (vid.dataset.src !== src){
+      vid.dataset.src = src;
+      vid.src = src;
+      if (isNewVersion){ vid.classList.remove('swap'); void vid.offsetWidth; vid.classList.add('swap'); }
+      el.querySelectorAll('.hls').forEach(h => h.remove());
+      regionCache.delete(t.id);
+    }
+  } else {
+    vid.style.display = 'none';
+    if (vid.dataset.src){ vid.removeAttribute('src'); delete vid.dataset.src; vid.load(); }
+    img.style.display = '';
+    if (img.dataset.src !== src){
+      img.dataset.src = src;
+      img.src = src;
+      if (isNewVersion){ img.classList.remove('swap'); void img.offsetWidth; img.classList.add('swap'); }
+      highlightChanges(el, t);
+    }
+  }
+  setState(el, t, t.status);
+}
+
+function toggleEmpty(){
+  empty.classList.toggle('show', cards.size === 0);
+}
+
+async function tick(){
+  let data;
+  try{
+    const r = await fetch('/api/state');
+    data = await r.json();
+  }catch(e){
+    return;
+  }
+  if (data.rig && RIG !== '__' + 'RIG__' && data.rig !== RIG){ location.reload(); return; }
+  const seen = new Set();
+  for (const t of data.tickets){
+    if (t.status === 'approved' || settled.has(t.id)) continue;
+    seen.add(t.id);
+    let c = cards.get(t.id);
+    if (!c){
+      const el = buildCard(t);
+      fill(el, t, false);
+      space.appendChild(el);
+      cards.set(t.id, {el, version:t.version, status:t.status});
+      const delay = 120 * (stagger++);
+      requestAnimationFrame(() => setTimeout(() => el.classList.add('in'), 30 + delay));
+      setTimeout(() => { stagger = Math.max(0, stagger-1); }, 1200);
+    } else {
+      const newVersion = t.version !== c.version;
+      if (newVersion || t.status !== c.status){
+        fill(c.el, t, newVersion);
+        c.version = t.version; c.status = t.status;
+      } else {
+        c.el.querySelector('.ver').textContent = 'v' + t.version + ' · ' + timeago(t.versions[t.versions.length-1].ts);
+      }
+    }
+  }
+  for (const [id, c] of cards){
+    if (!seen.has(id) && !settled.has(id)){
+      c.el.classList.add('out');
+      setTimeout(() => { c.el.remove(); }, 750);
+      cards.delete(id);
+    }
+  }
+  toggleEmpty();
+}
+
+tick();
+setInterval(tick, 1500);
+</script>
+
+<script type="module">
+/* ---- presence HUD (top right) — fully automatic, agents report nothing ----
+   Rows come from the server's own request stream; the session count comes
+   from Claude transcript mtimes on disk. anime.js drives the motion; if the
+   import ever fails the HUD still renders statically. */
+let A = null;
+try{ A = await import('/anime.esm.js'); }catch(e){}
+
+const sessdots = document.getElementById('sessdots');
+const sesstext = document.getElementById('sesstext');
+const actrows = document.getElementById('actrows');
+const rows = new Map();      // key -> {el, kind, state, anims:[]}
+let dotSig = '';
+const anims = {dots: []};
+
+function cancelAll(list){ for (const a of list){ try{ a.cancel(); }catch(e){} } list.length = 0; }
+
+function ring(kind){
+  const svgNS = 'http://www.w3.org/2000/svg';
+  const s = document.createElementNS(svgNS, 'svg');
+  s.setAttribute('viewBox', '0 0 16 16');
+  const c = document.createElementNS(svgNS, 'circle');
+  c.setAttribute('cx', 8); c.setAttribute('cy', 8); c.setAttribute('r', 6);
+  s.appendChild(c);
+  return s;
+}
+
+function animateRing(row){
+  cancelAll(row.anims);
+  const c = row.el.querySelector('circle');
+  const s = row.el.querySelector('svg');
+  if (!A){ return; }
+  if (row.state === 'fading'){ return; }
+  if (row.kind === 'waiting'){
+    // full quiet ring, breathing — "your move"
+    c.removeAttribute('stroke-dasharray');
+    row.anims.push(A.animate(c, {opacity: [.3, .95], duration: 1500,
+      alternate: true, loop: true, ease: 'inOutSine'}));
+  } else {
+    // the checkmark-circle feel: a drawing arc that chases itself
+    try{
+      const d = A.svg.createDrawable(c);
+      row.anims.push(A.animate(d, {draw: ['0 0', '0 1', '1 1'],
+        duration: 1900, loop: true, ease: 'inOutSine'}));
+    }catch(e){
+      c.setAttribute('stroke-dasharray', '26 12');
+    }
+    row.anims.push(A.animate(s, {rotate: 360, duration: 2400, loop: true, ease: 'linear'}));
+  }
+}
+
+function enter(el){
+  if (!A){ el.style.opacity = 1; return; }
+  A.animate(el, {opacity: [0, 1], filter: ['blur(8px)', 'blur(0px)'],
+    translateY: [-6, 0], duration: 700, ease: 'out(3)'});
+}
+
+function exit(el, done){
+  if (!A){ el.remove(); done(); return; }
+  A.animate(el, {opacity: 0, filter: 'blur(8px)', translateY: -6,
+    duration: 450, ease: 'in(2)', onComplete: () => { el.remove(); done(); }});
+}
+
+function renderDots(sess){
+  const working = Math.min(sess.working || 0, 8);
+  const idle = Math.min(Math.max((sess.recent || 0) - (sess.working || 0), 0), 8 - working);
+  const sig = working + '|' + idle;
+  if (sig === dotSig) return;
+  dotSig = sig;
+  cancelAll(anims.dots);
+  sessdots.innerHTML = '';
+  for (let i = 0; i < working; i++){
+    const d = document.createElement('span');
+    d.className = 'sdot2 working';
+    sessdots.appendChild(d);
+  }
+  for (let i = 0; i < idle; i++){
+    const d = document.createElement('span');
+    d.className = 'sdot2';
+    sessdots.appendChild(d);
+  }
+  if (A && working){
+    anims.dots.push(A.animate([...sessdots.querySelectorAll('.working')],
+      {scale: [.8, 1.3], opacity: [.45, 1], duration: 850, alternate: true,
+       loop: true, ease: 'inOutSine', delay: A.stagger(140)}));
+  }
+}
+
+async function hudTick(){
+  let d;
+  try{
+    d = await (await fetch('/api/activity')).json();
+  }catch(e){
+    sesstext.textContent = 'reconnecting';
+    return;
+  }
+  const sess = d.sessions || {};
+  sesstext.textContent = (sess.working || 0) + ' working · ' + (sess.recent || 0) + ' sessions';
+  renderDots(sess);
+
+  const seen = new Set();
+  const list = d.rows.slice(0, 4);
+  for (const r of list){
+    const key = r.campaign + '|' + r.agent;
+    seen.add(key);
+    const cls = 'actrow ' + r.kind + (r.state === 'fading' ? ' fading' : '');
+    let row = rows.get(key);
+    if (!row){
+      const el = document.createElement('div');
+      el.className = cls;
+      el.style.opacity = 0;
+      el.appendChild(ring(r.kind));
+      const label = document.createElement('span');
+      label.innerHTML = '<span class="who"></span> <span class="what"></span>';
+      el.appendChild(label);
+      actrows.appendChild(el);
+      row = {el, kind: r.kind, state: r.state, anims: []};
+      rows.set(key, row);
+      enter(el);
+      animateRing(row);
+    }
+    row.el.querySelector('.who').textContent = r.agent;
+    row.el.querySelector('.what').textContent = '· ' + r.verb;
+    if (row.kind !== r.kind || row.state !== r.state){
+      row.kind = r.kind; row.state = r.state;
+      row.el.className = cls;
+      animateRing(row);
+    }
+  }
+  for (const [key, row] of rows){
+    if (!seen.has(key)){
+      rows.delete(key);
+      cancelAll(row.anims);
+      exit(row.el, () => {});
+    }
+  }
+}
+
+hudTick();
+setInterval(hudTick, 2000);
+</script>
+</body>
+</html>
