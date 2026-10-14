@@ -70,6 +70,16 @@ Naming: Hayden's GitHub agent issues are called TAPS. Never show the word "pilot
   NO Origin header.
 - Opening a tap thread POSTs /api/taps/refresh. Empty states as on the web.
 
+### Chat images (added after the first build started; required)
+Parity with the web Chat tab (see space/index.html and server.py `_chat_images`): in agent threads Hayden can attach images by a
+paperclip button (NSOpenPanel, multiple), by pasting (Cmd-V image data or files), and by dragging files/images onto the chat pane (a
+dashed blue "Drop images to attach" overlay springs in). Pending images show as rounded 84 pt thumbnails in a tray ABOVE the composer
+that springs open/closed; each thumb springs in and has a small × to remove. Send works with text, images, or both:
+POST /api/chat {agent, body, images:[{b64, ext}]} (png/jpg/gif/webp/heic, max 10). Messages with `images` render them as a rounded grid
+above the bubble text (1 = natural aspect up to ~340 pt tall; 2/4 = 2 columns; 3/5+ = 3 columns, square crops); click opens the
+lightbox. Images are served at /chat-media/<file>. Tap threads are text only: hide the paperclip there and toast
+"Images go to agents. Taps take text." on a drop.
+
 ### Menu-bar liquid pill (mirror SnappWAU as directly as possible)
 A borderless non-activating NSPanel at status-bar level, placed just RIGHT of the notch (SnappWAU sits LEFT of it; do not collide;
 on non-notch screens, near the right of the menu bar's center). Reuse/adapt Liquid.swift: a white pill showing the TapSpace mark
