@@ -75,12 +75,12 @@ def _media_from(p):
 
 ROOT = pathlib.Path(__file__).resolve().parent
 SPACE = ROOT / "space"
-DATA = ROOT / "data"
+DATA = pathlib.Path(os.environ.get("TAPSPACE_DATA") or ROOT / "data")
 SHOTS = DATA / "shots"
 STATE = DATA / "tickets.json"
 INBOX = DATA / "INBOX.jsonl"
 CHAT = DATA / "chat.jsonl"
-PORT = 4747
+PORT = int(os.environ.get("TAPSPACE_PORT", "4747"))
 
 # taps = the reviewer's own agent issues on GitHub (authored by them, tap label)
 TAP_LABEL = os.environ.get("TAPSPACE_TAP_LABEL", "nava")
