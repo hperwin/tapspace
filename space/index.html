@@ -167,16 +167,172 @@
   .checkveil.show path{animation:draw 0.45s cubic-bezier(.4,0,.2,1) .5s forwards}
   @keyframes draw{to{stroke-dashoffset:0}}
 
+
+  /* ---- tabs: Visual | Chat ---- */
+  #tabs{position:absolute;left:50%;top:13px;transform:translateX(-50%);pointer-events:auto;
+    display:flex;gap:2px;padding:3px;border-radius:13px;background:rgba(0,0,0,.045)}
+  #tabs .tab{position:relative;z-index:1;appearance:none;border:0;background:none;cursor:pointer;
+    font:600 12px/1 -apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif;letter-spacing:.02em;
+    color:var(--dim);padding:8px 18px;border-radius:10px;transition:color .25s ease;display:flex;align-items:center;gap:6px}
+  #tabs .tab.on{color:var(--ink)}
+  #tabs .pill{position:absolute;z-index:0;top:3px;bottom:3px;border-radius:10px;background:#fff;
+    box-shadow:0 1px 2px rgba(0,0,0,.06),0 4px 14px rgba(0,0,0,.06);
+    transition:left .45s cubic-bezier(.22,.9,.24,1),width .45s cubic-bezier(.22,.9,.24,1)}
+  .badge{min-width:16px;height:16px;padding:0 5px;border-radius:8px;background:rgb(var(--hl));color:#fff;
+    font-size:10px;line-height:16px;text-align:center;font-variant-numeric:tabular-nums;
+    transform:scale(0);transition:transform .35s cubic-bezier(.3,1.6,.5,1)}
+  .badge.show{transform:scale(1)}
+  body.chatmode #space, body.chatmode #empty{display:none}
+  body:not(.chatmode) #chatview{display:none}
+
+  /* ---- chat view ---- */
+  #chatview{position:fixed;top:62px;bottom:22px;left:0;right:0;padding:0 40px;
+    display:grid;grid-template-columns:300px minmax(0,1fr);gap:22px;max-width:1240px;margin:0 auto}
+  #rail{overflow-y:auto;padding:6px 4px 20px;display:flex;flex-direction:column;gap:8px}
+  .railhead{font-size:10.5px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:var(--faint);
+    padding:12px 10px 2px}
+  .thread{position:relative;appearance:none;border:0;text-align:left;cursor:pointer;width:100%;
+    display:flex;gap:12px;align-items:center;padding:12px 12px;border-radius:16px;background:transparent;
+    font:inherit;color:inherit;transition:background .25s ease,transform .2s ease, box-shadow .3s ease}
+  .thread:hover{background:rgba(0,0,0,.03)}
+  .thread:active{transform:scale(.98)}
+  .thread.on{background:#fff;box-shadow:var(--shadow)}
+  .thread .tx{flex:1;min-width:0}
+  .thread .nm{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .thread .sub{font-size:11.5px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}
+  .thread .unread{width:8px;height:8px;border-radius:50%;background:rgb(var(--hl));flex:none;
+    transform:scale(0);transition:transform .35s cubic-bezier(.3,1.6,.5,1)}
+  .thread .unread.show{transform:scale(1)}
+  .thread.enter{animation:railin .8s cubic-bezier(.22,.9,.24,1) both}
+  @keyframes railin{from{opacity:0;filter:blur(12px);transform:translateY(8px)}to{opacity:1;filter:blur(0);transform:none}}
+  .railempty{font-size:12px;color:var(--faint);padding:8px 12px;line-height:1.5}
+
+  .orb{width:38px;height:38px;border-radius:50%;flex:none;position:relative;
+    background:radial-gradient(circle at 32% 28%,#fff 0,#cfe3ff 18%,#5aa2ff 46%,#1f5fd6 78%,#173f8f 100%);
+    box-shadow:0 4px 14px rgba(var(--hl),.35), inset 0 -3px 8px rgba(0,0,0,.18)}
+  .orb::after{content:"";position:absolute;inset:-4px;border-radius:50%;border:1.5px solid rgba(var(--hl),.35);
+    opacity:0;transform:scale(.85)}
+  .orb.thinking::after{animation:ripple 1.6s ease-out infinite}
+  .orb.thinking{animation:orbpulse 1.6s ease-in-out infinite}
+  @keyframes ripple{0%{opacity:.9;transform:scale(.85)}100%{opacity:0;transform:scale(1.35)}}
+  @keyframes orbpulse{0%,100%{transform:scale(1)}50%{transform:scale(1.06)}}
+  .orb.away{filter:saturate(.25) brightness(1.1)}
+
+  .tapav{width:38px;height:38px;border-radius:50%;flex:none;position:relative;display:flex;align-items:center;justify-content:center;
+    background:#f4f4f6}
+  .tapav svg{position:absolute;inset:0;width:38px;height:38px;overflow:visible}
+  .tapav .trk{fill:none;stroke:rgba(0,0,0,.06);stroke-width:2.2}
+  .tapav .arc{fill:none;stroke:var(--ink);stroke-width:2.2;stroke-linecap:round}
+  .tapav .num{font-size:9.5px;font-weight:700;color:var(--dim);font-variant-numeric:tabular-nums;letter-spacing:.02em}
+  .tapav.flying .arc{stroke-dasharray:30 80;animation:spin 1.6s linear infinite;transform-origin:19px 19px}
+  .tapav.boarding .arc{stroke:var(--faint);stroke-dasharray:3 6;animation:spin 6s linear infinite;transform-origin:19px 19px}
+  .tapav.needs-you{background:rgba(var(--hl),.08)}
+  .tapav.needs-you .arc{stroke:rgb(var(--hl));animation:breathe 1.5s ease-in-out infinite}
+  .tapav.needs-you .num{color:rgb(var(--hl))}
+  .tapav.landed{background:rgba(48,161,78,.09)}
+  .tapav.landed .arc{stroke:var(--green)}
+  .tapav.landed .num{color:var(--green)}
+  @keyframes spin{to{transform:rotate(360deg)}}
+
+  .chip{display:inline-flex;align-items:center;gap:6px;font-size:10.5px;font-weight:600;letter-spacing:.06em;
+    text-transform:uppercase;padding:5px 9px;border-radius:999px;background:rgba(0,0,0,.045);color:var(--dim);white-space:nowrap}
+  .chip i{width:6px;height:6px;border-radius:50%;background:currentColor;display:inline-block}
+  .chip.flying{color:var(--ink)} .chip.flying i{animation:breathe 1.2s ease-in-out infinite}
+  .chip.needs-you{background:rgba(var(--hl),.1);color:rgb(var(--hl))} .chip.needs-you i{animation:breathe 1s ease-in-out infinite}
+  .chip.landed{background:rgba(48,161,78,.1);color:var(--green)}
+  .chip.thinking{background:rgba(var(--hl),.1);color:rgb(var(--hl))} .chip.thinking i{animation:breathe 1s ease-in-out infinite}
+  .chip.here{color:var(--green)} .chip.away{color:var(--faint)}
+
+  #pane{background:#fff;border-radius:22px;box-shadow:var(--shadow);display:flex;flex-direction:column;min-height:0;overflow:hidden}
+  #panehead{display:flex;align-items:center;gap:12px;padding:16px 20px 12px;border-bottom:1px solid var(--line)}
+  #panehead .tx{flex:1;min-width:0}
+  #panehead .nm{font-size:15px;font-weight:650;letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #panehead .sub{font-size:11.5px;color:var(--dim);margin-top:2px}
+  #panehead a{color:var(--dim);font-size:11.5px;text-decoration:none;border-bottom:1px solid var(--faint)}
+  #panehead.swap{animation:swapin .7s cubic-bezier(.22,.9,.24,1)}
+  #goals{display:flex;gap:8px;padding:10px 20px;overflow-x:auto;border-bottom:1px solid var(--line);scrollbar-width:none}
+  #goals:empty{display:none}
+  .goal{flex:none;width:230px;display:flex;gap:8px;align-items:flex-start;font-size:11.5px;line-height:1.35;color:var(--dim);
+    background:rgba(0,0,0,.03);border-radius:12px;padding:8px 10px}
+  .goal span{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .goal:hover span{-webkit-line-clamp:unset}
+  .gcount{flex:none;align-self:center;font-size:10.5px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);padding-right:4px}
+  .goal b{flex:none;width:15px;height:15px;border-radius:50%;border:1.5px solid var(--faint);margin-top:1px;
+    display:flex;align-items:center;justify-content:center}
+  .goal.done{color:var(--ink);background:rgba(48,161,78,.07)}
+  .goal.done b{border-color:var(--green);background:var(--green)}
+  .goal.done b::after{content:"";width:6px;height:3px;border:solid #fff;border-width:0 0 1.6px 1.6px;transform:rotate(-45deg) translate(1px,-1px)}
+
+  #msgs{flex:1;overflow-y:auto;padding:22px 22px 10px;display:flex;flex-direction:column;gap:12px;scroll-behavior:smooth}
+  .msg{max-width:min(620px,82%);display:flex;flex-direction:column;gap:4px}
+  .msg.you{align-self:flex-end;align-items:flex-end}
+  .msg .bub{padding:10px 14px;border-radius:18px;font-size:13.5px;line-height:1.5;word-wrap:break-word;overflow-wrap:anywhere}
+  .msg.you .bub{background:var(--ink);color:#fff;border-bottom-right-radius:6px}
+  .msg.them .bub{background:#f2f2f4;border-bottom-left-radius:6px}
+  .msg .bub a{color:inherit}
+  .msg .bub code{font:12px/1.4 ui-monospace,Menlo,monospace;background:rgba(0,0,0,.06);padding:1px 5px;border-radius:5px}
+  .msg.you .bub code{background:rgba(255,255,255,.16)}
+  .msg .bub pre{font:12px/1.45 ui-monospace,Menlo,monospace;background:rgba(0,0,0,.05);padding:10px;border-radius:10px;overflow-x:auto;margin:6px 0}
+  .msg .bub p+p,.msg .bub p+ul,.msg .bub ul+p{margin-top:7px}
+  .msg .bub ul{padding-left:18px}
+  .msg .meta2{font-size:10.5px;color:var(--faint);letter-spacing:.02em;padding:0 6px}
+  .msg .meta2 .seen{color:rgb(var(--hl))}
+  .msg.new{animation:msgin .7s cubic-bezier(.22,.9,.24,1) both}
+  .msg.you.new{animation-name:msgup}
+  @keyframes msgin{from{opacity:0;filter:blur(10px);transform:translateY(10px) scale(.98)}to{opacity:1;filter:blur(0);transform:none}}
+  @keyframes msgup{from{opacity:0;filter:blur(8px);transform:translateY(22px) scale(.94)}to{opacity:1;filter:blur(0);transform:none}}
+  .typing{align-self:flex-start;display:flex;gap:4px;padding:12px 14px;background:#f2f2f4;border-radius:18px;border-bottom-left-radius:6px}
+  .typing span{width:6px;height:6px;border-radius:50%;background:var(--dim);animation:dot 1.2s ease-in-out infinite}
+  .typing span:nth-child(2){animation-delay:.15s} .typing span:nth-child(3){animation-delay:.3s}
+  @keyframes dot{0%,60%,100%{transform:translateY(0);opacity:.35}30%{transform:translateY(-4px);opacity:1}}
+  .hello{margin:auto;text-align:center;color:var(--faint);font-size:12.5px;line-height:1.6;max-width:320px}
+  .hello .big{font-size:22px;font-weight:650;color:var(--ink);letter-spacing:-.02em;margin-bottom:6px}
+
+  #composer{display:flex;gap:10px;align-items:flex-end;padding:12px 14px 14px;border-top:1px solid var(--line)}
+  #composer textarea{flex:1;resize:none;border:1px solid var(--line);border-radius:16px;background:rgba(0,0,0,.025);
+    padding:11px 14px;font:13.5px/1.45 -apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif;color:var(--ink);
+    outline:none;max-height:160px;min-height:44px;transition:border-color .2s ease,background .2s ease}
+  #composer textarea:focus{border-color:rgba(0,0,0,.18);background:#fff}
+  #composer button{appearance:none;border:0;cursor:pointer;width:44px;height:44px;border-radius:50%;flex:none;
+    background:var(--ink);color:#fff;display:flex;align-items:center;justify-content:center;
+    transition:transform .15s ease,opacity .2s ease}
+  #composer button:disabled{opacity:.25;cursor:default}
+  #composer button:active{transform:scale(.92)}
+  #composer svg{width:18px;height:18px}
+  .toast{position:fixed;left:50%;bottom:34px;transform:translateX(-50%) translateY(20px);opacity:0;z-index:60;
+    background:var(--ink);color:#fff;font-size:12px;padding:9px 14px;border-radius:12px;transition:all .4s cubic-bezier(.22,.9,.24,1)}
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+
+  @media (max-width:900px){
+    #tabs{top:44px}
+    body{padding-top:96px}
+    #chatview{top:92px;bottom:10px;padding:0 10px;grid-template-columns:1fr;grid-template-rows:auto minmax(0,1fr);gap:10px}
+    #rail{flex-direction:row;overflow-x:auto;overflow-y:hidden;padding:4px 2px 6px;gap:6px;scrollbar-width:none}
+    .railhead{display:none}
+    .thread{width:auto;flex:none;max-width:230px;padding:8px 12px 8px 8px}
+    .thread .sub{display:none}
+    #agentlist,#taplist{display:contents}
+    .goal{width:200px}
+    #pane{border-radius:18px}
+    .msg{max-width:90%}
+  }
+
   @media (max-width:900px){
     body{padding:60px 14px 52px}
     .card{width:clamp(240px,46vw,420px)}
     header{padding:16px 18px 10px}
+    body{padding-top:96px}
   }
 </style>
 </head>
 <body>
 <header>
   <div class="wordmark">TapSpace</div>
+  <nav id="tabs">
+    <span class="pill"></span>
+    <button class="tab" data-tab="visual">Visual <span class="badge" id="badge-visual"></span></button>
+    <button class="tab" data-tab="chat">Chat <span class="badge" id="badge-chat"></span></button>
+  </nav>
   <div id="hud">
     <div id="sessrow"><span id="sessdots"></span><span id="sesstext">connecting</span></div>
     <div id="actrows"></div>
@@ -184,6 +340,24 @@
 </header>
 <div id="empty"><span>The space is clear</span></div>
 <main id="space"></main>
+<section id="chatview">
+  <aside id="rail">
+    <div class="railhead">Agents</div>
+    <div id="agentlist"><div class="railempty">No agents in the space yet.</div></div>
+    <div class="railhead">Your taps</div>
+    <div id="taplist"><div class="railempty">Looking for your taps…</div></div>
+  </aside>
+  <section id="pane">
+    <div id="panehead"></div>
+    <div id="goals"></div>
+    <div id="msgs"></div>
+    <form id="composer">
+      <textarea rows="1" placeholder="Message…"></textarea>
+      <button type="submit" disabled aria-label="Send"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 16V4M4.5 9.5 10 4l5.5 5.5"/></svg></button>
+    </form>
+  </section>
+</section>
+<div class="toast" id="toast"></div>
 <div id="lightbox"><div id="lbstage"><img id="lbimg" alt=""></div><div id="lbcap"></div></div>
 
 <script>
@@ -540,6 +714,281 @@ async function tick(){
 
 tick();
 setInterval(tick, 1500);
+</script>
+
+<script>
+/* ---- tabs + chat: talk to the master agent, and to your taps ---- */
+const $ = s => document.querySelector(s);
+const tabs = $('#tabs'), pill = tabs.querySelector('.pill');
+function store(k, v){ try{ if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); }catch(e){ return null; } }
+function setTab(name, instant){
+  document.body.classList.toggle("chatmode", name === "chat");
+  tabs.querySelectorAll('.tab').forEach(b => b.classList.toggle('on', b.dataset.tab === name));
+  const on = tabs.querySelector('.tab.on');
+  if (instant) pill.style.transition = 'none';
+  pill.style.left = on.offsetLeft + 'px'; pill.style.width = on.offsetWidth + 'px';
+  if (instant) requestAnimationFrame(() => pill.style.transition = '');
+  store('tapspace.tab', name);
+  if (location.hash !== '#' + name) history.replaceState(null, '', '#' + name);
+  if (name === 'chat'){ markRead(current); scrollEnd(true); }
+}
+tabs.addEventListener('click', e => { const b = e.target.closest('.tab'); if (b) setTab(b.dataset.tab); });
+
+const msgsEl = $('#msgs'), head = $('#panehead'), goalsEl = $('#goals');
+const ta = $('#composer textarea'), sendBtn = $('#composer button');
+const taplist = $('#taplist');
+let current = store('tapspace.thread') || '';
+let agents = [];                  // [{name, state, seen, where, last, count}]
+let chat = {agent: '', messages: []};   // the open agent thread
+const agentKey = n => 'agent:' + n;
+const isAgent = k => k.startsWith('agent:');
+const agentOf = k => k.slice(6);
+let taps = {items: [], me: '', fetched: 0, error: ''};
+let rendered = {key: null, sig: '', count: 0};
+const sending = [];       // optimistic tap messages: {key, body, ts}
+
+function esc(t){ return t.replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function md(src){
+  const blocks = [];
+  let t = esc(src).replace(/```[\w-]*\n?([\s\S]*?)```/g, (_, c) => { blocks.push('<pre>' + c + '</pre>'); return '\u0000' + (blocks.length-1) + '\u0000'; });
+  t = t.replace(/`([^`\n]+)`/g, '<code>$1</code>')
+       .replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')
+       .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
+       .replace(/(^|[\s(])(https?:\/\/[^\s<)]+)/g, '$1<a href="$2" target="_blank" rel="noopener">$2</a>');
+  const out = []; let list = null;
+  for (const line of t.split('\n')){
+    const li = line.match(/^\s*[-*]\s+(?:\[[ xX]\]\s*)?(.*)$/);
+    if (li){ (list = list || []).push('<li>' + li[1] + '</li>'); continue; }
+    if (list){ out.push('<ul>' + list.join('') + '</ul>'); list = null; }
+    if (line.trim()) out.push('<p>' + line.replace(/^#+\s*/, '') + '</p>');
+  }
+  if (list) out.push('<ul>' + list.join('') + '</ul>');
+  return out.join('').replace(/\u0000(\d+)\u0000/g, (_, i) => blocks[+i]);
+}
+function when(ts){
+  const t = typeof ts === 'number' ? ts * 1000 : Date.parse(ts);
+  const s = Math.max(0, (Date.now() - t) / 1000);
+  if (s < 50) return 'now';
+  if (s < 3600) return Math.round(s/60) + 'm';
+  if (s < 86400) return Math.round(s/3600) + 'h';
+  return new Date(t).toLocaleDateString([], {month:'short', day:'numeric'});
+}
+const STATUS = {'needs-you':'Needs you', flying:'Flying', boarding:'Boarding', landed:'Landed'};
+const MASTER = {thinking:'Thinking', here:'Here', away:'Away'};
+function tapName(t){ return t.title.replace(/^\[[^\]]*\]\s*/, ''); }
+function tapAvatar(t){
+  return `<span class="tapav ${t.status}"><svg viewBox="0 0 38 38"><circle class="trk" cx="19" cy="19" r="17"/>
+    <circle class="arc" cx="19" cy="19" r="17"${t.status === 'landed' || t.status === 'needs-you' ? '' : ''}/></svg>
+    <span class="num">${t.status === 'landed' ? '✓' : '#' + String(t.number).slice(-4)}</span></span>`;
+}
+
+/* unread = the other side said something after you last looked at that thread */
+function lastTheirs(key){
+  if (isAgent(key)){ const a = agents.find(x => agentKey(x.name) === key); return a && a.last_master ? a.last_master * 1000 : 0; }
+  const t = taps.items.find(x => x.key === key); if (!t) return 0;
+  const m = t.messages.filter(x => x.who === 'tap'); return m.length ? Date.parse(m[m.length-1].ts) : 0;
+}
+function readAt(key){ return +(store('tapspace.read.' + key) || 0); }
+function markRead(key){ store('tapspace.read.' + key, String(Date.now())); }
+function isUnread(key){ return lastTheirs(key) > readAt(key) && !(document.body.classList.contains("chatmode") && key === current && document.hasFocus()); }
+
+function syncList(box, items, keyOf, sigOf, html, emptyText){
+  if (!items.length){ box.innerHTML = `<div class="railempty">${emptyText}</div>`; return; }
+  if (box.querySelector('.railempty')) box.innerHTML = '';
+  const have = new Map([...box.querySelectorAll('.thread')].map(el => [el.dataset.key, el]));
+  items.forEach((it, i) => {
+    const key = keyOf(it);
+    let el = have.get(key);
+    if (!el){
+      el = document.createElement('button');
+      el.className = 'thread enter'; el.dataset.key = key;
+      el.style.animationDelay = (i * 70) + 'ms';
+      el.addEventListener('click', () => openThread(key));
+    }
+    const sig = sigOf(it);
+    if (el.dataset.sig !== sig){ el.dataset.sig = sig; el.innerHTML = html(it); }
+    el.classList.toggle('on', current === key);
+    el.querySelector('.unread').classList.toggle('show', isUnread(key));
+    if (box.children[i] !== el) box.insertBefore(el, box.children[i] || null);
+    have.delete(key);
+  });
+  have.forEach(el => el.remove());
+}
+
+function renderRail(){
+  syncList($('#agentlist'), agents, a => agentKey(a.name), a => a.state + '|' + a.where + '|' + a.count,
+    a => `<span class="orb ${a.state}"></span><span class="tx"><div class="nm">${esc(a.name)}</div>
+      <div class="sub">${MASTER[a.state]}${a.where ? ' · ' + esc(a.where) : ''}</div></span><span class="unread"></span>`,
+    'No agents in the space yet. Any agent joins with tap.py listen --as NAME.');
+
+  syncList(taplist, taps.items, t => t.key, t => t.status + '|' + t.title + '|' + t.messages.length, t => {
+      const last = t.messages.filter(m => m.who === 'tap').pop();
+      return tapAvatar(t) + `<span class="tx"><div class="nm">${esc(tapName(t))}</div>
+        <div class="sub">${STATUS[t.status]} · ${esc(t.repo.split('/')[1])}${last ? ' · ' + when(last.ts) : ''}</div></span><span class="unread"></span>`;
+    }, taps.fetched ? 'No taps flying under your name.' : (taps.error ? 'Couldn’t reach GitHub: ' + esc(taps.error) : 'Looking for your taps…'));
+  const needs = taps.items.filter(t => t.status === 'needs-you').length;
+  const unread = [...agents.map(a => agentKey(a.name)), ...taps.items.map(t => t.key)].filter(isUnread).length;
+  const bc = $('#badge-chat'); const n = Math.max(needs, unread);
+  bc.textContent = n; bc.classList.toggle('show', n > 0);
+}
+
+function threadData(){
+  if (isAgent(current)){
+    const a = agents.find(x => agentKey(x.name) === current);
+    if (!a) return null;
+    const rows = chat.agent === a.name ? chat.messages : [];
+    return {msgs: rows.map(r => ({who: r.role === 'you' ? 'you' : 'them', body: r.body, ts: r.ts, id: 'm' + r.id})),
+            typing: a.state === 'thinking', agent: a};
+  }
+  const t = taps.items.find(x => x.key === current);
+  if (!t) return null;
+  const msgs = t.messages.map((m, i) => ({who: m.who === 'you' ? 'you' : 'them', body: m.body, ts: m.ts, seen: m.seen, id: 't' + i, url: m.url}));
+  for (const s of sending.filter(s => s.key === t.key)) msgs.push({who:'you', body:s.body, ts:s.ts/1000, pending:true, id:'s' + s.ts});
+  return {msgs, typing: false, tap: t};
+}
+
+function renderHead(d){
+  let html, sig;
+  if (d.agent){
+    const a = d.agent;
+    sig = current + '|' + a.state + '|' + a.where;
+    html = `<span class="orb ${a.state}"></span><span class="tx"><div class="nm">${esc(a.name)}</div>
+      <div class="sub">Agent${a.where ? ' · ' + esc(a.where) : ''} · joined ${when(a.first || a.seen)}</div></span>
+      <span class="chip ${a.state}"><i></i>${MASTER[a.state]}</span>`;
+  } else {
+    const t = d.tap;
+    sig = t.key + '|' + t.status + '|' + t.title;
+    html = tapAvatar(t) + `<span class="tx"><div class="nm">${esc(tapName(t))}</div>
+      <div class="sub">${esc(t.key)} · <a href="${esc(t.url)}" target="_blank" rel="noopener">open issue</a></div></span>
+      <span class="chip ${t.status}"><i></i>${STATUS[t.status]}</span>`;
+  }
+  if (head.dataset.sig !== sig){
+    const swap = head.dataset.key !== current;
+    head.dataset.sig = sig; head.dataset.key = current; head.innerHTML = html;
+    if (swap){ head.classList.remove('swap'); void head.offsetWidth; head.classList.add('swap'); }
+  }
+  const goals = d.tap ? d.tap.goals : [];
+  const gsig = current + JSON.stringify(goals);
+  if (goalsEl.dataset.sig !== gsig){
+    goalsEl.dataset.sig = gsig;
+    goalsEl.innerHTML = (goals.length ? `<span class="gcount">${goals.filter(g => g.done).length}/${goals.length} goals</span>` : '') + goals.map(g => `<div class="goal ${g.done ? 'done' : ''}"><b></b><span>${md(g.text).replace(/<\/?p>/g, '')}</span></div>`).join('');
+  }
+}
+
+function nearEnd(){ return msgsEl.scrollHeight - msgsEl.scrollTop - msgsEl.clientHeight < 120; }
+function scrollEnd(instant){
+  if (instant){ msgsEl.style.scrollBehavior = 'auto'; msgsEl.scrollTop = msgsEl.scrollHeight; msgsEl.style.scrollBehavior = ''; }
+  else msgsEl.scrollTop = msgsEl.scrollHeight;
+}
+
+function renderThread(){
+  const d = threadData();
+  if (!d){
+    const fall = agents[0] ? agentKey(agents[0].name) : (taps.items[0] ? taps.items[0].key : '');
+    if (fall && fall !== current){ current = fall; return renderThread(); }
+    head.innerHTML = ''; goalsEl.innerHTML = ''; head.dataset.sig = '';
+    msgsEl.innerHTML = `<div class="hello"><div class="big">The space is open.</div>Agents join with <code>tap.py listen --as NAME</code>. Your taps show up here on their own.</div>`;
+    rendered = {key: '', sig: ''}; return;
+  }
+  renderHead(d);
+  ta.placeholder = d.agent ? 'Message ' + d.agent.name + '…' : 'Message this tap…';
+  const sig = current + '|' + d.msgs.map(m => m.id + (m.seen ? 's' : '') + (m.pending ? 'p' : '')).join(',') + '|' + d.typing;
+  if (sig === rendered.sig) return;
+  const switched = rendered.key !== current;
+  const stick = switched || nearEnd();
+  const known = switched ? null : new Set([...msgsEl.querySelectorAll('.msg')].map(e => e.dataset.id));
+  msgsEl.innerHTML = '';
+  if (!d.msgs.length){
+    msgsEl.innerHTML = d.agent
+      ? `<div class="hello"><div class="big">Hey.</div>A direct line to ${esc(d.agent.name)}. Say anything.</div>`
+      : `<div class="hello"><div class="big">Boarding.</div>This tap hasn’t said anything yet. It posts its plan here when it takes off.</div>`;
+  }
+  for (const m of d.msgs){
+    const el = document.createElement('div');
+    el.className = 'msg ' + m.who + (known && !known.has(m.id) ? ' new' : '');
+    el.dataset.id = m.id;
+    let meta = when(m.ts);
+    if (m.who === 'you' && !d.agent) meta += m.pending ? ' · sending' : (m.seen ? ' · <span class="seen">seen 👀</span>' : ' · delivered');
+    el.innerHTML = `<div class="bub">${md(m.body)}</div><div class="meta2">${meta}</div>`;
+    msgsEl.appendChild(el);
+  }
+  if (d.typing){ const ty = document.createElement('div'); ty.className = 'typing'; ty.innerHTML = '<span></span><span></span><span></span>'; msgsEl.appendChild(ty); }
+  rendered = {key: current, sig};
+  if (stick) scrollEnd(switched);
+  if (document.body.classList.contains("chatmode")) markRead(current);
+}
+
+function openThread(key){
+  current = key; store('tapspace.thread', key);
+  if (!isAgent(key)) fetch('/api/taps/refresh', {method:'POST', headers:{'content-type':'application/json'}, body:'{}'});
+  markRead(key); renderRail();
+  if (isAgent(key)) pollChat(); else renderThread();
+  ta.focus();
+}
+
+function toast(t){ const el = $('#toast'); el.textContent = t; el.classList.add('show'); setTimeout(() => el.classList.remove('show'), 2600); }
+
+ta.addEventListener('input', () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 160) + 'px'; sendBtn.disabled = !ta.value.trim(); });
+ta.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing){ e.preventDefault(); $('#composer').requestSubmit(); } });
+$('#composer').addEventListener('submit', async e => {
+  e.preventDefault();
+  const body = ta.value.trim(); if (!body) return;
+  ta.value = ''; ta.style.height = ''; sendBtn.disabled = true;
+  const key = current;
+  const post = (url, obj) => fetch(url, {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(obj)}).then(r => r.json());
+  if (isAgent(key)){
+    const name = agentOf(key);
+    chat.messages.push({id: (chat.messages.at(-1)?.id || 0) + 0.5, role:'you', body, ts: Date.now()/1000});
+    const a = agents.find(x => x.name === name); if (a) a.state = 'thinking';
+    renderThread(); renderRail(); scrollEnd();
+    const r = await post('/api/chat', {agent: name, body}).catch(() => ({}));
+    if (!r.ok) toast(r.error || 'Didn’t send. Is TapSpace still running?');
+    pollAgents(); pollChat();
+  } else {
+    const s = {key, body, ts: Date.now()}; sending.push(s); renderThread(); scrollEnd();
+    const r = await post('/api/taps/say', {key, body}).catch(e => ({error: String(e)}));
+    if (!r.ok){ sending.splice(sending.indexOf(s), 1); renderThread(); toast(r.error || 'Didn’t send'); ta.value = body; sendBtn.disabled = false; return; }
+    // keep the bubble until GitHub shows the comment
+    const until = Date.now() + 120000;
+    const clear = setInterval(() => {
+      const t = taps.items.find(x => x.key === key);
+      if (Date.now() > until || (t && t.messages.some(m => m.who === 'you' && m.body.trim() === body))){
+        clearInterval(clear); const i = sending.indexOf(s); if (i >= 0) sending.splice(i, 1); renderThread();
+      }
+    }, 1000);
+    setTimeout(pollTaps, 2500); setTimeout(pollTaps, 6000);
+  }
+});
+
+async function pollAgents(){
+  try{ agents = (await (await fetch('/api/agents')).json()).agents; }catch(e){ return; }
+  renderRail(); renderThread();
+}
+async function pollChat(){
+  if (!isAgent(current)) return;
+  const name = agentOf(current);
+  try{ const d = await (await fetch('/api/chat?agent=' + encodeURIComponent(name))).json(); chat = {agent: name, messages: d.messages}; }catch(e){ return; }
+  renderRail(); renderThread();
+}
+async function pollTaps(){
+  try{ taps = await (await fetch('/api/taps')).json(); }catch(e){ return; }
+  renderRail(); renderThread();
+}
+// Visual tab badge: cards waiting on you
+setInterval(() => {
+  const n = document.querySelectorAll('#space .card:not(.changes):not(.out)').length;
+  const b = $('#badge-visual'); b.textContent = n; b.classList.toggle('show', n > 0);
+}, 1500);
+window.addEventListener('focus', () => { if (document.body.classList.contains("chatmode")) { markRead(current); renderRail(); } });
+window.addEventListener('resize', () => setTab(document.body.classList.contains("chatmode") ? 'chat' : 'visual', true));
+
+const start = location.hash === '#chat' || location.hash === '#visual' ? location.hash.slice(1) : (store('tapspace.tab') || 'visual');
+requestAnimationFrame(() => setTab(start, true));
+pollAgents(); pollChat(); pollTaps();
+setInterval(pollAgents, 2000);
+setInterval(pollChat, 1500);
+setInterval(pollTaps, 5000);
+setInterval(() => { rendered.sig = ''; renderThread(); renderRail(); }, 30000);   // refresh relative times
 </script>
 
 <script type="module">

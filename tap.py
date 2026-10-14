@@ -10,6 +10,12 @@
   tap.py up                              -> ensure the whole rig is running (idempotent);
                                             starts the server if the port is quiet, health-checks it
   tap.py doctor                          -> one-look health: server, tickets, live activity, sessions
+  tap.py listen --as NAME [--timeout 3600]
+                                         -> a master agent joins the space under NAME (its own Chat
+                                            thread) and blocks until the reviewer writes to it; prints his
+                                            unanswered messages. exit 0 = message, 4 = timeout
+  tap.py reply --as NAME "text"          -> that agent answers the reviewer in its thread
+  Any number of agents can be in the space at once; NAME defaults to $TAPSPACE_AGENT.
 
 Server default http://127.0.0.1:4747 (override: TAPSPACE_URL).
 Screenshots must be REAL renders of the running surface — never generated images.
@@ -20,6 +26,8 @@ import json
 import os
 import sys
 import time
+import urllib.error
+import urllib.parse
 import urllib.request
 
 BASE = os.environ.get("TAPSPACE_URL", "http://127.0.0.1:4747")
@@ -32,8 +40,14 @@ def _call(path, payload=None):
         req = urllib.request.Request(
             BASE + path, data=json.dumps(payload).encode(),
             headers={"content-type": "application/json"})
-    with urllib.request.urlopen(req, timeout=30) as r:
-        return json.loads(r.read().decode())
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return json.loads(r.read().decode())
+    except urllib.error.HTTPError as e:
+        try:
+            return json.loads(e.read().decode())
+        except Exception:
+            return {"error": f"HTTP {e.code}"}
 
 
 def _b64(path):
@@ -83,6 +97,15 @@ def main():
 
     sub.add_parser("up")
     sub.add_parser("doctor")
+
+    me = os.environ.get("TAPSPACE_AGENT", "")
+    li = sub.add_parser("listen")
+    li.add_argument("--as", dest="name", default=me, required=not me)
+    li.add_argument("--timeout", type=int, default=3600)
+
+    rp = sub.add_parser("reply")
+    rp.add_argument("--as", dest="name", default=me, required=not me)
+    rp.add_argument("text")
 
     a = ap.parse_args()
 
@@ -137,6 +160,28 @@ def main():
         r = _call("/api/update", {"id": a.ticket, "note": a.note, **_media(a)})
         print(json.dumps(r))
         return 0
+
+    if a.cmd == "listen":
+        deadline = time.time() + a.timeout
+        while time.time() < deadline:
+            try:
+                q = urllib.parse.urlencode({"agent": a.name, "where": os.getcwd().replace(os.path.expanduser("~"), "~")})
+                pending = _call("/api/chat/listen?" + q)["pending"]
+            except Exception:
+                time.sleep(3)
+                continue
+            if pending:
+                for m in pending:
+                    print(f"[{m['id']}] {m['body']}")
+                return 0
+            time.sleep(2)
+        print(json.dumps({"timeout": True}))
+        return 4
+
+    if a.cmd == "reply":
+        r = _call("/api/chat/reply", {"agent": a.name, "body": a.text})
+        print(json.dumps(r))
+        return 0 if r.get("ok") else 1
 
     if a.cmd == "status":
         print(json.dumps(_call("/api/ticket/" + a.ticket), indent=1))

@@ -7,11 +7,21 @@ decisions land in per-ticket state AND data/INBOX.jsonl, which your
 orchestrator can tail and relay to the owning agent. See README.md and
 AGENTS.md for the full protocol.
 
+Chat tab: talk to any number of agents, each in its own thread
+(data/chat.jsonl; an agent joins with `tap.py listen --as NAME` and answers
+with `tap.py reply --as NAME`), and see your taps: GitHub issues you
+authored with the tap label (TAPSPACE_TAP_LABEL, default nava), read and
+messaged through gh as you. Taps are scoped by issue AUTHOR, never comment
+author, so nobody else's taps ever show up here.
+
 Run:  python3 server.py     (or: python3 tap.py up)
 URL:  http://127.0.0.1:4747
 """
 import base64
 import json
+import os
+import shutil
+import subprocess
 import pathlib
 import re
 import threading
@@ -69,7 +79,13 @@ DATA = ROOT / "data"
 SHOTS = DATA / "shots"
 STATE = DATA / "tickets.json"
 INBOX = DATA / "INBOX.jsonl"
+CHAT = DATA / "chat.jsonl"
 PORT = 4747
+
+# taps = the reviewer's own agent issues on GitHub (authored by them, tap label)
+TAP_LABEL = os.environ.get("TAPSPACE_TAP_LABEL", "nava")
+TAP_REFRESH = 45            # seconds between background refreshes
+GH = shutil.which("gh") or "/opt/homebrew/bin/gh"
 
 _lock = threading.Lock()
 
@@ -129,6 +145,185 @@ def _scan_sessions():
         time.sleep(5)
 
 
+# ---- chat with master agents (any number of them) ----
+# Every agent that joins gets its own thread. An agent joins by listening or
+# replying under a name (tap.py listen/reply --as NAME); the space lists every
+# agent seen recently, and the reviewer can talk to each one.
+AGENTS = DATA / "agents.json"
+_NAME = re.compile(r"^[^\x00-\x1f<>\"]{1,48}$")
+
+
+def _agents():
+    try:
+        return json.loads(AGENTS.read_text())
+    except Exception:
+        return {}
+
+
+def _agent_touch(name, **extra):
+    with _lock:
+        a = _agents()
+        row = a.get(name) or {"name": name, "first": time.time()}
+        row.update(extra)
+        row["seen"] = time.time()
+        a[name] = row
+        tmp = AGENTS.with_suffix(".tmp")
+        tmp.write_text(json.dumps(a, indent=1))
+        tmp.replace(AGENTS)
+
+
+def _chat_rows(agent=None):
+    rows = []
+    if CHAT.exists():
+        for line in CHAT.read_text().splitlines():
+            try:
+                r = json.loads(line)
+            except Exception:
+                continue
+            if agent is None or r.get("agent") == agent:
+                rows.append(r)
+    return rows
+
+
+def _chat_add(agent, role, body):
+    with _lock:
+        rows = _chat_rows()
+        row = {"id": (rows[-1]["id"] + 1) if rows else 1, "agent": agent,
+               "role": role, "body": body, "ts": time.time()}
+        with CHAT.open("a") as fh:
+            fh.write(json.dumps(row) + "\n")
+    return row
+
+
+def _chat_pending(rows):
+    """Reviewer messages after the agent's last reply (rows of ONE agent)."""
+    last = max((r["id"] for r in rows if r["role"] == "master"), default=0)
+    return [r for r in rows if r["role"] == "you" and r["id"] > last]
+
+
+def _agent_state(info, rows):
+    if _chat_pending(rows):
+        return "thinking"
+    return "here" if time.time() - info.get("listen", 0) < 30 else "away"
+
+
+def _agent_rows():
+    out = []
+    allrows = _chat_rows()
+    for name, info in _agents().items():
+        rows = [r for r in allrows if r.get("agent") == name]
+        last = rows[-1]["ts"] if rows else info.get("seen", 0)
+        if time.time() - max(last, info.get("seen", 0)) > 3 * 86400:
+            continue            # quiet for 3 days: off the rail, history kept
+        said = [r["ts"] for r in rows if r["role"] == "master"]
+        out.append({"name": name, "state": _agent_state(info, rows),
+                    "seen": info.get("seen", 0), "first": info.get("first", 0),
+                    "where": info.get("where", ""), "last": last, "count": len(rows),
+                    "last_master": said[-1] if said else 0})
+    rank = {"thinking": 0, "here": 1, "away": 2}
+    out.sort(key=lambda r: -r["last"])
+    out.sort(key=lambda r: rank[r["state"]])
+    return out
+
+
+# ---- taps (the reviewer's own pilot issues, read through gh) ----
+TAPS = {"me": "", "items": [], "fetched": 0.0, "error": ""}
+_taps_kick = threading.Event()
+
+
+def _gh(*args, timeout=40):
+    r = subprocess.run([GH, *args], capture_output=True, text=True, timeout=timeout)
+    if r.returncode:
+        raise RuntimeError((r.stderr or r.stdout).strip()[:240])
+    return r.stdout
+
+
+def _me():
+    if not TAPS["me"]:
+        TAPS["me"] = os.environ.get("TAPSPACE_GH_USER") or \
+            _gh("api", "user", "--jq", ".login").strip()
+    return TAPS["me"]
+
+
+_GOAL = re.compile(r"^\s*-\s*\[([ xX])\]\s*(.+?)\s*$")
+
+
+def _goals(body):
+    out = []
+    for line in (body or "").splitlines():
+        m = _GOAL.match(line)
+        if m:
+            text = re.sub(r"\*\*(.+?)\*\*", r"\1", m.group(2)).strip()
+            out.append({"text": text, "done": m.group(1) != " "})
+    return out
+
+
+def _issue(repo, number):
+    return json.loads(_gh("issue", "view", str(number), "--repo", repo, "--json",
+                          "author,title,body,labels,state,comments,url,createdAt,closedAt"))
+
+
+def _is_mine(iss):
+    return iss["author"]["login"] == _me() and \
+        any(l["name"] == TAP_LABEL for l in iss["labels"])
+
+
+def _tap(repo, number, iss):
+    me = _me()
+    labels = [l["name"] for l in iss["labels"]]
+    msgs = []
+    for c in iss["comments"]:
+        mine = c["author"]["login"] == me
+        seen = any(g["content"] == "EYES" for g in c.get("reactionGroups") or [])
+        msgs.append({"who": "you" if mine else "tap", "body": c["body"],
+                     "ts": c["createdAt"], "seen": seen, "url": c["url"]})
+    tap_msgs = [m for m in msgs if m["who"] == "tap"]
+    if iss["state"] != "OPEN":
+        status = "landed"
+    elif "needs-reply" in labels:
+        status = "needs-you"
+    elif tap_msgs:
+        status = "flying"
+    else:
+        status = "boarding"
+    return {"key": f"{repo}#{number}", "repo": repo, "number": number,
+            "title": iss["title"], "url": iss["url"], "status": status,
+            "goals": _goals(iss["body"]), "messages": msgs,
+            "created": iss["createdAt"], "closed": iss.get("closedAt"),
+            "last": msgs[-1]["ts"] if msgs else iss["createdAt"]}
+
+
+def _refresh_taps():
+    me = _me()
+    found = json.loads(_gh("search", "issues", "--label", TAP_LABEL, "--author", me,
+                           "--limit", "60", "--json", "repository,number,state,closedAt"))
+    cutoff = time.time() - 14 * 86400
+    items = []
+    for f in found:
+        if f["state"] != "open" and f.get("closedAt"):
+            closed = time.mktime(time.strptime(f["closedAt"][:19], "%Y-%m-%dT%H:%M:%S"))
+            if closed < cutoff:
+                continue
+        repo = f["repository"]["nameWithOwner"]
+        iss = _issue(repo, f["number"])
+        if _is_mine(iss):
+            items.append(_tap(repo, f["number"], iss))
+    order = {"needs-you": 0, "flying": 1, "boarding": 2, "landed": 3}
+    items.sort(key=lambda t: t["last"], reverse=True)       # newest first...
+    items.sort(key=lambda t: order[t["status"]])           # ...within each status
+    TAPS.update({"items": items, "fetched": time.time(), "error": ""})
+
+
+def _taps_loop():
+    while True:
+        try:
+            _refresh_taps()
+        except Exception as e:
+            TAPS["error"] = str(e)
+        _taps_kick.wait(TAP_REFRESH)
+        _taps_kick.clear()
+
+
 def _load():
     if STATE.exists():
         try:
@@ -178,6 +373,10 @@ class H(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _q(self, key):
+        from urllib.parse import parse_qs, urlsplit
+        return (parse_qs(urlsplit(self.path).query).get(key) or [""])[0].strip()
+
     def do_GET(self):
         path = self.path.split("?")[0]
         if path in ("/", "/index.html"):
@@ -197,6 +396,24 @@ class H(BaseHTTPRequestHandler):
         if path == "/api/activity":
             self._json({"rows": _activity_rows(), "sessions": dict(SESSIONS),
                         "now": time.time()})
+            return
+        if path == "/api/agents":
+            self._json({"agents": _agent_rows()})
+            return
+        if path == "/api/chat":
+            self._json({"messages": _chat_rows(self._q("agent"))})
+            return
+        if path == "/api/chat/listen":
+            # an agent's poll: joins the space under its name, gets its unanswered messages
+            name = self._q("agent")
+            if not _NAME.match(name):
+                self._json({"error": "bad agent name"}, 400)
+                return
+            _agent_touch(name, listen=time.time(), where=self._q("where")[:80])
+            self._json({"pending": _chat_pending(_chat_rows(name))})
+            return
+        if path == "/api/taps":
+            self._json({k: TAPS[k] for k in ("me", "items", "fetched", "error")})
             return
         if path == "/api/state":
             with _lock:
@@ -265,6 +482,58 @@ class H(BaseHTTPRequestHandler):
             p = json.loads(self.rfile.read(n).decode())
         except Exception:
             self._json({"error": "bad json"}, 400)
+            return
+
+        if self.path in ("/api/chat", "/api/chat/reply", "/api/taps/say"):
+            # these speak for the reviewer: same-origin JSON only, so no other
+            # page can drive them through the browser
+            origin = self.headers.get("Origin")
+            if (self.headers.get("content-type") or "").split(";")[0] != "application/json" or \
+               (origin and origin not in (f"http://127.0.0.1:{PORT}", f"http://localhost:{PORT}")):
+                self._json({"error": "forbidden"}, 403)
+                return
+            body = (p.get("body") or "").strip()
+            if not body:
+                self._json({"error": "empty"}, 400)
+                return
+            if self.path in ("/api/chat", "/api/chat/reply"):
+                name = (p.get("agent") or "").strip()
+                if not _NAME.match(name):
+                    self._json({"error": "bad agent name"}, 400)
+                    return
+                if self.path == "/api/chat":
+                    if name not in _agents():
+                        self._json({"error": "no agent by that name has joined"}, 404)
+                        return
+                    row = _chat_add(name, "you", body)
+                    _inbox({"kind": "tapspace-chat", "agent": name, "id": row["id"], "message": body})
+                else:
+                    _agent_touch(name, listen=time.time())
+                    row = _chat_add(name, "master", body)
+                self._json({"ok": True, "message": row})
+                return
+            key = p.get("key", "")
+            m = re.match(r"^([\w.-]+/[\w.-]+)#(\d+)$", key)
+            if not m:
+                self._json({"error": "bad tap key"}, 400)
+                return
+            try:
+                if not _is_mine(_issue(m.group(1), m.group(2))):
+                    self._json({"error": "not one of your taps"}, 403)
+                    return
+                url = _gh("issue", "comment", m.group(2), "--repo", m.group(1),
+                          "--body", body).strip()
+            except Exception as e:
+                self._json({"error": str(e)}, 502)
+                return
+            _inbox({"kind": "tapspace-tap-say", "tap": key, "message": body, "url": url})
+            _taps_kick.set()
+            self._json({"ok": True, "url": url})
+            return
+
+        if self.path == "/api/taps/refresh":
+            _taps_kick.set()
+            self._json({"ok": True})
             return
 
         if self.path == "/api/post":
@@ -391,5 +660,6 @@ if __name__ == "__main__":
     if not STATE.exists():
         _save({"tickets": []})
     threading.Thread(target=_scan_sessions, daemon=True).start()
+    threading.Thread(target=_taps_loop, daemon=True).start()
     print(f"TapSpace serving on http://127.0.0.1:{PORT}")
     ThreadingHTTPServer(("127.0.0.1", PORT), H).serve_forever()

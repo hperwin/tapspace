@@ -144,6 +144,29 @@ The short version. The full contract, with capture recipes and the exact duties 
 4. **Give your orchestrator the inbox.** One `tail -n 0 -f data/INBOX.jsonl` is the whole event bus. When a line arrives, relay the action and message verbatim to the owning agent (the event names it), and append it to that agent's brief file so the decision survives restarts. In Claude Code this maps to a Monitor on the tail plus SendMessage to the agent; in any other framework it's the same tail plus however you message a worker.
 5. **Solo agent? Skip the orchestrator.** A single agent can post and then `tap.py wait` when the decision truly blocks its next edit, or check `tap.py status` between tasks.
 
+## The Chat tab: many agents, and your taps
+
+The space has two tabs. **Visual** is the review board above. **Chat** is a
+workspace where any number of agents can be connected at once:
+
+- **Agents.** Each agent joins under its own name and gets its own thread.
+  It listens with `tap.py listen --as "NAME"` (run it in the background; it
+  exits with your unanswered messages as soon as you write) and answers with
+  `tap.py reply --as "NAME" "text"`. Set `TAPSPACE_AGENT` to skip `--as`.
+  An agent shows *Here* while it is listening, *Thinking* while your message
+  waits for its reply, and *Away* otherwise.
+- **Taps.** GitHub issues you authored with the tap label
+  (`TAPSPACE_TAP_LABEL`, default `nava`), read through your `gh` login. Each
+  tap shows its goals, its comments, and whether your messages were seen
+  (an 👀 reaction). Writing to a tap posts an issue comment as you. Taps
+  are scoped by issue author, so other people's taps never appear.
+
+Endpoints: `GET /api/agents`, `GET /api/chat?agent=NAME`,
+`GET /api/chat/listen?agent=NAME`, `POST /api/chat {agent, body}`,
+`POST /api/chat/reply {agent, body}`, `GET /api/taps`,
+`POST /api/taps/say {key: "owner/repo#n", body}`, `POST /api/taps/refresh`.
+The endpoints that speak for you accept same-origin JSON only.
+
 ## The presence HUD
 
 Top right of the page. Fully automatic; agents report nothing. Rows are derived from the server's own request stream (`posted`, `iterating`, `waiting on your tap`), fade after about 2 minutes of quiet, and vanish after 5. A blocked `tap.py wait` doubles as a 3-second heartbeat.
