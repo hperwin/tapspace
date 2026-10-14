@@ -30,7 +30,10 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # media a version can carry; videos stream with Range support so the space can scrub
-_CTYPES = {".png": "image/png", ".mp4": "video/mp4", ".mov": "video/quicktime"}
+_CTYPES = {".png": "image/png", ".mp4": "video/mp4", ".mov": "video/quicktime",
+           ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
+           ".webp": "image/webp", ".heic": "image/heic"}
+_CHAT_IMG_EXTS = ("png", "jpg", "jpeg", "gif", "webp", "heic")
 _VIDEO_EXTS = ("mp4", "mov")
 
 
@@ -80,6 +83,7 @@ SHOTS = DATA / "shots"
 STATE = DATA / "tickets.json"
 INBOX = DATA / "INBOX.jsonl"
 CHAT = DATA / "chat.jsonl"
+MEDIA = DATA / "chat-media"          # images attached in the Chat tab
 PORT = int(os.environ.get("TAPSPACE_PORT", "4747"))
 
 # taps = the reviewer's own agent issues on GitHub (authored by them, tap label)
@@ -185,11 +189,34 @@ def _chat_rows(agent=None):
     return rows
 
 
-def _chat_add(agent, role, body):
+def _chat_images(p):
+    """Saves a post's attached images ([{b64, ext}], max 10, 20 MB each) under
+    data/chat-media and returns their served paths. Raises ValueError on bad input."""
+    out = []
+    imgs = p.get("images") or []
+    if not isinstance(imgs, list) or len(imgs) > 10:
+        raise ValueError("up to 10 images")
+    for im in imgs:
+        ext = str((im or {}).get("ext", "")).lower().lstrip(".")
+        if ext not in _CHAT_IMG_EXTS:
+            raise ValueError(f"unsupported image type {ext!r}")
+        raw = base64.b64decode(im.get("b64") or "", validate=False)
+        if not raw or len(raw) > 20_000_000:
+            raise ValueError("empty or too large image")
+        MEDIA.mkdir(parents=True, exist_ok=True)
+        name = f"{uuid.uuid4().hex[:12]}.{ext}"
+        (MEDIA / name).write_bytes(raw)
+        out.append("/chat-media/" + name)
+    return out
+
+
+def _chat_add(agent, role, body, images=None):
     with _lock:
         rows = _chat_rows()
         row = {"id": (rows[-1]["id"] + 1) if rows else 1, "agent": agent,
                "role": role, "body": body, "ts": time.time()}
+        if images:
+            row["images"] = images
         with CHAT.open("a") as fh:
             fh.write(json.dumps(row) + "\n")
     return row
@@ -410,7 +437,10 @@ class H(BaseHTTPRequestHandler):
                 self._json({"error": "bad agent name"}, 400)
                 return
             _agent_touch(name, listen=time.time(), where=self._q("where")[:80])
-            self._json({"pending": _chat_pending(_chat_rows(name))})
+            pend = _chat_pending(_chat_rows(name))
+            for r in pend:
+                r["files"] = [str(DATA / u.lstrip("/")) for u in r.get("images", [])]
+            self._json({"pending": pend})
             return
         if path == "/api/taps":
             self._json({k: TAPS[k] for k in ("me", "items", "fetched", "error")})
@@ -434,9 +464,10 @@ class H(BaseHTTPRequestHandler):
                     _touch(t.get("campaign"), t["agent"], "checking in", t["title"])
             self._json(t or {"error": "not found"}, 200 if t else 404)
             return
-        if path.startswith("/shots/"):
+        if path.startswith("/shots/") or path.startswith("/chat-media/"):
             f = (DATA / path.lstrip("/")).resolve()
-            if not str(f).startswith(str(SHOTS)) or not f.exists():
+            root = SHOTS if path.startswith("/shots/") else MEDIA
+            if not str(f).startswith(str(root.resolve()) + "/") or not f.is_file():
                 self.send_error(404)
                 return
             ctype = _CTYPES.get(f.suffix.lower(), "application/octet-stream")
@@ -493,23 +524,30 @@ class H(BaseHTTPRequestHandler):
                 self._json({"error": "forbidden"}, 403)
                 return
             body = (p.get("body") or "").strip()
-            if not body:
+            chatting = self.path in ("/api/chat", "/api/chat/reply")
+            if not body and not (chatting and p.get("images")):
                 self._json({"error": "empty"}, 400)
                 return
-            if self.path in ("/api/chat", "/api/chat/reply"):
+            if chatting:
                 name = (p.get("agent") or "").strip()
                 if not _NAME.match(name):
                     self._json({"error": "bad agent name"}, 400)
                     return
+                if self.path == "/api/chat" and name not in _agents():
+                    self._json({"error": "no agent by that name has joined"}, 404)
+                    return
+                try:
+                    images = _chat_images(p)
+                except Exception as e:
+                    self._json({"error": str(e)}, 400)
+                    return
                 if self.path == "/api/chat":
-                    if name not in _agents():
-                        self._json({"error": "no agent by that name has joined"}, 404)
-                        return
-                    row = _chat_add(name, "you", body)
-                    _inbox({"kind": "tapspace-chat", "agent": name, "id": row["id"], "message": body})
+                    row = _chat_add(name, "you", body, images)
+                    _inbox({"kind": "tapspace-chat", "agent": name, "id": row["id"],
+                            "message": body, "images": images})
                 else:
                     _agent_touch(name, listen=time.time())
-                    row = _chat_add(name, "master", body)
+                    row = _chat_add(name, "master", body, images)
                 self._json({"ok": True, "message": row})
                 return
             key = p.get("key", "")

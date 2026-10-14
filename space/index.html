@@ -303,6 +303,34 @@
     background:var(--ink);color:#fff;font-size:12px;padding:9px 14px;border-radius:12px;transition:all .4s cubic-bezier(.22,.9,.24,1)}
   .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
 
+
+  /* ---- image attachments ---- */
+  #tray{display:flex;gap:10px;padding:0 14px;overflow-x:auto;max-height:0;transition:max-height .45s cubic-bezier(.22,.9,.24,1),padding .45s cubic-bezier(.22,.9,.24,1);scrollbar-width:none}
+  #tray.open{max-height:110px;padding:12px 14px 2px}
+  .thumb{position:relative;flex:none;width:84px;height:84px;border-radius:14px;overflow:hidden;background:#f2f2f4;
+    box-shadow:0 1px 2px rgba(0,0,0,.06),0 6px 18px rgba(0,0,0,.08);animation:thumbin .6s cubic-bezier(.3,1.4,.5,1) both}
+  .thumb img{width:100%;height:100%;object-fit:cover;display:block}
+  .thumb button{position:absolute;top:5px;right:5px;width:20px;height:20px;border-radius:50%;border:0;cursor:pointer;
+    background:rgba(0,0,0,.6);color:#fff;font:600 12px/20px -apple-system,sans-serif;padding:0;backdrop-filter:blur(6px)}
+  .thumb.out{animation:thumbout .3s ease forwards}
+  @keyframes thumbin{from{opacity:0;transform:scale(.6) translateY(10px);filter:blur(8px)}to{opacity:1;transform:none;filter:blur(0)}}
+  @keyframes thumbout{to{opacity:0;transform:scale(.6);filter:blur(8px)}}
+  #attach{background:rgba(0,0,0,.05)!important;color:var(--ink)!important}
+  #attach:hover{background:rgba(0,0,0,.09)!important}
+  #attach.hide{display:none}
+  .imgs{display:grid;gap:6px;margin-bottom:6px;max-width:360px}
+  .imgs.n1{grid-template-columns:1fr} .imgs.n2,.imgs.n4{grid-template-columns:1fr 1fr} .imgs.n3,.imgs.nmany{grid-template-columns:1fr 1fr 1fr}
+  .imgs img{width:100%;border-radius:14px;display:block;cursor:zoom-in;background:#f2f2f4;
+    box-shadow:0 1px 2px rgba(0,0,0,.05),0 6px 20px rgba(0,0,0,.08);transition:transform .25s cubic-bezier(.3,1.4,.5,1)}
+  .imgs:not(.n1) img{aspect-ratio:1;object-fit:cover}
+  .imgs.n1 img{max-height:340px;object-fit:contain;width:auto;max-width:100%}
+  .imgs img:hover{transform:scale(1.02)}
+  .msg.you .imgs{justify-self:end;margin-left:auto}
+  #pane.drop::after{content:"Drop images to attach";position:absolute;inset:10px;border-radius:18px;border:2px dashed rgba(var(--hl),.5);
+    background:rgba(var(--hl),.05);display:flex;align-items:center;justify-content:center;color:rgb(var(--hl));font-weight:600;font-size:13px;
+    letter-spacing:.04em;pointer-events:none}
+  #pane{position:relative}
+
   @media (max-width:900px){
     #tabs{top:44px}
     body{padding-top:96px}
@@ -351,9 +379,12 @@
     <div id="panehead"></div>
     <div id="goals"></div>
     <div id="msgs"></div>
+    <div id="tray"></div>
     <form id="composer">
+      <button type="button" id="attach" aria-label="Attach images" title="Attach images"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M15.5 9.2 9.6 15.1a3.6 3.6 0 0 1-5.1-5.1l6.4-6.4a2.4 2.4 0 0 1 3.4 3.4l-6.3 6.3a1.2 1.2 0 0 1-1.7-1.7l5.6-5.6"/></svg></button>
+      <input type="file" id="filepick" accept="image/*" multiple hidden>
       <textarea rows="1" placeholder="Message…"></textarea>
-      <button type="submit" disabled aria-label="Send"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 16V4M4.5 9.5 10 4l5.5 5.5"/></svg></button>
+      <button type="submit" id="sendbtn" disabled aria-label="Send"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 16V4M4.5 9.5 10 4l5.5 5.5"/></svg></button>
     </form>
   </section>
 </section>
@@ -735,7 +766,59 @@ function setTab(name, instant){
 tabs.addEventListener('click', e => { const b = e.target.closest('.tab'); if (b) setTab(b.dataset.tab); });
 
 const msgsEl = $('#msgs'), head = $('#panehead'), goalsEl = $('#goals');
-const ta = $('#composer textarea'), sendBtn = $('#composer button');
+const ta = $('#composer textarea'), sendBtn = $('#sendbtn');
+const tray = $('#tray'), attachBtn = $('#attach'), filepick = $('#filepick'), pane = $('#pane');
+let pending = [];   // [{file, url}] images waiting to send
+
+function canAttach(){ return isAgent(current); }
+function syncSend(){ sendBtn.disabled = !ta.value.trim() && !(pending.length && canAttach()); }
+function renderTray(){
+  tray.classList.toggle('open', pending.length > 0);
+  const have = new Map([...tray.children].map(el => [el.dataset.url, el]));
+  for (const p of pending){
+    if (have.has(p.url)){ have.delete(p.url); continue; }
+    const el = document.createElement('div');
+    el.className = 'thumb'; el.dataset.url = p.url;
+    el.innerHTML = `<img src="${p.url}" alt=""><button type="button" aria-label="Remove">×</button>`;
+    el.querySelector('button').addEventListener('click', () => {
+      pending = pending.filter(x => x.url !== p.url);
+      el.classList.add('out'); setTimeout(() => { el.remove(); renderTray(); }, 280); syncSend();
+    });
+    tray.appendChild(el);
+  }
+  have.forEach(el => el.remove());
+  syncSend();
+}
+function addFiles(files){
+  const imgs = [...files].filter(f => f.type.startsWith('image/'));
+  if (!imgs.length) return;
+  if (!canAttach()){ toast('Images go to agents. Taps take text.'); return; }
+  for (const f of imgs.slice(0, 10 - pending.length)) pending.push({file: f, url: URL.createObjectURL(f)});
+  renderTray(); ta.focus();
+}
+function fileB64(f){
+  return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(',')[1]); r.onerror = rej; r.readAsDataURL(f); });
+}
+function extOf(f){
+  const t = (f.type.split('/')[1] || 'png').toLowerCase();
+  return t === 'jpeg' ? 'jpg' : t;
+}
+attachBtn.addEventListener('click', () => filepick.click());
+filepick.addEventListener('change', () => { addFiles(filepick.files); filepick.value = ''; });
+ta.addEventListener('paste', e => { const f = [...(e.clipboardData?.files || [])]; if (f.length){ e.preventDefault(); addFiles(f); } });
+let dragDepth = 0;
+pane.addEventListener('dragenter', e => { if ([...e.dataTransfer.types].includes('Files')){ e.preventDefault(); dragDepth++; pane.classList.add('drop'); } });
+pane.addEventListener('dragover', e => { if ([...e.dataTransfer.types].includes('Files')) e.preventDefault(); });
+pane.addEventListener('dragleave', () => { if (--dragDepth <= 0){ dragDepth = 0; pane.classList.remove('drop'); } });
+pane.addEventListener('drop', e => { e.preventDefault(); dragDepth = 0; pane.classList.remove('drop'); addFiles(e.dataTransfer.files); });
+
+function openImage(src){
+  lbimg.src = src; lbcap.textContent = '';
+  lbstage.querySelectorAll('.hls').forEach(h => h.remove());
+  lightbox.classList.add('open');
+  requestAnimationFrame(() => requestAnimationFrame(() => lightbox.classList.add('in')));
+}
+msgsEl.addEventListener('click', e => { const im = e.target.closest('.imgs img'); if (im) openImage(im.src); });
 const taplist = $('#taplist');
 let current = store('tapspace.thread') || '';
 let agents = [];                  // [{name, state, seen, where, last, count}]
@@ -837,7 +920,7 @@ function threadData(){
     const a = agents.find(x => agentKey(x.name) === current);
     if (!a) return null;
     const rows = chat.agent === a.name ? chat.messages : [];
-    return {msgs: rows.map(r => ({who: r.role === 'you' ? 'you' : 'them', body: r.body, ts: r.ts, id: 'm' + r.id})),
+    return {msgs: rows.map(r => ({who: r.role === 'you' ? 'you' : 'them', body: r.body, ts: r.ts, id: 'm' + r.id, images: r.images || []})),
             typing: a.state === 'thinking', agent: a};
   }
   const t = taps.items.find(x => x.key === current);
@@ -892,7 +975,9 @@ function renderThread(){
   }
   renderHead(d);
   ta.placeholder = d.agent ? 'Message ' + d.agent.name + '…' : 'Message this tap…';
-  const sig = current + '|' + d.msgs.map(m => m.id + (m.seen ? 's' : '') + (m.pending ? 'p' : '')).join(',') + '|' + d.typing;
+  attachBtn.classList.toggle('hide', !d.agent);
+  syncSend();
+  const sig = current + '|' + d.msgs.map(m => m.id + (m.seen ? 's' : '') + (m.pending ? 'p' : '') + ((m.images || []).length)).join(',') + '|' + d.typing;
   if (sig === rendered.sig) return;
   const switched = rendered.key !== current;
   const stick = switched || nearEnd();
@@ -909,7 +994,9 @@ function renderThread(){
     el.dataset.id = m.id;
     let meta = when(m.ts);
     if (m.who === 'you' && !d.agent) meta += m.pending ? ' · sending' : (m.seen ? ' · <span class="seen">seen 👀</span>' : ' · delivered');
-    el.innerHTML = `<div class="bub">${md(m.body)}</div><div class="meta2">${meta}</div>`;
+    const imgs = m.images || [];
+    const grid = imgs.length ? `<div class="imgs ${imgs.length > 4 ? 'nmany' : 'n' + imgs.length}">${imgs.map(u => `<img src="${esc(u)}" alt="" loading="lazy">`).join('')}</div>` : '';
+    el.innerHTML = grid + (m.body ? `<div class="bub">${md(m.body)}</div>` : '') + `<div class="meta2">${meta}</div>`;
     msgsEl.appendChild(el);
   }
   if (d.typing){ const ty = document.createElement('div'); ty.className = 'typing'; ty.innerHTML = '<span></span><span></span><span></span>'; msgsEl.appendChild(ty); }
@@ -928,26 +1015,30 @@ function openThread(key){
 
 function toast(t){ const el = $('#toast'); el.textContent = t; el.classList.add('show'); setTimeout(() => el.classList.remove('show'), 2600); }
 
-ta.addEventListener('input', () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 160) + 'px'; sendBtn.disabled = !ta.value.trim(); });
+ta.addEventListener('input', () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 160) + 'px'; syncSend(); });
 ta.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing){ e.preventDefault(); $('#composer').requestSubmit(); } });
 $('#composer').addEventListener('submit', async e => {
   e.preventDefault();
-  const body = ta.value.trim(); if (!body) return;
-  ta.value = ''; ta.style.height = ''; sendBtn.disabled = true;
   const key = current;
+  const body = ta.value.trim();
+  const shots = isAgent(key) ? pending.slice() : [];
+  if (!body && !shots.length) return;
+  ta.value = ''; ta.style.height = ''; sendBtn.disabled = true;
+  if (shots.length){ pending = []; renderTray(); }
   const post = (url, obj) => fetch(url, {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(obj)}).then(r => r.json());
   if (isAgent(key)){
     const name = agentOf(key);
-    chat.messages.push({id: (chat.messages.at(-1)?.id || 0) + 0.5, role:'you', body, ts: Date.now()/1000});
+    chat.messages.push({id: (chat.messages.at(-1)?.id || 0) + 0.5, role:'you', body, ts: Date.now()/1000, images: shots.map(p => p.url)});
     const a = agents.find(x => x.name === name); if (a) a.state = 'thinking';
     renderThread(); renderRail(); scrollEnd();
-    const r = await post('/api/chat', {agent: name, body}).catch(() => ({}));
+    const images = await Promise.all(shots.map(async p => ({b64: await fileB64(p.file), ext: extOf(p.file)})));
+    const r = await post('/api/chat', {agent: name, body, images}).catch(() => ({}));
     if (!r.ok) toast(r.error || 'Didn’t send. Is TapSpace still running?');
     pollAgents(); pollChat();
   } else {
     const s = {key, body, ts: Date.now()}; sending.push(s); renderThread(); scrollEnd();
     const r = await post('/api/taps/say', {key, body}).catch(e => ({error: String(e)}));
-    if (!r.ok){ sending.splice(sending.indexOf(s), 1); renderThread(); toast(r.error || 'Didn’t send'); ta.value = body; sendBtn.disabled = false; return; }
+    if (!r.ok){ sending.splice(sending.indexOf(s), 1); renderThread(); toast(r.error || 'Didn’t send'); ta.value = body; syncSend(); return; }
     // keep the bubble until GitHub shows the comment
     const until = Date.now() + 120000;
     const clear = setInterval(() => {

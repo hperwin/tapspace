@@ -14,7 +14,9 @@
                                          -> a master agent joins the space under NAME (its own Chat
                                             thread) and blocks until the reviewer writes to it; prints his
                                             unanswered messages. exit 0 = message, 4 = timeout
-  tap.py reply --as NAME "text"          -> that agent answers the reviewer in its thread
+  tap.py reply --as NAME "text" [--image a.png ...]
+                                         -> that agent answers the reviewer in its thread (images optional;
+                                            images the reviewer attaches print as absolute file paths)
   Any number of agents can be in the space at once; NAME defaults to $TAPSPACE_AGENT.
 
 Server default http://127.0.0.1:4747 (override: TAPSPACE_URL).
@@ -105,7 +107,8 @@ def main():
 
     rp = sub.add_parser("reply")
     rp.add_argument("--as", dest="name", default=me, required=not me)
-    rp.add_argument("text")
+    rp.add_argument("text", nargs="?", default="")
+    rp.add_argument("--image", action="append", default=[], help="attach an image (repeatable)")
 
     a = ap.parse_args()
 
@@ -173,13 +176,16 @@ def main():
             if pending:
                 for m in pending:
                     print(f"[{m['id']}] {m['body']}")
+                    for f in m.get("files", []):
+                        print(f"    image: {f}")
                 return 0
             time.sleep(2)
         print(json.dumps({"timeout": True}))
         return 4
 
     if a.cmd == "reply":
-        r = _call("/api/chat/reply", {"agent": a.name, "body": a.text})
+        imgs = [{"b64": _b64(f), "ext": f.rsplit(".", 1)[-1].lower()} for f in a.image]
+        r = _call("/api/chat/reply", {"agent": a.name, "body": a.text, "images": imgs})
         print(json.dumps(r))
         return 0 if r.get("ok") else 1
 

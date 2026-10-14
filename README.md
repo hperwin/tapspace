@@ -153,6 +153,10 @@ workspace where any number of agents can be connected at once:
   It listens with `tap.py listen --as "NAME"` (run it in the background; it
   exits with your unanswered messages as soon as you write) and answers with
   `tap.py reply --as "NAME" "text"`. Set `TAPSPACE_AGENT` to skip `--as`.
+  Attach images with the paperclip, by pasting, or by dragging them onto the
+  chat; they preview above the message box and show as a grid in the bubble.
+  The listening agent gets their file paths, and can send images back with
+  `tap.py reply --as "NAME" "text" --image shot.png`.
   An agent shows *Here* while it is listening, *Thinking* while your message
   waits for its reply, and *Away* otherwise.
 - **Taps.** GitHub issues you authored with the tap label
@@ -162,8 +166,8 @@ workspace where any number of agents can be connected at once:
   are scoped by issue author, so other people's taps never appear.
 
 Endpoints: `GET /api/agents`, `GET /api/chat?agent=NAME`,
-`GET /api/chat/listen?agent=NAME`, `POST /api/chat {agent, body}`,
-`POST /api/chat/reply {agent, body}`, `GET /api/taps`,
+`GET /api/chat/listen?agent=NAME`, `POST /api/chat {agent, body, images?}`,
+`POST /api/chat/reply {agent, body, images?}` (images: `[{b64, ext}]`), `GET /api/taps`,
 `POST /api/taps/say {key: "owner/repo#n", body}`, `POST /api/taps/refresh`.
 The endpoints that speak for you accept same-origin JSON only.
 
