@@ -256,6 +256,21 @@ def _agent_rows():
 # ---- taps (the reviewer's own pilot issues, read through gh) ----
 TAPS = {"me": "", "items": [], "fetched": 0.0, "error": ""}
 _taps_kick = threading.Event()
+HOT = {}                    # tap key -> refresh it every few seconds until this time
+TAP_HOT_EVERY = 6
+VIA = DATA / "tap-via.json"  # comment url -> the agent that sent it for the reviewer
+
+
+def _via():
+    try:
+        return json.loads(VIA.read_text())
+    except Exception:
+        return {}
+
+
+def _hot(key, minutes):
+    HOT[key] = max(HOT.get(key, 0), time.time() + minutes * 60)
+    _taps_kick.set()
 
 
 def _gh(*args, timeout=40):
@@ -297,13 +312,15 @@ def _is_mine(iss):
 
 def _tap(repo, number, iss):
     me = _me()
+    via = _via()
     labels = [l["name"] for l in iss["labels"]]
     msgs = []
     for c in iss["comments"]:
         mine = c["author"]["login"] == me
         seen = any(g["content"] == "EYES" for g in c.get("reactionGroups") or [])
         msgs.append({"who": "you" if mine else "tap", "body": c["body"],
-                     "ts": c["createdAt"], "seen": seen, "url": c["url"]})
+                     "ts": c["createdAt"], "seen": seen, "url": c["url"],
+                     "via": via.get(c["url"], "")})
     tap_msgs = [m for m in msgs if m["who"] == "tap"]
     if iss["state"] != "OPEN":
         status = "landed"
@@ -316,8 +333,20 @@ def _tap(repo, number, iss):
     return {"key": f"{repo}#{number}", "repo": repo, "number": number,
             "title": iss["title"], "url": iss["url"], "status": status,
             "goals": _goals(iss["body"]), "messages": msgs,
+            # the tap has your latest message (👀) and has not answered yet
+            "replying": iss["state"] == "OPEN" and bool(msgs) and msgs[-1]["who"] == "you"
+                        and msgs[-1]["seen"],
             "created": iss["createdAt"], "closed": iss.get("closedAt"),
             "last": msgs[-1]["ts"] if msgs else iss["createdAt"]}
+
+
+_ORDER = {"needs-you": 0, "flying": 1, "boarding": 2, "landed": 3}
+
+
+def _publish(items):
+    items.sort(key=lambda t: t["last"], reverse=True)       # newest first...
+    items.sort(key=lambda t: _ORDER[t["status"]])          # ...within each status
+    TAPS.update({"items": items, "fetched": time.time(), "error": ""})
 
 
 def _refresh_taps():
@@ -335,19 +364,87 @@ def _refresh_taps():
         iss = _issue(repo, f["number"])
         if _is_mine(iss):
             items.append(_tap(repo, f["number"], iss))
-    order = {"needs-you": 0, "flying": 1, "boarding": 2, "landed": 3}
-    items.sort(key=lambda t: t["last"], reverse=True)       # newest first...
-    items.sort(key=lambda t: order[t["status"]])           # ...within each status
-    TAPS.update({"items": items, "fetched": time.time(), "error": ""})
+    _publish(items)
+
+
+def _refresh_hot():
+    """Re-reads only the taps someone is talking to right now (one gh call each)."""
+    now = time.time()
+    for k in [k for k, until in HOT.items() if until < now]:
+        HOT.pop(k, None)
+    if not HOT:
+        return
+    items = list(TAPS["items"])
+    for key in list(HOT):
+        repo, num = key.split("#")
+        iss = _issue(repo, num)
+        if not _is_mine(iss):
+            continue
+        fresh = _tap(repo, int(num), iss)
+        items = [fresh if t["key"] == key else t for t in items]
+        if not any(t["key"] == key for t in items):
+            items.append(fresh)
+    _publish(items)
+
+
+# ---- near real-time: GitHub conditional requests ----
+# GitHub has no push to localhost (webhooks need a public URL and repo admin),
+# but a conditional GET with If-None-Match that comes back 304 costs no rate
+# limit. So every open tap's comments + labels are checked every few seconds
+# that way, and only a real change triggers the full gh read.
+_ETAGS = {}
+_TOKEN = {"v": ""}
+
+
+def _changed(path):
+    import urllib.request, urllib.error
+    if not _TOKEN["v"]:
+        _TOKEN["v"] = _gh("auth", "token").strip()
+    req = urllib.request.Request("https://api.github.com" + path, headers={
+        "Authorization": "Bearer " + _TOKEN["v"], "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        **({"If-None-Match": _ETAGS[path]} if path in _ETAGS else {})})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            first = path not in _ETAGS
+            _ETAGS[path] = r.headers.get("ETag", "")
+            return not first
+    except urllib.error.HTTPError as e:
+        if e.code == 304:
+            return False
+        if e.code == 401:
+            _TOKEN["v"] = ""
+        raise
+
+
+def _watch_loop():
+    while True:
+        for t in list(TAPS["items"]):
+            if t["status"] == "landed":
+                continue
+            repo, num = t["key"].split("#")
+            try:
+                # comments carry their reaction rollup, so a 👀 also changes the ETag
+                if _changed(f"/repos/{repo}/issues/{num}/comments?per_page=100") | \
+                   _changed(f"/repos/{repo}/issues/{num}"):
+                    _hot(t["key"], 0.15)
+            except Exception:
+                pass
+        time.sleep(3)
 
 
 def _taps_loop():
+    last_full = 0.0
     while True:
         try:
-            _refresh_taps()
+            if time.time() - last_full >= TAP_REFRESH:
+                _refresh_taps()
+                last_full = time.time()
+            else:
+                _refresh_hot()
         except Exception as e:
             TAPS["error"] = str(e)
-        _taps_kick.wait(TAP_REFRESH)
+        _taps_kick.wait(TAP_HOT_EVERY if HOT else TAP_REFRESH - (time.time() - last_full))
         _taps_kick.clear()
 
 
@@ -555,21 +652,35 @@ class H(BaseHTTPRequestHandler):
             if not m:
                 self._json({"error": "bad tap key"}, 400)
                 return
+            via = (p.get("via") or "").strip()
+            if via and not _NAME.match(via):
+                self._json({"error": "bad via name"}, 400)
+                return
             try:
                 if not _is_mine(_issue(m.group(1), m.group(2))):
                     self._json({"error": "not one of your taps"}, 403)
                     return
+                text = body + (f"\n\n_Sent by {via} for @{_me()}._" if via else "")
                 url = _gh("issue", "comment", m.group(2), "--repo", m.group(1),
-                          "--body", body).strip()
+                          "--body", text).strip()
             except Exception as e:
                 self._json({"error": str(e)}, 502)
                 return
-            _inbox({"kind": "tapspace-tap-say", "tap": key, "message": body, "url": url})
-            _taps_kick.set()
+            if via:
+                with _lock:
+                    v = _via()
+                    v[url] = via
+                    VIA.write_text(json.dumps(v, indent=1))
+            _inbox({"kind": "tapspace-tap-say", "tap": key, "message": body, "url": url,
+                    "via": via})
+            _hot(key, 0.15)
             self._json({"ok": True, "url": url})
             return
 
         if self.path == "/api/taps/refresh":
+            key = p.get("key") or ""
+            if re.match(r"^[\w.-]+/[\w.-]+#\d+$", key):
+                _hot(key, 0.15)
             _taps_kick.set()
             self._json({"ok": True})
             return
@@ -699,5 +810,6 @@ if __name__ == "__main__":
         _save({"tickets": []})
     threading.Thread(target=_scan_sessions, daemon=True).start()
     threading.Thread(target=_taps_loop, daemon=True).start()
+    threading.Thread(target=_watch_loop, daemon=True).start()
     print(f"TapSpace serving on http://127.0.0.1:{PORT}")
     ThreadingHTTPServer(("127.0.0.1", PORT), H).serve_forever()

@@ -925,9 +925,9 @@ function threadData(){
   }
   const t = taps.items.find(x => x.key === current);
   if (!t) return null;
-  const msgs = t.messages.map((m, i) => ({who: m.who === 'you' ? 'you' : 'them', body: m.body, ts: m.ts, seen: m.seen, id: 't' + i, url: m.url}));
+  const msgs = t.messages.map((m, i) => ({who: m.who === 'you' ? 'you' : 'them', body: m.body.replace(/\n\n_Sent by [^\n]*_\s*$/, ''), ts: m.ts, seen: m.seen, id: 't' + i, url: m.url, via: m.via}));
   for (const s of sending.filter(s => s.key === t.key)) msgs.push({who:'you', body:s.body, ts:s.ts/1000, pending:true, id:'s' + s.ts});
-  return {msgs, typing: false, tap: t};
+  return {msgs, typing: !!t.replying, tap: t};
 }
 
 function renderHead(d){
@@ -993,13 +993,14 @@ function renderThread(){
     el.className = 'msg ' + m.who + (known && !known.has(m.id) ? ' new' : '');
     el.dataset.id = m.id;
     let meta = when(m.ts);
-    if (m.who === 'you' && !d.agent) meta += m.pending ? ' · sending' : (m.seen ? ' · <span class="seen">seen 👀</span>' : ' · delivered');
+    if (m.who === 'you' && !d.agent) meta += (m.via ? ' · via ' + esc(m.via) : '') + (m.pending ? ' · sending' : (m.seen ? ' · <span class="seen">seen 👀</span>' : ' · delivered'));
     const imgs = m.images || [];
     const grid = imgs.length ? `<div class="imgs ${imgs.length > 4 ? 'nmany' : 'n' + imgs.length}">${imgs.map(u => `<img src="${esc(u)}" alt="" loading="lazy">`).join('')}</div>` : '';
     el.innerHTML = grid + (m.body ? `<div class="bub">${md(m.body)}</div>` : '') + `<div class="meta2">${meta}</div>`;
     msgsEl.appendChild(el);
   }
-  if (d.typing){ const ty = document.createElement('div'); ty.className = 'typing'; ty.innerHTML = '<span></span><span></span><span></span>'; msgsEl.appendChild(ty); }
+  if (d.typing){ const ty = document.createElement('div'); ty.className = 'typing'; ty.innerHTML = '<span></span><span></span><span></span>'; msgsEl.appendChild(ty);
+    if (d.tap){ const n = document.createElement('div'); n.className = 'msg them'; n.innerHTML = '<div class="meta2">working on a reply</div>'; msgsEl.appendChild(n); } }
   rendered = {key: current, sig};
   if (stick) scrollEnd(switched);
   if (document.body.classList.contains("chatmode")) markRead(current);
@@ -1007,7 +1008,7 @@ function renderThread(){
 
 function openThread(key){
   current = key; store('tapspace.thread', key);
-  if (!isAgent(key)) fetch('/api/taps/refresh', {method:'POST', headers:{'content-type':'application/json'}, body:'{}'});
+  if (!isAgent(key)) fetch('/api/taps/refresh', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({key})});
   markRead(key); renderRail();
   if (isAgent(key)) pollChat(); else renderThread();
   ta.focus();
@@ -1078,7 +1079,7 @@ requestAnimationFrame(() => setTab(start, true));
 pollAgents(); pollChat(); pollTaps();
 setInterval(pollAgents, 2000);
 setInterval(pollChat, 1500);
-setInterval(pollTaps, 5000);
+setInterval(pollTaps, 2000);
 setInterval(() => { rendered.sig = ''; renderThread(); renderRail(); }, 30000);   // refresh relative times
 </script>
 

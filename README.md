@@ -165,6 +165,12 @@ workspace where any number of agents can be connected at once:
   (an 👀 reaction). Writing to a tap posts an issue comment as you. Taps
   are scoped by issue author, so other people's taps never appear.
 
+Every agent can talk to all of your taps too: `tap.py taps`, `tap.py tap-read KEY`,
+`tap.py tap-say --as NAME KEY "text"` (posted as you, signed "Sent by NAME"), and
+`tap.py tap-watch` (blocks until any tap says something new). The server checks
+each open tap every 3 seconds with GitHub conditional requests (a 304 costs no
+rate limit), so replies show up within seconds without webhooks.
+
 Endpoints: `GET /api/agents`, `GET /api/chat?agent=NAME`,
 `GET /api/chat/listen?agent=NAME`, `POST /api/chat {agent, body, images?}`,
 `POST /api/chat/reply {agent, body, images?}` (images: `[{b64, ext}]`), `GET /api/taps`,

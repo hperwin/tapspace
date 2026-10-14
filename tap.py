@@ -14,6 +14,11 @@
                                          -> a master agent joins the space under NAME (its own Chat
                                             thread) and blocks until the reviewer writes to it; prints his
                                             unanswered messages. exit 0 = message, 4 = timeout
+  Taps (the reviewer's GitHub agent issues; every agent can talk to all of them):
+  tap.py taps                            -> list them: key, status, title, last message
+  tap.py tap-read KEY                    -> the whole thread of one tap (KEY = owner/repo#n)
+  tap.py tap-say --as NAME KEY "text"    -> message a tap as the reviewer (signed "Sent by NAME")
+  tap.py tap-watch [--timeout 3600]      -> blocks until any tap posts something new or changes status
   tap.py reply --as NAME "text" [--image a.png ...]
                                          -> that agent answers the reviewer in its thread (images optional;
                                             images the reviewer attaches print as absolute file paths)
@@ -105,6 +110,16 @@ def main():
     li.add_argument("--as", dest="name", default=me, required=not me)
     li.add_argument("--timeout", type=int, default=3600)
 
+    sub.add_parser("taps")
+    tr = sub.add_parser("tap-read")
+    tr.add_argument("key")
+    ts = sub.add_parser("tap-say")
+    ts.add_argument("--as", dest="name", default=me, required=not me)
+    ts.add_argument("key")
+    ts.add_argument("text")
+    tw = sub.add_parser("tap-watch")
+    tw.add_argument("--timeout", type=int, default=3600)
+
     rp = sub.add_parser("reply")
     rp.add_argument("--as", dest="name", default=me, required=not me)
     rp.add_argument("text", nargs="?", default="")
@@ -163,6 +178,56 @@ def main():
         r = _call("/api/update", {"id": a.ticket, "note": a.note, **_media(a)})
         print(json.dumps(r))
         return 0
+
+    if a.cmd in ("taps", "tap-read", "tap-watch"):
+        def snap():
+            return {t["key"]: t for t in _call("/api/taps")["items"]}
+        if a.cmd == "taps":
+            for t in snap().values():
+                last = [m for m in t["messages"] if m["who"] == "tap"]
+                tail = (last[-1]["body"].splitlines() or [""])[0][:90] if last else ""
+                print(f"{t['key']}  [{t['status']}{', replying' if t.get('replying') else ''}]  {t['title']}")
+                if tail:
+                    print(f"    last: {tail}")
+            return 0
+        if a.cmd == "tap-read":
+            _call("/api/taps/refresh", {"key": a.key})
+            t = snap().get(a.key)
+            if not t:
+                print(json.dumps({"error": "no such tap of yours"})); return 1
+            print(f"{t['key']}  [{t['status']}]  {t['title']}\n{t['url']}")
+            for g in t["goals"]:
+                print(f"  [{'x' if g['done'] else ' '}] {g['text']}")
+            for m in t["messages"]:
+                who = "tap" if m["who"] == "tap" else ("you" + (f" (via {m['via']})" if m.get("via") else ""))
+                print(f"\n--- {who} · {m['ts']}{' · seen' if m.get('seen') else ''}\n{m['body']}")
+            return 0
+        base = {k: (len(t["messages"]), t["status"]) for k, t in snap().items()}
+        deadline = time.time() + a.timeout
+        while time.time() < deadline:
+            time.sleep(5)
+            try:
+                now = snap()
+            except Exception:
+                continue
+            news = [t for k, t in now.items()
+                    if k not in base or (len(t["messages"]), t["status"]) != base[k]]
+            news = [t for t in news if t["messages"] and t["messages"][-1]["who"] == "tap"
+                    or (t["key"] in base and t["status"] != base[t["key"]][1])]
+            if news:
+                for t in news:
+                    print(f"== {t['key']} [{t['status']}] {t['title']}")
+                    if t["messages"]:
+                        print(t["messages"][-1]["body"])
+                return 0
+            base = {k: (len(t["messages"]), t["status"]) for k, t in now.items()}
+        print(json.dumps({"timeout": True}))
+        return 4
+
+    if a.cmd == "tap-say":
+        r = _call("/api/taps/say", {"key": a.key, "body": a.text, "via": a.name})
+        print(json.dumps(r))
+        return 0 if r.get("ok") else 1
 
     if a.cmd == "listen":
         deadline = time.time() + a.timeout
