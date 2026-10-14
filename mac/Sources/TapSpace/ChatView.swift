@@ -33,24 +33,24 @@ struct RailView: View {
             VStack(alignment: .leading, spacing: 8) {
                 RailHead(title: "Agents")
                 if store.agents.isEmpty {
-                    RailEmpty(text: "No agents in the space yet. Any agent joins with tap.py listen --as NAME.")
+                    RailEmpty(text: store.agentsLoaded
+                              ? "No agents in the space yet. Any agent joins with tap.py listen --as NAME."
+                              : "Looking for agents…")
                 }
                 ForEach(Array(store.agents.enumerated()), id: \.element.key) { i, a in
                     RailRow(key: a.key, index: i, store: store, onFrame: { frames[a.key] = $0 }) {
                         OrbView(state: a.state).frame(width: 38, height: 38)
-                        RowText(title: a.name, sub: agentLabel[a.state, default: a.state] + ((a.where ?? "").isEmpty ? "" : " · " + (a.where ?? "")))
+                        RowText(title: a.name, sub: agentSub(a))
                     }
                 }
                 RailHead(title: "Your taps")
                 if store.taps.items.isEmpty {
-                    RailEmpty(text: store.taps.fetched > 0 ? "No taps flying under your name."
-                              : (store.taps.error.isEmpty ? "Looking for your taps…" : "Couldn’t reach GitHub: " + store.taps.error))
+                    RailEmpty(text: tapsEmptyText)
                 }
                 ForEach(Array(store.taps.items.enumerated()), id: \.element.key) { i, t in
                     RailRow(key: t.key, index: store.agents.count + i, store: store, onFrame: { frames[t.key] = $0 }) {
                         TapAvatar(status: t.status, number: t.number)
-                        RowText(title: t.name, sub: statusLabel[t.status, default: t.status] + " · " + t.repoName
-                                + (t.messages.last { $0.who == "tap" }.map { " · " + when($0.date) } ?? ""))
+                        RowText(title: t.name, sub: tapSub(t))
                     }
                 }
             }
@@ -59,11 +59,30 @@ struct RailView: View {
             .padding(.bottom, 20)
             .coordinateSpace(.named("rail"))
             .background(alignment: .topLeading) { LiquidCanvas(track: track) }
+            // Agents re-sort by state (thinking first): rows glide, the body follows.
+            .animation(.spring(response: 0.5, dampingFraction: 0.82), value: store.agents.map(\.key))
         }
         .scrollIndicators(.never)
         .onChange(of: frames) { place(animated: true) }
         .onChange(of: store.thread) { place(animated: true) }
         .onAppear { place(animated: false) }
+    }
+
+    private var tapsEmptyText: String {
+        if store.taps.fetched > 0 { return "No taps flying under your name." }
+        return store.taps.error.isEmpty ? "Looking for your taps…" : "Couldn’t reach GitHub: " + store.taps.error
+    }
+
+    private func agentSub(_ a: Agent) -> String {
+        let state = agentLabel[a.state, default: a.state]
+        guard let w = a.where, !w.isEmpty else { return state }
+        return state + " · " + w
+    }
+
+    private func tapSub(_ t: Tap) -> String {
+        var s = statusLabel[t.status, default: t.status] + " · " + t.repoName
+        if let last = t.messages.last(where: { $0.who == "tap" }) { s += " · " + when(last.date) }
+        return s
     }
 
     private func place(animated: Bool) {
@@ -95,6 +114,7 @@ struct RailEmpty: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
             .fixedSize(horizontal: false, vertical: true)
+            .transition(.opacity.combined(with: .offset(y: 4)))
     }
 }
 
@@ -112,41 +132,56 @@ struct RowText: View {
                 .foregroundStyle(Color.dim)
                 .lineLimit(1)
                 .truncationMode(.middle)
+                .contentTransition(.interpolate)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .animation(.smooth(duration: 0.35), value: sub)
     }
 }
 
-/// A rail row: staggered blur-in on arrival, a hover wash, and its frame
-/// reported so the one liquid selection body can spring to it.
+/// A rail row: staggered blur-in on arrival, a hover wash, a springy press,
+/// and its frame reported so the one liquid selection body can spring to it.
 struct RailRow<Content: View>: View {
     let key: String
     let index: Int
     let store: Store
     let onFrame: (CGRect) -> Void
     @ViewBuilder var content: Content
-    @State private var appear = SpringBox(0, .gentle)
     @State private var hover = false
 
     var body: some View {
-        let p = appear.value
         let selected = store.thread == key
-        HStack(spacing: 12) {
-            content
-            UnreadDot(on: store.isUnread(key))
+        Button { store.open(key) } label: {
+            HStack(spacing: 12) {
+                content
+                UnreadDot(on: store.isUnread(key))
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color.black.opacity(hover && !selected ? 0.03 : 0)))
+            .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 16, style: .continuous)
-            .fill(Color.black.opacity(hover && !selected ? 0.03 : 0)))
-        .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .buttonStyle(ChatPress(scale: 0.98))
         .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .named("rail")) }, action: onFrame)
-        .onTapGesture { store.open(key) }
         .onHover { h in withAnimation(.easeOut(duration: 0.2)) { hover = h } }
-        .opacity(clamp01(p))
-        .blur(radius: 12 * (1 - clamp01(p)))
-        .offset(y: 8 * (1 - p))
-        .onAppear { appear.set(1, delay: 0.07 * Double(min(index, 10))) }
+        .modifier(RailArrival(index: index))
+    }
+}
+
+/// The web page's railin: blur 12 -> 0, rise 8 pt, staggered per row.
+/// Isolated so its per-frame spring re-renders only this wrapper.
+struct RailArrival: ViewModifier {
+    let index: Int
+    @State private var appear = SpringBox(0, .gentle)
+
+    func body(content: Content) -> some View {
+        let p = appear.value
+        content
+            .opacity(clamp01(p))
+            .blur(radius: 12 * (1 - clamp01(p)))
+            .offset(y: 8 * (1 - p))
+            .onAppear { appear.set(1, delay: 0.06 * Double(min(index, 10))) }
     }
 }
 
@@ -191,15 +226,19 @@ struct TapAvatar: View {
                 if status == "landed" {
                     Image(systemName: "checkmark")
                         .font(.system(size: 11 * size / 38, weight: .bold))
+                        .transition(.symbolEffect(.drawOn))
                 } else {
                     Text("#" + String(String(number).suffix(4)))
                         .font(.system(size: 9.5 * size / 38, weight: .bold))
                         .monospacedDigit()
-                        .tracking(0.2)
+                        .tracking(-0.2)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.6)
+                        .frame(width: size * 0.7)
+                        .transition(.blurReplace)
                 }
             }
             .foregroundStyle(fg)
-            .contentTransition(.symbolEffect(.replace))
         }
         .frame(width: size, height: size)
         .animation(.smooth(duration: 0.4), value: status)
@@ -218,13 +257,36 @@ struct DisplayMessage: Identifiable, Equatable {
     var fly = false
 }
 
+/// Where the composer field sits in the pane, so a sent bubble can lift out
+/// of it. Only flying bubbles read it, so its per-frame updates stay local.
+@MainActor @Observable
+final class ChatGeometry {
+    var composer: CGRect = .zero
+    /// Sent bubbles still in the air: the list lets them draw past its
+    /// bottom edge (over the composer) only while this is above zero.
+    var flights = 0
+}
+
+/// The list normally clips at its own frame; while a sent bubble is lifting
+/// out of the composer it may draw below that edge too.
+struct FlightMask: ViewModifier {
+    let geo: ChatGeometry
+
+    func body(content: Content) -> some View {
+        content.mask(alignment: .top) {
+            Rectangle().padding(.bottom, geo.flights > 0 ? -420 : 0)
+        }
+    }
+}
+
 /// Bubble entrances: a new message springs in (blur + offset + scale); a
-/// message Hayden just sent flies up from the composer.
+/// message Hayden just sent flies up out of the composer.
 @MainActor
 final class BubbleAnimator {
     private var boxes: [String: SpringBox] = [:]
     private var known: Set<String> = []
     private var thread = ""
+    weak var geo: ChatGeometry?
 
     func sync(thread: String, keys: [String], fly: Set<String>) {
         if thread != self.thread {
@@ -235,19 +297,41 @@ final class BubbleAnimator {
         }
         for k in keys where !known.contains(k) {
             known.insert(k)
-            let b = SpringBox(0, fly.contains(k) ? SpringPreset(stiffness: 230, damping: 23) : .gentle)
-            b.set(1)
+            let flies = fly.contains(k)
+            let b = SpringBox(0, flies ? .chatFly : .chatIn)
             boxes[k] = b
+            guard flies, let geo else { b.set(1); continue }
+            // Counted outside the view update that discovered the bubble.
+            DispatchQueue.main.async {
+                geo.flights += 1
+                b.set(1) { geo.flights = max(0, geo.flights - 1) }
+            }
         }
     }
 
     func box(_ k: String) -> SpringBox? { boxes[k] }
 }
 
+/// The thread swap: header, goals and messages blur up into place.
+struct SwapIn: ViewModifier {
+    let box: SpringBox
+    var rise: CGFloat = 6
+
+    func body(content: Content) -> some View {
+        let p = box.value
+        content
+            .opacity(clamp01(p))
+            .blur(radius: 8 * (1 - clamp01(p)))
+            .offset(y: rise * (1 - p))
+    }
+}
+
 struct PaneView: View {
     let store: Store
     @State private var animator = BubbleAnimator()
+    @State private var geo = ChatGeometry()
     @State private var swap = SpringBox(1, .gentle)
+    @State private var focusToken = 0
 
     var body: some View {
         let key = store.thread
@@ -257,23 +341,34 @@ struct PaneView: View {
         VStack(spacing: 0) {
             if agent != nil || tap != nil {
                 PaneHeader(agent: agent, tap: tap)
-                    .opacity(clamp01(swap.value))
-                    .blur(radius: 8 * (1 - clamp01(swap.value)))
-                    .offset(y: 4 * (1 - swap.value))
+                    .modifier(SwapIn(box: swap, rise: 4))
                 Rectangle().fill(Color.hairline).frame(height: 1)
                 if let tap, !tap.goals.isEmpty {
                     GoalsStrip(goals: tap.goals)
+                        .modifier(SwapIn(box: swap, rise: 4))
                     Rectangle().fill(Color.hairline).frame(height: 1)
                 }
             }
-            MessageList(store: store, agent: agent, tap: tap, animator: animator)
+            MessageList(store: store, agent: agent, tap: tap, animator: animator, geo: geo)
+                .modifier(SwapIn(box: swap, rise: 10))
+                .zIndex(1)
             Rectangle().fill(Color.hairline).frame(height: 1)
-            ComposerBar(store: store, placeholder: agent.map { "Message \($0.name)…" } ?? (tap != nil ? "Message this tap…" : "Message…"),
-                        enabled: agent != nil || tap != nil)
+            ComposerBar(store: store, placeholder: placeholder(agent, tap),
+                        enabled: agent != nil || tap != nil, focusToken: focusToken, geo: geo)
         }
+        .coordinateSpace(.named("pane"))
         .clipShape(shape)
         .background(shape.fill(.white).softShadow())
-        .onChange(of: store.thread) { swap.snap(0); swap.set(1) }
+        .onChange(of: store.thread) {
+            swap.snap(0)
+            swap.set(1)
+            focusToken += 1
+        }
+    }
+
+    private func placeholder(_ agent: Agent?, _ tap: Tap?) -> String {
+        if let agent { return "Message \(agent.name)…" }
+        return tap != nil ? "Message this tap…" : "Message…"
     }
 }
 
@@ -286,11 +381,8 @@ struct PaneHeader: View {
             if let agent {
                 OrbView(state: agent.state).frame(width: 38, height: 38)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(agent.name)
-                        .font(.system(size: 15, weight: .semibold))
-                        .tracking(-0.15)
-                        .lineLimit(1)
-                    Text(["Agent", agent.where ?? "", "joined " + when(agent.first ?? agent.seen)].filter { !$0.isEmpty }.joined(separator: " · "))
+                    HeaderTitle(text: agent.name)
+                    Text(agentSubtitle(agent))
                         .font(.system(size: 11.5))
                         .foregroundStyle(Color.dim)
                         .lineLimit(1)
@@ -301,19 +393,10 @@ struct PaneHeader: View {
             } else if let tap {
                 TapAvatar(status: tap.status, number: tap.number)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(tap.name)
-                        .font(.system(size: 15, weight: .semibold))
-                        .tracking(-0.15)
-                        .lineLimit(1)
+                    HeaderTitle(text: tap.name)
                     HStack(spacing: 4) {
                         Text(tap.key + " ·")
-                        if let url = URL(string: tap.url) {
-                            Link(destination: url) {
-                                Text("Open issue").underline(true, color: Color.faint)
-                            }
-                            .foregroundStyle(Color.dim)
-                            .pointerStyle(.link)
-                        }
+                        if let url = URL(string: tap.url) { IssueLink(url: url) }
                     }
                     .font(.system(size: 11.5))
                     .foregroundStyle(Color.dim)
@@ -326,6 +409,39 @@ struct PaneHeader: View {
         .padding(.horizontal, 20)
         .padding(.top, 16)
         .padding(.bottom, 12)
+    }
+
+    private func agentSubtitle(_ a: Agent) -> String {
+        ["Agent", a.where ?? "", "joined " + when(a.first ?? a.seen)].filter { !$0.isEmpty }.joined(separator: " · ")
+    }
+}
+
+struct HeaderTitle: View {
+    let text: String
+    var body: some View {
+        Text(text)
+            .font(.system(size: 15, weight: .semibold))
+            .tracking(-0.15)
+            .lineLimit(1)
+    }
+}
+
+struct IssueLink: View {
+    let url: URL
+    @State private var hover = false
+
+    var body: some View {
+        Link(destination: url) {
+            HStack(spacing: 2) {
+                Text("Open issue").underline(true, color: hover ? Color.dim : Color.faint)
+                Image(systemName: "arrow.up.right")
+                    .font(.system(size: 8.5, weight: .bold))
+                    .offset(x: hover ? 1.5 : 0, y: hover ? -1.5 : 0)
+            }
+        }
+        .foregroundStyle(hover ? Color.ink : Color.dim)
+        .pointerStyle(.link)
+        .onHover { h in withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) { hover = h } }
     }
 }
 
@@ -353,7 +469,7 @@ struct StatusChip: View {
         .padding(.horizontal, 9)
         .padding(.vertical, 5)
         .background(Capsule().fill(bg))
-        .animation(.smooth(duration: 0.35), value: label)
+        .animation(.spring(response: 0.4, dampingFraction: 0.7), value: label)
     }
 }
 
@@ -365,16 +481,19 @@ struct GoalsStrip: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
                 HStack(spacing: 0) {
-                    Text("\(done)")
+                    Text(done, format: .number)
                         .contentTransition(.numericText(value: Double(done)))
-                    Text("/\(goals.count) GOALS")
+                    Text("/")
+                    Text(goals.count, format: .number)
+                        .contentTransition(.numericText(value: Double(goals.count)))
+                    Text(" GOALS")
                 }
                 .font(.system(size: 10.5, weight: .semibold))
                 .tracking(0.8)
                 .monospacedDigit()
                 .foregroundStyle(Color.faint)
                 .padding(.trailing, 4)
-                .animation(.smooth, value: done)
+                .animation(.spring(response: 0.45, dampingFraction: 0.7), value: done)
                 ForEach(Array(goals.enumerated()), id: \.offset) { _, g in
                     GoalPill(goal: g)
                 }
@@ -387,26 +506,15 @@ struct GoalsStrip: View {
 
 struct GoalPill: View {
     let goal: TapGoal
+    @State private var hover = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
-            ZStack {
-                Circle()
-                    .strokeBorder(goal.done ? Color.up : Color.faint, lineWidth: 1.5)
-                    .background(Circle().fill(goal.done ? Color.up : .clear))
-                if goal.done {
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 7.5, weight: .heavy))
-                        .foregroundStyle(.white)
-                        .transition(.symbolEffect(.drawOn))
-                }
-            }
-            .frame(width: 15, height: 15)
-            .padding(.top, 1)
+            GoalCheck(done: goal.done)
             Text(Markdown.inline(goal.text, dark: false))
                 .font(.system(size: 11.5))
                 .lineSpacing(1.5)
-                .lineLimit(2)
+                .lineLimit(hover ? 6 : 2)
                 .foregroundStyle(goal.done ? Color.ink : Color.dim)
         }
         .padding(.horizontal, 10)
@@ -415,7 +523,27 @@ struct GoalPill: View {
         .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
             .fill(goal.done ? Color.up.opacity(0.07) : Color.black.opacity(0.03)))
         .help(goal.text)
+        .onHover { h in withAnimation(.spring(response: 0.38, dampingFraction: 0.8)) { hover = h } }
         .animation(.smooth, value: goal.done)
+    }
+}
+
+struct GoalCheck: View {
+    let done: Bool
+    var body: some View {
+        ZStack {
+            Circle()
+                .strokeBorder(done ? Color.up : Color.faint, lineWidth: 1.5)
+                .background(Circle().fill(done ? Color.up : .clear))
+            if done {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 7.5, weight: .heavy))
+                    .foregroundStyle(.white)
+                    .transition(.symbolEffect(.drawOn))
+            }
+        }
+        .frame(width: 15, height: 15)
+        .padding(.top, 1)
     }
 }
 
@@ -424,9 +552,11 @@ struct MessageList: View {
     let agent: Agent?
     let tap: Tap?
     let animator: BubbleAnimator
+    let geo: ChatGeometry
     @State private var position = ScrollPosition(edge: .bottom)
     @State private var nearBottom = true
     @State private var lastThread = ""
+    @State private var pinUntil = Date.distantPast
 
     private var messages: [DisplayMessage] {
         let key = store.thread
@@ -438,8 +568,8 @@ struct MessageList: View {
         } else if let tap {
             for (i, m) in tap.messages.enumerated() {
                 let mine = m.who == "you"
-                out.append(DisplayMessage(id: "\(key)#\(i)", mine: mine, body: m.body, ts: m.date,
-                                          receipt: mine ? ((m.seen ?? false) ? .seen : .delivered) : nil))
+                let receipt: DisplayMessage.Receipt? = mine ? ((m.seen ?? false) ? .seen : .delivered) : nil
+                out.append(DisplayMessage(id: "\(key)#\(i)", mine: mine, body: m.body, ts: m.date, receipt: receipt))
             }
         }
         for p in store.pending where p.key == key {
@@ -450,50 +580,72 @@ struct MessageList: View {
     }
 
     var body: some View {
+        let _ = (animator.geo = geo)
         let msgs = messages
-        let typing = agent?.state == "thinking"
+        // Thinking means a message of Hayden's is unanswered; once the reply is
+        // in the thread the dots go, without waiting for the next agents poll.
+        let typing = agent?.state == "thinking" && msgs.last?.mine == true
         let keys = msgs.map { store.confirmed[$0.id] ?? $0.id }
         let _ = animator.sync(thread: store.thread, keys: keys, fly: Set(msgs.filter(\.fly).map(\.id)))
-        let sig = keys.joined(separator: ",") + "|\(typing)|" + msgs.map { "\($0.receipt.map { "\($0)" } ?? "")" }.joined()
-        GeometryReader { geo in
-            let maxW = min(620, geo.size.width * 0.82)
+        let sig = keys.joined(separator: ",") + "|\(typing)|" + msgs.map { $0.receipt.map { "\($0)" } ?? "" }.joined()
+        GeometryReader { box in
+            let maxW = min(620, box.size.width * 0.82)
             ScrollView(.vertical) {
                 VStack(spacing: 12) {
                     if msgs.isEmpty {
                         Hello(agent: agent, tap: tap)
-                            .frame(minHeight: geo.size.height - 60)
+                            .frame(minHeight: box.size.height - 60)
                     }
                     ForEach(Array(zip(msgs, keys)), id: \.0.id) { m, k in
-                        BubbleRow(m: m, box: animator.box(k), maxWidth: maxW)
+                        BubbleRow(m: m, box: animator.box(k), maxWidth: maxW, geo: geo)
                     }
                     if typing {
                         TypingBubble()
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .transition(.opacity.combined(with: .offset(y: 8)))
+                            .transition(.asymmetric(
+                                insertion: .scale(scale: 0.4, anchor: .bottomLeading).combined(with: .opacity),
+                                removal: .scale(scale: 0.8, anchor: .bottomLeading).combined(with: .opacity)))
                     }
                 }
                 .padding(.horizontal, 22)
                 .padding(.top, 22)
                 .padding(.bottom, 12)
-                .animation(.smooth(duration: 0.35), value: typing)
+                .animation(.spring(response: 0.42, dampingFraction: 0.66), value: typing)
             }
+            .scrollClipDisabled()
             .scrollPosition($position)
             .defaultScrollAnchor(.bottom)
-            .onScrollGeometryChange(for: Bool.self, of: { g in
-                g.contentSize.height - (g.contentOffset.y + g.containerSize.height) < 120
-            }, action: { _, near in nearBottom = near })
+            // Stay pinned to the end while content or the viewport changes size
+            // (markdown settling, goals appearing, the composer growing), when we
+            // were at the end before the change or a thread just opened.
+            .onScrollGeometryChange(for: ListGeometry.self, of: { g in
+                ListGeometry(content: g.contentSize.height, container: g.containerSize.height, offset: g.contentOffset.y)
+            }, action: { old, new in
+                nearBottom = new.gap < 120
+                let resized = old.content != new.content || old.container != new.container
+                if resized, old.gap < 120 || Date() < pinUntil { position.scrollTo(edge: .bottom) }
+            })
             .onChange(of: sig, initial: true) {
                 let switched = lastThread != store.thread
                 lastThread = store.thread
+                if switched { pinUntil = Date().addingTimeInterval(0.8) }
+                if store.isViewingCandidate { store.markRead(store.thread) }
                 guard switched || nearBottom else { return }
                 DispatchQueue.main.async {
                     if switched { position.scrollTo(edge: .bottom) }
-                    else { withAnimation(.smooth(duration: 0.4)) { position.scrollTo(edge: .bottom) } }
+                    else { withAnimation(.spring(response: 0.45, dampingFraction: 0.9)) { position.scrollTo(edge: .bottom) } }
                 }
-                if store.isViewingCandidate { store.markRead(store.thread) }
             }
         }
+        .modifier(FlightMask(geo: geo))
     }
+}
+
+struct ListGeometry: Equatable {
+    let content: CGFloat
+    let container: CGFloat
+    let offset: CGFloat
+    var gap: CGFloat { content - (offset + container) }
 }
 
 extension Store {
@@ -534,31 +686,107 @@ struct Hello: View {
     }
 }
 
+private let bubbleR: CGFloat = 18
+private let bubbleTail: CGFloat = 6
+
+/// One message. Received bubbles spring in (blur + rise + scale). A bubble
+/// Hayden just sent starts exactly where the composer field is, its text
+/// still ink on the field's white, then lifts into place while it inks over
+/// to black: the text leaves the composer and becomes the bubble.
 struct BubbleRow: View {
     let m: DisplayMessage
     let box: SpringBox?
     let maxWidth: CGFloat
+    var geo: ChatGeometry? = nil
+    @State private var row: CGRect = .zero
+    @State private var size: CGSize = .zero
 
     var body: some View {
         let p = box?.value ?? 1
-        let fly = m.fly
-        let shape = UnevenRoundedRectangle(cornerRadii: .init(topLeading: 18, bottomLeading: m.mine ? 18 : 6,
-                                                              bottomTrailing: m.mine ? 6 : 18, topTrailing: 18),
+        let flying = m.fly && box != nil && p != 1
+        let measured = row != .zero && size != .zero && geo?.composer ?? .zero != .zero
+        let lift = flying && measured ? flight() : nil
+        let shape = UnevenRoundedRectangle(cornerRadii: .init(topLeading: bubbleR, bottomLeading: m.mine ? bubbleR : bubbleTail,
+                                                              bottomTrailing: m.mine ? bubbleTail : bubbleR, topTrailing: bubbleR),
                                            style: .continuous)
         VStack(alignment: m.mine ? .trailing : .leading, spacing: 4) {
-            MarkdownText(m.body, dark: m.mine)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .background(shape.fill(m.mine ? Color.ink : Color.bubbleGrey))
+            BubbleBody(m: m, ink: flying ? smoothstep(0.08, 0.6, p) : 1, shape: shape)
+                .onGeometryChange(for: CGSize.self, of: { $0.size }) { s in if m.fly { size = s } }
             MetaLine(ts: m.ts, receipt: m.receipt)
                 .padding(.horizontal, 6)
+                .opacity(flying ? smoothstep(0.55, 1, p) : 1)
         }
         .frame(maxWidth: maxWidth, alignment: m.mine ? .trailing : .leading)
         .frame(maxWidth: .infinity, alignment: m.mine ? .trailing : .leading)
-        .scaleEffect((fly ? 0.94 : 0.98) + (fly ? 0.06 : 0.02) * p, anchor: m.mine ? .bottomTrailing : .bottomLeading)
-        .offset(y: (fly ? 64 : 10) * (1 - p))
-        .blur(radius: (fly ? 8 : 10) * (1 - clamp01(p)))
-        .opacity(clamp01(p * 1.3))
+        .modifier(BubbleEntrance(p: p, fly: m.fly, mine: m.mine, lift: lift, hidden: flying && !measured))
+        .background {
+            if flying {
+                Color.clear.onGeometryChange(for: CGRect.self, of: { $0.frame(in: .named("pane")) }) { row = $0 }
+            }
+        }
+    }
+
+    /// Offset from the bubble's resting place to the composer field.
+    /// Nil when the resting place is off screen (scrolled up): then it rises in plainly.
+    private func flight() -> CGSize? {
+        guard let c = geo?.composer else { return nil }
+        let restX = m.mine ? row.maxX - size.width : row.minX
+        let dy = c.minY - row.minY
+        guard dy > 0, dy < 640 else { return nil }
+        return CGSize(width: c.minX - restX, height: dy)
+    }
+}
+
+struct BubbleBody: View {
+    let m: DisplayMessage
+    /// 0 = still the composer's ink-on-white text, 1 = the settled bubble.
+    let ink: Double
+    let shape: UnevenRoundedRectangle
+
+    var body: some View {
+        let fill: Color = m.mine ? .ink : .bubbleGrey
+        ZStack(alignment: .topLeading) {
+            if ink < 1 {
+                MarkdownText(m.body, dark: false).opacity(1 - ink)
+            }
+            MarkdownText(m.body, dark: m.mine).opacity(ink)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background {
+            ZStack {
+                if ink < 1 { shape.fill(Color.white) }
+                shape.fill(fill).opacity(ink)
+            }
+        }
+    }
+}
+
+/// One modifier chain for every case (no branches, so a bubble keeps its
+/// identity as it goes from waiting-for-geometry to flying to settled).
+struct BubbleEntrance: ViewModifier {
+    let p: Double
+    let fly: Bool
+    let mine: Bool
+    /// A flight path out of the composer, when one is known.
+    let lift: CGSize?
+    /// A sent bubble waiting one layout pass for its flight path.
+    let hidden: Bool
+
+    func body(content: Content) -> some View {
+        let k = 1 - p
+        let anchor: UnitPoint = mine ? .bottomTrailing : .bottomLeading
+        let scale: Double = if lift != nil { 1 - 0.03 * sin(.pi * clamp01(p)) }
+            else if fly { 0.94 + 0.06 * p } else { 0.98 + 0.02 * p }
+        let dx = (lift?.width ?? 0) * k
+        let dy = lift.map { $0.height * k } ?? (fly ? 22 : 10) * k
+        let blur = lift != nil ? 0 : (fly ? 8 : 10) * clamp01(k)
+        let alpha = hidden ? 0 : (lift != nil ? 1 : clamp01(p * 1.3))
+        content
+            .scaleEffect(scale, anchor: anchor)
+            .offset(x: dx, y: dy)
+            .blur(radius: blur)
+            .opacity(alpha)
     }
 }
 
@@ -572,25 +800,39 @@ struct MetaLine: View {
                 Text(when(ts, now: ctx.date.timeIntervalSince1970))
                 if let receipt {
                     Text("·")
-                    Group {
-                        switch receipt {
-                        case .sending:
-                            Text("sending")
-                        case .delivered:
-                            Text("delivered")
-                        case .seen:
-                            Text("seen 👀").foregroundStyle(Color.tapBlue)
-                        }
-                    }
-                    .transition(.blurReplace)
-                    .id(receipt)
+                    ReceiptLabel(receipt: receipt)
                 }
             }
             .font(.system(size: 10.5))
             .tracking(0.2)
             .foregroundStyle(Color.faint)
-            .animation(.smooth(duration: 0.45), value: receipt)
         }
+    }
+}
+
+/// sending -> delivered -> seen 👀, each word blurring into the next; the
+/// eyes pop in with a little spring when GitHub shows the reaction.
+struct ReceiptLabel: View {
+    let receipt: DisplayMessage.Receipt
+
+    var body: some View {
+        Group {
+            switch receipt {
+            case .sending:
+                Text("sending")
+            case .delivered:
+                Text("delivered")
+            case .seen:
+                HStack(spacing: 3) {
+                    Text("seen")
+                    Text("👀").transition(.scale(scale: 0.2).combined(with: .opacity))
+                }
+                .foregroundStyle(Color.tapBlue)
+            }
+        }
+        .transition(.blurReplace)
+        .id(receipt)
+        .animation(.spring(response: 0.42, dampingFraction: 0.62), value: receipt)
     }
 }
 
@@ -600,7 +842,8 @@ struct TypingBubble: View {
             .frame(width: 26, height: 12)
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
-            .background(UnevenRoundedRectangle(cornerRadii: .init(topLeading: 18, bottomLeading: 6, bottomTrailing: 18, topTrailing: 18),
+            .background(UnevenRoundedRectangle(cornerRadii: .init(topLeading: bubbleR, bottomLeading: bubbleTail,
+                                                                  bottomTrailing: bubbleR, topTrailing: bubbleR),
                                                style: .continuous).fill(Color.bubbleGrey))
     }
 }
@@ -611,35 +854,24 @@ struct ComposerBar: View {
     let store: Store
     let placeholder: String
     let enabled: Bool
+    var focusToken = 0
+    let geo: ChatGeometry
     @State private var text = ""
-    @State private var height = SpringBox(44, SpringPreset(stiffness: 320, damping: 24))
+    @State private var height = SpringBox(44, .chatGrow)
     @State private var focused = false
 
     var body: some View {
         let canSend = enabled && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         HStack(alignment: .bottom, spacing: 10) {
             GrowingTextView(text: $text, placeholder: placeholder, fontSize: 13.5, returnSends: true,
+                            focusToken: focusToken,
                             onSend: send,
-                            onHeight: { h in height.set(min(160, max(44, h + 20)), SpringPreset(stiffness: 320, damping: 24)) },
-                            onFocus: { f in withAnimation(.easeOut(duration: 0.2)) { focused = f } })
+                            onHeight: { h in height.set(min(160, max(44, h + 20)), .chatGrow) },
+                            onFocus: { f in withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { focused = f } })
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
-                .frame(height: height.value)
-                .background(RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(focused ? Color.white : Color.black.opacity(0.025)))
-                .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .stroke(focused ? Color.black.opacity(0.18) : Color.hairline, lineWidth: 1))
-            Button(action: send) {
-                Image(systemName: "arrow.up")
-                    .font(.system(size: 16, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 44, height: 44)
-                    .background(Circle().fill(Color.ink))
-            }
-            .buttonStyle(PressStyle(scale: 0.9))
-            .disabled(!canSend)
-            .opacity(canSend ? 1 : 0.25)
-            .animation(.easeOut(duration: 0.2), value: canSend)
+                .modifier(ComposerField(height: height, focused: focused, geo: geo))
+            SendButton(ready: canSend, action: send)
         }
         .padding(EdgeInsets(top: 12, leading: 14, bottom: 14, trailing: 14))
     }
@@ -652,5 +884,45 @@ struct ComposerBar: View {
         Task { @MainActor in
             if !(await store.send(body, to: key)) { text = body }
         }
+    }
+}
+
+/// The field's springing height lives here, so a growing composer re-renders
+/// only its own frame (not the text view, not the bar).
+struct ComposerField: ViewModifier {
+    let height: SpringBox
+    let focused: Bool
+    let geo: ChatGeometry
+
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 16, style: .continuous)
+        content
+            .frame(height: height.value)
+            .background(shape.fill(focused ? Color.white : Color.black.opacity(0.025)))
+            .overlay(shape.stroke(focused ? Color.black.opacity(0.18) : Color.hairline, lineWidth: 1))
+            .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .named("pane")) }) { geo.composer = $0 }
+    }
+}
+
+struct SendButton: View {
+    let ready: Bool
+    let action: () -> Void
+    @State private var s = SpringBox(0, .pop)
+
+    var body: some View {
+        let v = s.value
+        Button(action: action) {
+            Image(systemName: "arrow.up")
+                .font(.system(size: 16, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 44, height: 44)
+                .background(Circle().fill(Color.ink))
+        }
+        .buttonStyle(ChatPress(scale: 0.9))
+        .disabled(!ready)
+        .scaleEffect(0.86 + 0.14 * v)
+        .opacity(0.25 + 0.75 * clamp01(v))
+        .onAppear { s.snap(ready ? 1 : 0) }
+        .onChange(of: ready) { _, r in s.set(r ? 1 : 0, r ? .pop : .snappy) }
     }
 }
