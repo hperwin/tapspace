@@ -83,7 +83,13 @@ Package.swift: core lane (only if a lane asks; no new dependencies).
 
 ```swift
 @MainActor enum Harness {
-    static func run(flags: Flags, app: AppDelegate)
+    static func run(flags: Flags, app: AppDelegate)   // called once at the end of applicationDidFinishLaunching
+    static func wait(_ timeout: Double, every ms: Int = 50, _ cond: () -> Bool) async -> Bool
+    static func log(_ s: String)                       // print + flush (stdout lines start SNAPSHOT / DEMO)
 }
 ```
-Called once at the end of `applicationDidFinishLaunching`, after window, pill and `store.start()`. Currently a stub. The harness lane implements `--snapshot <dir>` (render scenes at 2x with `cacheDisplay`, then exit) and `--demo` (scripted ~10 s loop) here, reaching state through `app.store`, `app.visual`, `app.pill`, `app.window`, `Motion.main/pill.settleAll()`. `--fps` logging already lives in App.swift (`startFPSLog`).
+- `--snapshot <dir>` -> `HarnessSnapshot` (HarnessSnapshot.swift): waits for cards, media and change boxes, then poses and renders `01-visual, 02-visual-notes, 03-lightbox, 04-chat-agent, 05-chat-agent-thinking, 06-chat-tap, 07-pill-collapsed, 08-pill-bulging, 09-pill-expanded` at exactly 2x with `cacheDisplay`, writes `scenes.json` (size, ink, note per scene, problems), exits 0 (all good) or 1. `HarnessSnapshot.render(_ view:, scale:) -> CGImage?` is reusable.
+- `--demo` -> `HarnessDemo.shared.start(app:fps:)` (HarnessDemo.swift): a 10 s loop forever, logging `DEMO loop=N t=T step`.
+- `--fps` logging itself lives in App.swift (`startFPSLog`, shell); `Scripts/fps.sh` parses it into a summary.
+- What the harness calls in other lanes (keep these): `Store.tab/thread/threadKeys/agents/chats/taps/demoBubble/ticketsLoaded/agentsLoaded/visualBadge`, `VisualModel.cards/mediaReady/toggleNotes/openLightbox/closeLightbox/lightbox`, `CardModel.ticket/image/highlights/notesOpen/notesText`, `Lightbox.image`, `PillController.panel/liquid/simMouse/wake(onlyIfNear:)/pose(_:)/releasePose()` + `PillController.Pose` (PillHarness.swift, pill), `PillLiquid.anchorLeft/top/shapeRect/debugState/pillH`, `Motion.main/pill.settleAll()`, `AppDelegate.window/store/visual/pill`.
+- Scripts (mac/Scripts): `install.sh` (release, bundle, icon, ad-hoc sign, /Applications, open), `make-icon.swift`, `seed.sh <port> [dir]` / `seed.sh --stop <dir>`, `fps.sh <url> [secs] [bin]`, `verify.sh [port] [out] [secs]`. Resources: `Info.plist` (com.hayden.tapspace), `TapSpace.icns`.

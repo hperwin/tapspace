@@ -196,6 +196,40 @@ The server binds to `127.0.0.1` only and has no auth. It is built for one human 
 
 Python 3.8+. No packages. Any modern browser.
 
+## Mac app
+
+`mac/` is a native macOS app for the same server: the Visual and Chat tabs, plus a liquid pill in the menu bar (just right of the notch) that counts what is waiting on you and spreads into a list when you hover it. SwiftPM only, macOS 26.
+
+Install (release build, bundled as `TapSpace.app` with its icon, ad-hoc signed, copied to `/Applications`, then opened):
+
+```bash
+mac/Scripts/install.sh                                      # opens on http://127.0.0.1:4747
+NO_OPEN=1 mac/Scripts/install.sh                            # install only
+TAPSPACE_URL=http://127.0.0.1:4748 mac/Scripts/install.sh   # open it on another server
+```
+
+The app reads `TAPSPACE_URL` (default `http://127.0.0.1:4747`) and starts the server with `tap.py up` if it is down.
+
+Flags, for verification:
+
+| Flag | What it does |
+|---|---|
+| `--snapshot <dir>` | Renders every scene from the real views to 2x PNGs (Visual, a card in notes mode, lightbox, an agent thread, a thinking agent, a tap thread, the pill collapsed, bulging and expanded), writes `scenes.json`, and exits. |
+| `--demo` | A scripted 10 s loop (tabs, notes, rail selection, a bubble flying in, the pill spreading and retracting) that repeats until you quit. Never sends anything. |
+| `--fps` | Logs display-link frames per second each second, and whether each surface is moving, still or paused. |
+| `--tab visual\|chat`, `--thread agent:NAME\|owner/repo#n` | Open on a tab or thread. |
+
+Never test decisions or chat against the live server. The scripts work on a scratch one:
+
+```bash
+mac/Scripts/seed.sh 4748                    # scratch server on :4748 seeded with real screenshots and two agents
+mac/Scripts/fps.sh http://127.0.0.1:4748 30 # --demo --fps for 30 s, then a frame-rate summary and crash check
+mac/Scripts/verify.sh 4748                  # all of it: seed, build, snapshots, fps, stop the server
+mac/Scripts/seed.sh --stop <data dir>       # stop a scratch server seed.sh started
+```
+
+The icon is drawn in code by `mac/Scripts/make-icon.swift` (install.sh rebuilds `TapSpace.icns` when it changes).
+
 ## License
 
 MIT. `space/anime.esm.js` is anime.js v4.1.4 by Julian Garnier, also MIT, vendored unmodified.
