@@ -17,6 +17,8 @@ struct ChatView: View {
         .padding(.horizontal, 40)
         .frame(maxWidth: 1240)
         .frame(maxWidth: .infinity)
+        .overlay { ChatLightboxView(lb: ChatMedia.shared.lightbox) }
+        .coordinateSpace(.named("chat"))
     }
 }
 
@@ -58,13 +60,16 @@ struct RailView: View {
             .padding(.top, 2)
             .padding(.bottom, 20)
             .coordinateSpace(.named("rail"))
-            .background(alignment: .topLeading) { LiquidCanvas(track: track) }
+            .background(alignment: .topLeading) { ChatRailLiquid(track: track) }
             // Agents re-sort by state (thinking first): rows glide, the body follows.
             .animation(.spring(response: 0.5, dampingFraction: 0.82), value: store.agents.map(\.key))
         }
         .scrollIndicators(.never)
         .onChange(of: frames) { place(animated: true) }
-        .onChange(of: store.thread) { place(animated: true) }
+        // The pane builds the new thread in the update that changes it (layout
+        // of every bubble, one long main-thread frame). The liquid starts on the
+        // next display frame, so its first spring frame is not that frame.
+        .onChange(of: store.thread) { ChatNextFrame.run { place(animated: true) } }
         .onAppear { place(animated: false) }
     }
 
@@ -254,6 +259,8 @@ struct DisplayMessage: Identifiable, Equatable {
     let body: String
     let ts: Double
     var receipt: Receipt?
+    /// Served paths (/chat-media/...) or, before upload, "local:<id>".
+    var images: [String] = []
     var fly = false
 }
 
@@ -267,17 +274,6 @@ final class ChatGeometry {
     var flights = 0
 }
 
-/// The list normally clips at its own frame; while a sent bubble is lifting
-/// out of the composer it may draw below that edge too.
-struct FlightMask: ViewModifier {
-    let geo: ChatGeometry
-
-    func body(content: Content) -> some View {
-        content.mask(alignment: .top) {
-            Rectangle().padding(.bottom, geo.flights > 0 ? -420 : 0)
-        }
-    }
-}
 
 /// Bubble entrances: a new message springs in (blur + offset + scale); a
 /// message Hayden just sent flies up out of the composer.
@@ -312,7 +308,11 @@ final class BubbleAnimator {
     func box(_ k: String) -> SpringBox? { boxes[k] }
 }
 
-/// The thread swap: header, goals and messages blur up into place.
+/// The thread swap: header, goals and messages rise into place out of a
+/// white veil that clears. Neither a blur nor a group opacity: both render
+/// the whole message list into a fresh offscreen surface on every frame of
+/// the swap, the same frames the rail's liquid starts moving. The veil is
+/// one flat layer over the pane's own white, and the rise is a transform.
 struct SwapIn: ViewModifier {
     let box: SpringBox
     var rise: CGFloat = 6
@@ -320,9 +320,10 @@ struct SwapIn: ViewModifier {
     func body(content: Content) -> some View {
         let p = box.value
         content
-            .opacity(clamp01(p))
-            .blur(radius: 8 * (1 - clamp01(p)))
             .offset(y: rise * (1 - p))
+            .overlay {
+                if p < 0.999 { Color.white.opacity(1 - clamp01(p)).allowsHitTesting(false) }
+            }
     }
 }
 
@@ -332,6 +333,8 @@ struct PaneView: View {
     @State private var geo = ChatGeometry()
     @State private var swap = SpringBox(1, .gentle)
     @State private var focusToken = 0
+    @State private var draft = ChatDraft()
+    @State private var dropTarget = false
 
     var body: some View {
         let key = store.thread
@@ -340,28 +343,40 @@ struct PaneView: View {
         let shape = RoundedRectangle(cornerRadius: 22, style: .continuous)
         VStack(spacing: 0) {
             if agent != nil || tap != nil {
-                PaneHeader(agent: agent, tap: tap)
-                    .modifier(SwapIn(box: swap, rise: 4))
-                Rectangle().fill(Color.hairline).frame(height: 1)
-                if let tap, !tap.goals.isEmpty {
-                    GoalsStrip(goals: tap.goals)
+                // Opaque and above the list: while a sent bubble is in the air
+                // the list stops clipping, and anything scrolled past its top
+                // edge slides under the header instead of over it.
+                VStack(spacing: 0) {
+                    PaneHeader(agent: agent, tap: tap)
                         .modifier(SwapIn(box: swap, rise: 4))
                     Rectangle().fill(Color.hairline).frame(height: 1)
+                    if let tap, !tap.goals.isEmpty {
+                        GoalsStrip(goals: tap.goals)
+                            .modifier(SwapIn(box: swap, rise: 4))
+                        Rectangle().fill(Color.hairline).frame(height: 1)
+                    }
                 }
+                .background(Color.white)
+                .zIndex(2)
             }
             MessageList(store: store, agent: agent, tap: tap, animator: animator, geo: geo)
                 .modifier(SwapIn(box: swap, rise: 10))
                 .zIndex(1)
             Rectangle().fill(Color.hairline).frame(height: 1)
             ComposerBar(store: store, placeholder: placeholder(agent, tap),
-                        enabled: agent != nil || tap != nil, focusToken: focusToken, geo: geo)
+                        enabled: agent != nil || tap != nil, canAttach: agent != nil,
+                        focusToken: focusToken + draft.focusBump, geo: geo, draft: draft)
         }
         .coordinateSpace(.named("pane"))
+        .overlay { DropOverlay(active: dropTarget && agent != nil) }
         .clipShape(shape)
         .background(shape.fill(.white).softShadow())
+        .onDrop(of: [.fileURL, .image], isTargeted: $dropTarget) { draft.drop($0, store: store) }
+        .onAppear { ChatHarness.startIfAsked(store: store) }
         .onChange(of: store.thread) {
+            // Veiled in the frame that builds the thread; it clears from the next one.
             swap.snap(0)
-            swap.set(1)
+            ChatNextFrame.run { swap.set(1) }
             focusToken += 1
         }
     }
@@ -562,8 +577,18 @@ struct MessageList: View {
         let key = store.thread
         var out: [DisplayMessage] = []
         if let agent {
+            let media = ChatMedia.shared.images
+            var present = Set<String>()
             for m in store.chats[agent.name] ?? [] {
-                out.append(DisplayMessage(id: "\(key)#\(m.id)", mine: m.role == "you", body: m.body, ts: m.ts))
+                let id = "\(key)#\(m.id)"
+                present.insert(id)
+                out.append(DisplayMessage(id: id, mine: m.role == "you", body: m.body, ts: m.ts, images: media[id] ?? []))
+            }
+            // Sends with images, until their server row is in the thread.
+            let outbox = ChatOutbox.shared
+            for o in outbox.items where o.key == key && !(outbox.serverKey(o.id).map(present.contains) ?? false) {
+                out.append(DisplayMessage(id: o.id, mine: true, body: o.body, ts: o.ts,
+                                          images: o.images.map(\.localPath), fly: true))
             }
         } else if let tap {
             for (i, m) in tap.messages.enumerated() {
@@ -585,9 +610,19 @@ struct MessageList: View {
         // Thinking means a message of Hayden's is unanswered; once the reply is
         // in the thread the dots go, without waiting for the next agents poll.
         let typing = agent?.state == "thinking" && msgs.last?.mine == true
-        let keys = msgs.map { store.confirmed[$0.id] ?? $0.id }
-        let _ = animator.sync(thread: store.thread, keys: keys, fly: Set(msgs.filter(\.fly).map(\.id)))
+        // A server row that confirmed an optimistic bubble keeps that bubble's
+        // key (one row, one identity, its flight state intact) and still flies:
+        // on a local server the row lands within the first frames of the flight.
+        let outbox = ChatOutbox.shared.confirmed
+        let keys = msgs.map { store.confirmed[$0.id] ?? outbox[$0.id] ?? $0.id }
+        let rows = zip(msgs, keys).map { m, k in
+            var m = m
+            if k != m.id { m.fly = true }
+            return (m, k)
+        }
+        let _ = animator.sync(thread: store.thread, keys: keys, fly: Set(rows.filter(\.0.fly).map(\.1)))
         let sig = keys.joined(separator: ",") + "|\(typing)|" + msgs.map { $0.receipt.map { "\($0)" } ?? "" }.joined()
+            + "|" + msgs.map { "\($0.images.count)" }.joined()
         GeometryReader { box in
             let maxW = min(620, box.size.width * 0.82)
             ScrollView(.vertical) {
@@ -596,25 +631,37 @@ struct MessageList: View {
                         Hello(agent: agent, tap: tap)
                             .frame(minHeight: box.size.height - 60)
                     }
-                    ForEach(Array(zip(msgs, keys)), id: \.0.id) { m, k in
+                    ForEach(rows, id: \.1) { m, k in
                         BubbleRow(m: m, box: animator.box(k), maxWidth: maxW, geo: geo)
                     }
-                    if typing {
-                        TypingBubble()
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .transition(.asymmetric(
-                                insertion: .scale(scale: 0.4, anchor: .bottomLeading).combined(with: .opacity),
-                                removal: .scale(scale: 0.8, anchor: .bottomLeading).combined(with: .opacity)))
+                    // The dots' spring is scoped to the dots: on the list it would also
+                    // fade in the bubble Hayden just sent (the same update flips typing
+                    // on), washing out its flight out of the composer.
+                    ZStack(alignment: .leading) {
+                        if typing {
+                            TypingBubble()
+                                .transition(.asymmetric(
+                                    insertion: .scale(scale: 0.4, anchor: .bottomLeading).combined(with: .opacity),
+                                    removal: .scale(scale: 0.8, anchor: .bottomLeading).combined(with: .opacity)))
+                        }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .animation(.spring(response: 0.42, dampingFraction: 0.66), value: typing)
                 }
                 .padding(.horizontal, 22)
                 .padding(.top, 22)
                 .padding(.bottom, 12)
-                .animation(.spring(response: 0.42, dampingFraction: 0.66), value: typing)
             }
-            .scrollClipDisabled()
+            // Clipped by the scroll view itself (a plain clip, no offscreen
+            // pass), except while a sent bubble lifts out of the composer below.
+            // A mask here re-rendered the whole list offscreen every frame.
+            .scrollClipDisabled(geo.flights > 0)
             .scrollPosition($position)
             .defaultScrollAnchor(.bottom)
+            // A fresh scroll view per thread opens at the bottom in the frame
+            // that builds it; scrolling the old one there afterwards cost a
+            // second full layout of the thread a frame later, mid-glide.
+            .id(store.thread)
             // Stay pinned to the end while content or the viewport changes size
             // (markdown settling, goals appearing, the composer growing), when we
             // were at the end before the change or a thread just opened.
@@ -630,14 +677,18 @@ struct MessageList: View {
                 lastThread = store.thread
                 if switched { pinUntil = Date().addingTimeInterval(0.8) }
                 if store.isViewingCandidate { store.markRead(store.thread) }
-                guard switched || nearBottom else { return }
+                if let agent {
+                    ChatOutbox.shared.prune(Set(msgs.map(\.id)))
+                    let name = agent.name, ids = (store.chats[name] ?? []).map(\.id)
+                    Task { await ChatMedia.shared.index(agent: name, ids: ids) }
+                }
+                // A switched thread is a fresh scroll view already at its bottom.
+                guard !switched, nearBottom else { return }
                 DispatchQueue.main.async {
-                    if switched { position.scrollTo(edge: .bottom) }
-                    else { withAnimation(.spring(response: 0.45, dampingFraction: 0.9)) { position.scrollTo(edge: .bottom) } }
+                    withAnimation(.spring(response: 0.45, dampingFraction: 0.9)) { position.scrollTo(edge: .bottom) }
                 }
             }
         }
-        .modifier(FlightMask(geo: geo))
     }
 }
 
@@ -710,8 +761,15 @@ struct BubbleRow: View {
                                                               bottomTrailing: m.mine ? bubbleTail : bubbleR, topTrailing: bubbleR),
                                            style: .continuous)
         VStack(alignment: m.mine ? .trailing : .leading, spacing: 4) {
-            BubbleBody(m: m, ink: flying ? smoothstep(0.08, 0.6, p) : 1, shape: shape)
-                .onGeometryChange(for: CGSize.self, of: { $0.size }) { s in if m.fly { size = s } }
+            VStack(alignment: m.mine ? .trailing : .leading, spacing: 6) {
+                if !m.images.isEmpty {
+                    ChatImageGrid(paths: m.images, mine: m.mine, maxWidth: maxWidth)
+                }
+                if !m.body.isEmpty || m.images.isEmpty {
+                    BubbleBody(m: m, ink: flying ? smoothstep(0.08, 0.6, p) : 1, shape: shape)
+                }
+            }
+            .onGeometryChange(for: CGSize.self, of: { $0.size }) { s in if m.fly { size = s } }
             MetaLine(ts: m.ts, receipt: m.receipt)
                 .padding(.horizontal, 6)
                 .opacity(flying ? smoothstep(0.55, 1, p) : 1)
@@ -726,13 +784,15 @@ struct BubbleRow: View {
         }
     }
 
-    /// Offset from the bubble's resting place to the composer field.
+    /// Offset from the bubble's resting place to the composer field: the
+    /// text bubble's bottom starts on the field's bottom, so any images ride
+    /// up from just above it, where the tray held them.
     /// Nil when the resting place is off screen (scrolled up): then it rises in plainly.
     private func flight() -> CGSize? {
         guard let c = geo?.composer else { return nil }
         let restX = m.mine ? row.maxX - size.width : row.minX
-        let dy = c.minY - row.minY
-        guard dy > 0, dy < 640 else { return nil }
+        let dy = c.maxY - (row.minY + size.height)
+        guard dy > 0, dy < 640 + size.height else { return nil }
         return CGSize(width: c.minX - restX, height: dy)
     }
 }
@@ -854,35 +914,67 @@ struct ComposerBar: View {
     let store: Store
     let placeholder: String
     let enabled: Bool
+    /// Agent threads take images; taps take text.
+    var canAttach = false
     var focusToken = 0
     let geo: ChatGeometry
+    let draft: ChatDraft
     @State private var text = ""
     @State private var height = SpringBox(44, .chatGrow)
     @State private var focused = false
 
     var body: some View {
-        let canSend = enabled && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        HStack(alignment: .bottom, spacing: 10) {
-            GrowingTextView(text: $text, placeholder: placeholder, fontSize: 13.5, returnSends: true,
-                            focusToken: focusToken,
-                            onSend: send,
-                            onHeight: { h in height.set(min(160, max(44, h + 20)), .chatGrow) },
-                            onFocus: { f in withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { focused = f } })
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .modifier(ComposerField(height: height, focused: focused, geo: geo))
-            SendButton(ready: canSend, action: send)
+        let hasText = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let canSend = enabled && (hasText || (canAttach && !draft.attachments.isEmpty))
+        VStack(spacing: 0) {
+            ChatTray(draft: draft, visible: canAttach)
+            HStack(alignment: .bottom, spacing: 10) {
+                AttachButton(shown: canAttach && enabled) { draft.pick(store: store) }
+                GrowingTextView(text: $text, placeholder: placeholder, fontSize: 13.5, returnSends: true,
+                                focusToken: focusToken,
+                                onSend: send,
+                                onHeight: { h in height.set(min(160, max(44, h + 20)), .chatGrow) },
+                                onFocus: { f in withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { focused = f } },
+                                onPaste: { pb in
+                                    guard let sources = ChatImageSource.from(pb) else { return false }
+                                    draft.add(sources, store: store)
+                                    return true
+                                })
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .modifier(ComposerField(height: height, focused: focused, geo: geo))
+                SendButton(ready: canSend, action: send)
+            }
+            .padding(EdgeInsets(top: 12, leading: 14, bottom: 14, trailing: 14))
         }
-        .padding(EdgeInsets(top: 12, leading: 14, bottom: 14, trailing: 14))
+        // The drive's hooks are refreshed whenever the thread or its state changes, so `enabled` and `canAttach` are current.
+        .onChange(of: "\(store.thread)|\(enabled)|\(canAttach)", initial: true) {
+            guard ChatHarness.enabled else { return }
+            ChatHarness.draft = draft
+            ChatHarness.compose = { text = $0 }
+            ChatHarness.send = send
+        }
     }
 
     private func send() {
         let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard enabled, !body.isEmpty else { return }
         let key = store.thread
+        let withImages = canAttach && key.hasPrefix("agent:") && !draft.attachments.isEmpty
+        if ChatHarness.enabled { Harness.log("CHATDRIVE send enabled=\(enabled) canAttach=\(canAttach) text=\(body.count) images=\(draft.attachments.count)") }
+        guard enabled, !body.isEmpty || withImages else { return }
         text = ""
+        guard withImages else {
+            Task { @MainActor in
+                if !(await store.send(body, to: key)) { text = body }
+            }
+            return
+        }
+        let images = draft.take()
         Task { @MainActor in
-            if !(await store.send(body, to: key)) { text = body }
+            if !(await ChatOutbox.shared.send(body, images: images, to: key, store: store)) {
+                if text.isEmpty { text = body }
+                draft.restore(images)
+            }
         }
     }
 }

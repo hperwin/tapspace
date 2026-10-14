@@ -14,6 +14,9 @@ struct GrowingTextView: NSViewRepresentable {
     var onSend: () -> Void
     var onHeight: (CGFloat) -> Void = { _ in }
     var onFocus: (Bool) -> Void = { _ in }
+    /// Offered every paste first; returns true when it took the pasteboard
+    /// (chat: images and image files become attachments instead of text).
+    var onPaste: ((NSPasteboard) -> Bool)? = nil
 
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: GrowingTextView
@@ -108,6 +111,21 @@ struct GrowingTextView: NSViewRepresentable {
                 }
             }
             super.keyDown(with: event)
+        }
+
+        override func paste(_ sender: Any?) {
+            if let take = coordinator?.parent.onPaste, take(NSPasteboard.general) { return }
+            super.paste(sender)
+        }
+
+        /// A plain-text view greys out Paste when the clipboard holds only an
+        /// image; with a paste handler the image is still pasteable.
+        override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+            if item.action == #selector(paste(_:)), coordinator?.parent.onPaste != nil,
+               ChatImageSource.from(NSPasteboard.general) != nil {
+                return isEditable
+            }
+            return super.validateUserInterfaceItem(item)
         }
 
         override func becomeFirstResponder() -> Bool {
