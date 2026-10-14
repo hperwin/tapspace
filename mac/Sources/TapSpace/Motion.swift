@@ -72,6 +72,22 @@ struct SpringPreset: Equatable {
     static let spreadH = SpringPreset(stiffness: 190, damping: 23)
     static let retractW = SpringPreset(stiffness: 330, damping: 34)
     static let retractH = SpringPreset(stiffness: 420, damping: 38)
+    /// SnappWAU's bulge radius (the droplet's size, a touch softer than its position).
+    static let bulge = SpringPreset(stiffness: 340, damping: 21)
+    /// The Visual | Chat cross-fade.
+    static let tab = SpringPreset(stiffness: 220, damping: 26)
+
+    /// Damping ratio (1 = critical). Under 1 overshoots.
+    var dampingRatio: Double { damping / (2 * stiffness.squareRoot()) }
+
+    /// The same physics for the bits SwiftUI animates itself (opacity,
+    /// numericText, symbol swaps), so they move like the hand-driven springs.
+    var animation: Animation { .interpolatingSpring(mass: 1, stiffness: stiffness, damping: damping) }
+}
+
+extension Animation {
+    /// `withAnimation(.spring(.liquid)) { ... }`: a TapSpace spring preset as a SwiftUI animation.
+    static func spring(_ p: SpringPreset) -> Animation { p.animation }
 }
 
 /// Anything the display link advances. Returns true while it still needs frames.
@@ -89,7 +105,12 @@ struct SpringPreset: Equatable {
     let name: String
     private(set) var link: CADisplayLink?
     private var drivers: [ObjectIdentifier: MotionDriver] = [:]
+    /// Drivers (re)activated while a frame was being stepped: never dropped that frame.
+    private var armed: Set<ObjectIdentifier> = []
+    private var stepping = false
     private var lastTimestamp: CFTimeInterval?
+    /// Longest frame gap seen since the last read (the --fps logger can reset it).
+    var longestFrame: Double = 0
     /// Frames since the last read (the --fps logger resets it).
     var frames = 0
     /// Extra condition that keeps the link awake (the pill's hover timers).
@@ -111,9 +132,14 @@ struct SpringPreset: Equatable {
     }
 
     func activate(_ d: MotionDriver) {
-        drivers[ObjectIdentifier(d)] = d
+        let id = ObjectIdentifier(d)
+        drivers[id] = d
+        if stepping { armed.insert(id) }
         wake()
     }
+
+    /// Stop stepping a driver (it stays wherever it is).
+    func deactivate(_ d: MotionDriver) { drivers[ObjectIdentifier(d)] = nil }
 
     func wake() {
         guard let link, link.isPaused else { return }
@@ -122,18 +148,29 @@ struct SpringPreset: Equatable {
     }
 
     @objc private func tick(_ link: CADisplayLink) {
-        let now = link.timestamp
-        let dt = lastTimestamp.map { min(max(now - $0, 1.0 / 240), 1.0 / 30) } ?? (1.0 / 120)
+        // Step to the time this frame will be SHOWN, so motion tracks the glass.
+        let now = link.targetTimestamp
+        let raw = lastTimestamp.map { now - $0 } ?? (1.0 / 120)
+        let dt = min(max(raw, 1.0 / 240), 1.0 / 30)
+        if lastTimestamp != nil { longestFrame = max(longestFrame, raw) }
         lastTimestamp = now
         frames += 1
-        for (k, d) in drivers where !d.advance(dt) {
-            // A completion may have re-armed the same driver; keep it then.
-            if let again = d as? SpringBox, !again.atRest { continue }
-            drivers[k] = nil
-        }
+        step(dt)
         if drivers.isEmpty && !(keepAwake?() ?? false) {
             link.isPaused = true
         }
+    }
+
+    /// Advance every driver one frame; drop the ones that came to rest, unless
+    /// a completion re-armed them (or armed them for the first time) meanwhile.
+    private func step(_ dt: Double) {
+        stepping = true
+        armed.removeAll(keepingCapacity: true)
+        for (k, d) in drivers where !d.advance(dt) {
+            if armed.contains(k) { continue }
+            drivers[k] = nil
+        }
+        stepping = false
     }
 
     /// Snap everything to rest (snapshots). Completions may arm more drivers,
@@ -146,16 +183,14 @@ struct SpringPreset: Equatable {
             for (_, d) in batch { d.finish() }
             rounds += 1
         }
+        link?.isPaused = drivers.isEmpty && !(keepAwake?() ?? false)
     }
 
     /// Advance in fixed steps without a display link (offscreen verification).
     func run(seconds: Double, step: Double = 1.0 / 120) {
         var t = 0.0
-        while t < seconds {
-            for (k, d) in drivers where !d.advance(step) {
-                if let again = d as? SpringBox, !again.atRest { continue }
-                drivers[k] = nil
-            }
+        while t < seconds && !drivers.isEmpty {
+            self.step(step)
             t += step
         }
     }
@@ -173,10 +208,11 @@ final class SpringBox: MotionDriver {
     /// Called on every frame the value moves (layout followers).
     @ObservationIgnored var onStep: ((Double) -> Void)?
 
-    init(_ v: Double, _ p: SpringPreset = .smooth, motion: Motion = .main) {
+    /// `motion` nil means `Motion.main` (resolved here, on the main actor).
+    init(_ v: Double, _ p: SpringPreset = .smooth, motion: Motion? = nil) {
         value = v
         spring = Spring(v, p)
-        self.motion = motion
+        self.motion = motion ?? .main
     }
 
     var target: Double { pending ?? spring.target }
@@ -184,6 +220,11 @@ final class SpringBox: MotionDriver {
     var atRest: Bool { pending == nil && spring.atRest }
 
     func set(_ t: Double, _ p: SpringPreset? = nil, delay: Double = 0, then: (() -> Void)? = nil) {
+        // Already resting there: nothing to animate, so the link stays asleep.
+        if then == nil, delay == 0, atRest, spring.target == t {
+            if let p { spring.use(p) }
+            return
+        }
         if let p { spring.use(p) }
         completion = then
         if delay > 0 {
