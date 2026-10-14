@@ -199,7 +199,8 @@ final class PillLiquid {
 
     var top: CGFloat = 7
     var anchorLeft: CGFloat { Self.leftMargin }
-    private(set) var cardH: CGFloat = 180
+    /// The card's laid-out height (where the card is heading).
+    var cardH: CGFloat { ch.target }
     @ObservationIgnored var onNeedsFrames: (() -> Void)?
 
     func setPillContentWidth(_ w: CGFloat) {
@@ -208,9 +209,17 @@ final class PillLiquid {
         onNeedsFrames?()
     }
 
+    /// The card pours to a new height when rows come or go while it is open
+    /// (spreading down like the open, retracting firmly like the close). A
+    /// card nobody can see just takes the height.
     func setCardHeight(_ h: CGFloat) {
-        guard cardH != h else { return }
-        cardH = h
+        guard ch.target != h else { return }
+        if eh.target == 0 && eh.value < 0.02 {
+            ch.snap(to: h)
+        } else {
+            ch.use(h > ch.value ? .spreadH : .retractH)
+            ch.target = h
+        }
         onNeedsFrames?()
     }
 
@@ -219,6 +228,8 @@ final class PillLiquid {
     private(set) var pw = Spring(60, stiffness: 260, damping: 30)
     private(set) var ew = Spring(0, stiffness: 300, damping: 25)
     private(set) var eh = Spring(0, stiffness: 190, damping: 23)
+    // The card's own height, springing when its rows change.
+    private(set) var ch = Spring(180, .spreadH)
     // The bulge droplet: slightly underdamped so it wobbles like water.
     private(set) var bx = Spring(0, stiffness: 420, damping: 19)
     private(set) var by = Spring(0, stiffness: 420, damping: 19)
@@ -231,7 +242,7 @@ final class PillLiquid {
 
     var shapeRect: CGRect {
         let w = lerp(pw.value, Self.cardW, ew.value)
-        let h = lerp(Self.pillH, cardH, eh.value)
+        let h = lerp(Self.pillH, ch.value, eh.value)
         return CGRect(x: anchorLeft, y: top, width: max(w, Self.pillH), height: max(h, Self.pillH))
     }
 
@@ -240,7 +251,10 @@ final class PillLiquid {
         return min(r.height / 2, lerp(Self.pillH / 2, 20, clamp01(eh.value)))
     }
 
-    var cardRect: CGRect { CGRect(x: anchorLeft, y: top, width: Self.cardW, height: cardH) }
+    /// The card's footprint for hover: while it pours between heights, the
+    /// larger of where it is and where it is going, so a card shrinking
+    /// under the cursor never lets go of it mid-move.
+    var cardRect: CGRect { CGRect(x: anchorLeft, y: top, width: Self.cardW, height: max(ch.value, ch.target)) }
     var expansion: Double { clamp01(min(ew.value, eh.value)) }
 
     var headerOrigin: CGPoint {
@@ -259,11 +273,11 @@ final class PillLiquid {
     }
 
     var debugState: String {
-        String(format: "exp=%@ ew=%.3f eh=%.3f br=%.2f", expanded ? "1" : "0", ew.value, eh.value, br.value)
+        String(format: "exp=%@ ew=%.3f eh=%.3f ch=%.1f br=%.2f", expanded ? "1" : "0", ew.value, eh.value, ch.value, br.value)
     }
 
     var isStill: Bool {
-        [pw, ew, eh, bx, by, br].allSatisfy { $0.value == $0.target && $0.velocity == 0 }
+        [pw, ew, eh, ch, bx, by, br].allSatisfy { $0.value == $0.target && $0.velocity == 0 }
     }
 
     var isTiming: Bool { dwell > 0 || outside > 0 }
@@ -302,7 +316,7 @@ final class PillLiquid {
         updateBulgeTarget(mouse: mouse)
         let substeps = max(1, Int((dt * 480).rounded(.up)))
         let h = dt / Double(substeps)
-        for spring in [\PillLiquid.pw, \.ew, \.eh, \.bx, \.by, \.br] {
+        for spring in [\PillLiquid.pw, \.ew, \.eh, \.ch, \.bx, \.by, \.br] {
             advance(spring, h, substeps)
         }
     }
@@ -315,7 +329,7 @@ final class PillLiquid {
             // A droplet reaches from the surface; settle it where it would rest.
             br.snap(to: br.target); bx.snap(to: bx.target); by.snap(to: by.target)
         }
-        for key in [\PillLiquid.pw, \.ew, \.eh, \.bx, \.by, \.br] {
+        for key in [\PillLiquid.pw, \.ew, \.eh, \.ch, \.bx, \.by, \.br] {
             self[keyPath: key].snap(to: self[keyPath: key].target)
         }
         dwell = 0
