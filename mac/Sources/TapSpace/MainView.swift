@@ -158,7 +158,7 @@ final class PresenceModel {
     struct Entry: Identifiable {
         let id: String
         var row: ActivityRow
-        let box = SpringBox(0, .gentle)
+        let box: SpringBox
         var leaving = false
     }
     private(set) var entries: [Entry] = []
@@ -173,7 +173,7 @@ final class PresenceModel {
                     entries[i].box.set(1)
                 }
             } else {
-                let e = Entry(id: r.key, row: r)
+                let e = Entry(id: r.key, row: r, box: SpringBox(0, .gentle))
                 entries.append(e)
                 e.box.set(1)
             }

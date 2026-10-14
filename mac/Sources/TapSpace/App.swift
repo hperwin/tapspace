@@ -77,8 +77,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
 
         if flags.fps { startFPSLog() }
-        if flags.demo { Verify.demo(self) }
-        if let dir = flags.snapshot { Verify.snapshots(self, dir: dir) }
+        Harness.run(flags: flags, app: self)
         NSApp.activate()
     }
 
@@ -212,7 +211,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         Motion.pill.frames = 0
         let t = Timer(timeInterval: 1, repeats: true) { _ in
             MainActor.assumeIsolated {
-                func line(_ m: Motion) -> String {
+                @MainActor func line(_ m: Motion) -> String {
                     let state = m.isStill ? "still" : "moving"
                     return "\(m.name)=\(m.frames) \(state)\(m.isPaused ? " paused" : "") drivers=\(m.activeCount)"
                 }
