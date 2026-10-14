@@ -197,6 +197,15 @@ def _chat_images(p):
     if not isinstance(imgs, list) or len(imgs) > 10:
         raise ValueError("up to 10 images")
     for im in imgs:
+        served = str((im or {}).get("url") or "")
+        if served:
+            # already imported by /api/chat/import
+            f = (DATA / served.lstrip("/")).resolve()
+            if not served.startswith("/chat-media/") or not f.is_file() or \
+               not str(f).startswith(str(MEDIA.resolve()) + "/"):
+                raise ValueError("unknown image")
+            out.append(served)
+            continue
         ext = str((im or {}).get("ext", "")).lower().lstrip(".")
         if ext not in _CHAT_IMG_EXTS:
             raise ValueError(f"unsupported image type {ext!r}")
@@ -208,6 +217,26 @@ def _chat_images(p):
         (MEDIA / name).write_bytes(raw)
         out.append("/chat-media/" + name)
     return out
+
+
+def _chat_import(path):
+    """Copies a local image file (a Finder copy or a screenshot drag arrives in the
+    browser as a path, not as image data) into data/chat-media; returns its url."""
+    from urllib.parse import unquote, urlparse
+    path = path.strip()
+    if path.startswith("file://"):
+        path = unquote(urlparse(path).path)
+    f = pathlib.Path(path).expanduser().resolve()
+    ext = f.suffix.lower().lstrip(".")
+    home = str(pathlib.Path.home().resolve()) + "/"
+    if ext not in _CHAT_IMG_EXTS or not str(f).startswith(home) or not f.is_file():
+        raise ValueError("not an image file in your home folder")
+    if f.stat().st_size > 20_000_000:
+        raise ValueError("image too large")
+    MEDIA.mkdir(parents=True, exist_ok=True)
+    name = f"{uuid.uuid4().hex[:12]}.{'jpg' if ext == 'jpeg' else ext}"
+    shutil.copyfile(f, MEDIA / name)
+    return "/chat-media/" + name
 
 
 def _chat_add(agent, role, body, images=None):
@@ -612,13 +641,19 @@ class H(BaseHTTPRequestHandler):
             self._json({"error": "bad json"}, 400)
             return
 
-        if self.path in ("/api/chat", "/api/chat/reply", "/api/taps/say"):
+        if self.path in ("/api/chat", "/api/chat/reply", "/api/taps/say", "/api/chat/import"):
             # these speak for the reviewer: same-origin JSON only, so no other
             # page can drive them through the browser
             origin = self.headers.get("Origin")
             if (self.headers.get("content-type") or "").split(";")[0] != "application/json" or \
                (origin and origin not in (f"http://127.0.0.1:{PORT}", f"http://localhost:{PORT}")):
                 self._json({"error": "forbidden"}, 403)
+                return
+            if self.path == "/api/chat/import":
+                try:
+                    self._json({"ok": True, "url": _chat_import(str(p.get("path") or ""))})
+                except Exception as e:
+                    self._json({"error": str(e)}, 400)
                 return
             body = (p.get("body") or "").strip()
             chatting = self.path in ("/api/chat", "/api/chat/reply")
