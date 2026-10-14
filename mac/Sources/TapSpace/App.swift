@@ -275,12 +275,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             MainActor.assumeIsolated {
                 @MainActor func line(_ m: Motion) -> String {
                     let state = m.isStill ? "still" : "moving"
+                    // rate = frames over the time the link actually ran; worst = longest gap.
+                    let rate = m.runTime > 0.05 ? Int((Double(m.frames) / m.runTime).rounded()) : 0
+                    let worst = Int((m.longestFrame * 1000).rounded())
                     return "\(m.name)=\(m.frames) \(state)\(m.isPaused ? " paused" : "") drivers=\(m.activeCount)"
+                        + " run=\(String(format: "%.2f", m.runTime)) rate=\(rate) worst=\(worst)ms"
                 }
                 print("FPS \(line(Motion.main)) | \(line(Motion.pill)) | pill \(self.pill.liquid.debugState)")
                 fflush(stdout)
-                Motion.main.frames = 0
-                Motion.pill.frames = 0
+                for m in [Motion.main, Motion.pill] { m.frames = 0; m.runTime = 0; m.longestFrame = 0 }
             }
         }
         RunLoop.main.add(t, forMode: .common)

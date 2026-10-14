@@ -37,6 +37,9 @@ python3 - "$LOG" "$ALIVE" "$SECS" "$IDLE" <<'PY'
 import re, statistics, sys
 log, alive, secs, idle_log = sys.argv[1:5]
 pat = re.compile(r"(main|pill)=(\d+) (still|moving)( paused)?")
+# rate = frames over the time the link actually ran that second (pauses
+# excluded), so a second where motion ends early is not read as a slow one.
+run_pat = re.compile(r"(main|pill)=\d+ [^|]*?run=([\d.]+) rate=(\d+) worst=(\d+)ms")
 
 def parse(path):
     rows = []
@@ -58,6 +61,14 @@ def summary(name):
     if full:
         out += (f" | animating seconds {len(full)}: median {statistics.median(full):.0f} fps,"
                 f" p10 {full[max(0, len(full) // 10 - 1)]}, min {full[0]}")
+    runs = [(float(m.group(2)), int(m.group(3)), int(m.group(4)))
+            for l in open(log, errors="replace").read().splitlines() if l.startswith("FPS")
+            for m in run_pat.finditer(l) if m.group(1) == name]
+    busy = [r for r in runs if r[0] >= 0.3]
+    if busy:
+        rates = sorted(r[1] for r in busy)
+        out += (f" | while running ({len(busy)} s with >=0.3 s of link time): median {statistics.median(rates):.0f} fps,"
+                f" min {rates[0]}, worst frame gap {max(r[2] for r in busy)} ms")
     moving = [f for f, _, _ in fr if f > 0]
     if moving:
         out += f" | best second {max(moving)}"

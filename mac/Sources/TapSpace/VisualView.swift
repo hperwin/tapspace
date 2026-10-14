@@ -421,7 +421,7 @@ struct VisualView: View {
                 }
             }
             .frame(width: geo.size.width, height: model.contentHeight, alignment: .topLeading)
-            .padding(.top, 76)
+            .padding(.top, topInset(width: geo.size.width))
             .padding(.bottom, 72)
             Group {
                 if VisualModel.staticGrid {
@@ -437,6 +437,17 @@ struct VisualView: View {
             .onChange(of: geo.size, initial: true) { _, s in model.resize(s) }
         }
         .overlay { VisualEmpty(clear: model.cards.isEmpty && store.ticketsLoaded) }
+    }
+
+    /// The board starts under the top bar, and under the presence HUD's
+    /// activity rows when its top row reaches across to them.
+    private func topInset(width: CGFloat) -> CGFloat {
+        let chrome = ShellChrome.shared
+        let topRow = model.cards.filter { !$0.collapsing && $0.y.target < 1 }
+        let right = (topRow.map(\.x.target).max() ?? -.infinity) + model.cardWidth
+        let hudLeft = width - 26 - chrome.hudWidth
+        guard right > hudLeft - 16 else { return 76 }
+        return max(76, pixel(chrome.hudBottom + 16))
     }
 }
 

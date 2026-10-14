@@ -113,6 +113,9 @@ extension Animation {
     var longestFrame: Double = 0
     /// Frames since the last read (the --fps logger resets it).
     var frames = 0
+    /// Seconds the link actually ran (sum of frame gaps, pauses excluded)
+    /// since the last read: frames / runTime is the true rate while moving.
+    var runTime: Double = 0
     /// Extra condition that keeps the link awake (the pill's hover timers).
     var keepAwake: (() -> Bool)?
 
@@ -152,7 +155,10 @@ extension Animation {
         let now = link.targetTimestamp
         let raw = lastTimestamp.map { now - $0 } ?? (1.0 / 120)
         let dt = min(max(raw, 1.0 / 240), 1.0 / 30)
-        if lastTimestamp != nil { longestFrame = max(longestFrame, raw) }
+        if lastTimestamp != nil {
+            longestFrame = max(longestFrame, raw)
+            runTime += raw
+        }
         lastTimestamp = now
         frames += 1
         step(dt)

@@ -13,6 +13,11 @@ final class ShellChrome {
     /// Right edge of the zoom button, in content points.
     private(set) var lightsMaxX: CGFloat = 76
     private(set) var fullScreen = false
+    /// The presence HUD's footprint with its activity rows open (as on the
+    /// Visual tab), in content points: the board starts below it wherever its
+    /// top row would run under it.
+    var hudBottom: CGFloat = 0
+    var hudWidth: CGFloat = 0
 
     func measure(_ window: NSWindow) {
         guard let close = window.standardWindowButton(.closeButton),

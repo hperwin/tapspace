@@ -250,6 +250,7 @@ struct PresenceHUD: View {
     /// lives under them), leaving the session line.
     var fold: Double = 0
     @State private var model = PresenceModel()
+    var chrome = ShellChrome.shared
 
     var body: some View {
         let s = store.sessions
@@ -292,7 +293,18 @@ struct PresenceHUD: View {
             }
         }
         .allowsHitTesting(false)
+        .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { w in
+            if chrome.hudWidth != w { chrome.hudWidth = w }
+        }
+        .onChange(of: openBottom, initial: true) { _, b in chrome.hudBottom = b }
         .onChange(of: store.activity, initial: true) { _, rows in model.sync(rows) }
+    }
+
+    /// Bottom of the HUD with every row open (ignores the Chat fold, so the
+    /// board does not shift while the tabs trade places).
+    private var openBottom: CGFloat {
+        let rows = model.entries.reduce(0) { $0 + clamp01($1.box.value) }
+        return pixel(chrome.lightsMidY - Self.lineHeight / 2) + Self.lineHeight + 4 + Self.rowHeight * CGFloat(rows)
     }
 }
 
@@ -353,7 +365,8 @@ struct ToastView: View {
                 .opacity(clamp01(v * 1.6))
                 .blur(radius: v < 0.999 ? 6 * (1 - clamp01(v)) : 0)
                 .offset(y: pixel(22 * (1 - v)))
-                .padding(.bottom, 34)
+                // Above the chat composer on Chat; near the bottom on Visual.
+                .padding(.bottom, pixel(34 + 72 * clamp01(store.tabProgress.value)))
         }
         .allowsHitTesting(false)
         .onChange(of: store.toast) { _, t in

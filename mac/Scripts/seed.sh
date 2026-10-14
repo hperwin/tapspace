@@ -39,7 +39,7 @@ if curl -fs -o /dev/null "$URL/api/state"; then
     echo "port $PORT is already serving. Stop it first (seed.sh --stop <its data dir>)." >&2
     exit 1
 fi
-for f in 21d0610109/1.png 21d0610109/2.png 8d1e93788e/1.png e63e4daa8a/1.png f6e60f3b14/2.mp4; do
+for f in 2a987b7a7e/1.png 2a987b7a7e/2.png 8d1e93788e/1.png e63e4daa8a/1.png f6e60f3b14/2.mp4; do
     [[ -f "$SHOTS/$f" ]] || { echo "missing real screenshot $SHOTS/$f (set TAPSPACE_SHOTS)" >&2; exit 1; }
 done
 
@@ -77,11 +77,13 @@ PY
 
 CAMPAIGN=2026-10-12-fantasy-p0
 echo "==> Cards"
-EXPERT=$(tap post --agent L3k-ios --campaign "$CAMPAIGN" --title "An expert's page" \
-    --note "Tapping an expert's card zooms into their page: picture, name, and their takes this week." \
-    --image "$SHOTS/21d0610109/1.png")
-tap update "$EXPERT" --image "$SHOTS/21d0610109/2.png" \
-    --note "v2: the expert pages now come from the server's recorded experts list." >/dev/null
+# The v2 pair changes about 11% of the frame, so the blue change boxes show
+# (a pair that changes more than 55% is a redesign and is shown without them).
+EXPERT=$(tap post --agent L3k-ios --campaign "$CAMPAIGN" --title "Sunday glance: inactives, the swap, their side" \
+    --note "Inactives at 8:30, the one swap before 10:00, Barkley live for them." \
+    --image "$SHOTS/2a987b7a7e/1.png")
+tap update "$EXPERT" --image "$SHOTS/2a987b7a7e/2.png" \
+    --note "v2: Models tab bar, week label and Ask pill under VS, pill Claims." >/dev/null
 NBA=$(tap post --agent L3n-ios --campaign "$CAMPAIGN" \
     --title "NBA weekly league: a card with no move no longer says to make moves" \
     --image "$SHOTS/8d1e93788e/1.png")
