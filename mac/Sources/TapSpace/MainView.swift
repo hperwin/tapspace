@@ -10,8 +10,6 @@ struct RootView: View {
     @State private var ready = SpringBox(0, SpringPreset(stiffness: 150, damping: 22))
 
     var body: some View {
-        let p = clamp01(store.tabProgress.value)
-        let moving = p > 0.001 && p < 0.999
         let lb = visual.lightbox?.progress.value ?? 0
         let r = clamp01(ready.value)
         ZStack(alignment: .top) {
@@ -20,19 +18,14 @@ struct RootView: View {
                 // The two tabs trade places sideways, in the control's order:
                 // Visual leaves left as Chat arrives from the right.
                 VisualView(model: visual, store: store)
-                    .opacity(1 - p)
-                    .blur(radius: moving ? 10 * p : 0)
-                    .scaleEffect(1 - 0.012 * p)
-                    .offset(x: pixel(-28 * p))
+                    .modifier(ShellTabSlide(progress: store.tabProgress, side: -1))
                     .allowsHitTesting(store.tab == .visual)
                 ChatView(store: store)
                     .padding(.top, 70)
                     .padding(.bottom, 22)
-                    .opacity(p)
-                    .blur(radius: moving ? 10 * (1 - p) : 0)
-                    .scaleEffect(0.988 + 0.012 * p)
-                    .offset(x: pixel(28 * (1 - p)))
+                    .modifier(ShellTabSlide(progress: store.tabProgress, side: 1))
                     .allowsHitTesting(store.tab == .chat)
+                ShellTabVeil(progress: store.tabProgress)
             }
             .blur(radius: 14 * clamp01(lb))
             .opacity(r)
@@ -59,6 +52,43 @@ struct RootView: View {
             // Already there when the window appeared: no entrance to play.
             if was == loaded { ready.snap(1) } else { ready.set(1) }
         }
+    }
+}
+
+/// One tab's place in the Visual | Chat move: it slides sideways (a layer
+/// transform) and is shown only on its own half of the move. Its opacity
+/// flips once, at the midpoint, under a full veil, and never animates: an
+/// animated opacity on a whole tab tree is group opacity, which renders the
+/// card grid or the chat pane offscreen on every frame (as a blur does).
+/// The spring is read here, in the modifier's own body, so a frame of the
+/// move re-evaluates this modifier and never RootView or the tab trees.
+struct ShellTabSlide: ViewModifier {
+    let progress: SpringBox
+    /// -1: Visual, which leaves to the left; 1: Chat, which arrives from the right.
+    let side: CGFloat
+
+    func body(content: Content) -> some View {
+        let p = clamp01(progress.value)
+        let away = side < 0 ? p : 1 - p
+        content
+            .opacity(away < 0.5 ? 1 : 0)
+            .offset(x: pixel(28 * side * CGFloat(away)))
+    }
+}
+
+/// The fade of the Visual | Chat move, as one white layer over both tabs:
+/// on the white window, the outgoing tab veiled by white at alpha a looks
+/// exactly like it faded to 1 - a, but costs a single solid blend instead of
+/// an offscreen pass. It closes over the outgoing tab, is opaque at the
+/// midpoint where the tabs trade, and opens off the arriving one.
+struct ShellTabVeil: View {
+    let progress: SpringBox
+
+    var body: some View {
+        let p = clamp01(progress.value)
+        Color.white
+            .opacity(1 - abs(2 * p - 1))
+            .allowsHitTesting(false)
     }
 }
 
