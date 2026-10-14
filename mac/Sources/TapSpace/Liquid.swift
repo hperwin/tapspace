@@ -41,13 +41,14 @@ final class LiquidTrack: MotionDriver {
     static let cross = SpringPreset(stiffness: 300, damping: 26)
 
     init(axis: Axis, cornerRadius: CGFloat, dropRadius: CGFloat, anchorRadius: CGFloat,
-         squish: Double = 0.5, motion: Motion = .main) {
+         squish: Double = 0.5, motion: Motion? = nil) {
         self.axis = axis
         self.cornerRadius = cornerRadius
         self.dropRadius = dropRadius
         self.anchorRadius = anchorRadius
         self.squish = squish
-        self.motion = motion
+        // Resolved here (main actor), not in a nonisolated default argument.
+        self.motion = motion ?? .main
     }
 
     var targetRect: CGRect { rect(sa.target, sb.target, sc0.target, sc1.target) }
@@ -251,8 +252,10 @@ final class PillLiquid {
 
     var detailOpacity: Double { smoothstep(0.62, 0.97, ew.value) * smoothstep(0.55, 0.97, eh.value) }
 
+    /// Per-row reveal, staggered top to bottom; the last rows still get a
+    /// real fade instead of popping in at the very end of the spread.
     func rowProgress(_ i: Int) -> Double {
-        smoothstep(0.5 + 0.06 * Double(min(i, 8)), 1.0, eh.value)
+        smoothstep(0.48 + min(0.36, 0.045 * Double(max(i, 0))), 1.0, eh.value)
     }
 
     var debugState: String {
