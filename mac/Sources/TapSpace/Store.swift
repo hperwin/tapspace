@@ -249,28 +249,17 @@ final class Store {
         }
     }
 
-    /// The server is down: start it the way agents do (tap.py up). Retries
-    /// every so often while it stays down.
+    /// The server is down: start the one `CoreServer.plan()` allows (the live rig via
+    /// tap.py up, or the app's own server on TAPSPACE_DATA; never one on a scratch
+    /// port that would serve the live data). Retries every so often while down.
     private func bootServerIfNeeded() {
-        guard !booted, API.isLocal else { return }
+        guard !booted, CoreServer.canStart else { return }
         booted = true
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(20))
             if self?.connection != .live { self?.booted = false }
         }
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let candidates = ["\(home)/orchestration/tapspace/tap.py", "\(home)/Developer/tapspace/tap.py"]
-        guard let tap = candidates.first(where: { FileManager.default.fileExists(atPath: $0) }) else { return }
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        p.arguments = ["python3", tap, "up"]
-        var env = ProcessInfo.processInfo.environment
-        env["TAPSPACE_URL"] = API.base.absoluteString
-        if let port = API.base.port, port != 4747 { env["TAPSPACE_PORT"] = String(port) }
-        p.environment = env
-        p.standardOutput = FileHandle.nullDevice
-        p.standardError = FileHandle.nullDevice
-        try? p.run()
+        CoreServer.start()
     }
 
     // MARK: Threads
