@@ -1,4 +1,5 @@
 import AppKit
+import Observation
 import QuartzCore
 import SwiftUI
 
@@ -46,6 +47,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var pill: PillController!
     private var fpsTimer: Timer?
     private var keyMonitor: Any?
+    private weak var chatResponder: NSTextView?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
@@ -64,16 +66,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         store.onTickets = { [weak self] t in self?.visual.sync(t) }
         store.onChange = { [weak self] in self?.pill.wake(onlyIfNear: false) }
         store.start()
+        watchTab()
 
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
-            guard let self else { return e }
-            return MainActor.assumeIsolated {
-                if e.keyCode == 53, self.visual.lightbox != nil {
-                    self.visual.closeLightbox()
-                    return nil
-                }
-                return e
+            guard let self, e.keyCode == 53 else { return e }
+            let closed = MainActor.assumeIsolated { () -> Bool in
+                guard self.visual.lightbox != nil else { return false }
+                self.visual.closeLightbox()
+                return true
             }
+            return closed ? nil : e
         }
 
         if flags.fps { startFPSLog() }
@@ -95,10 +97,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         w.titlebarAppearsTransparent = true
         w.titleVisibility = .hidden
         w.title = "TapSpace"
+        // An empty unified toolbar gives the titlebar its full height, so the
+        // traffic lights sit on the same centerline as the Visual | Chat control.
+        let toolbar = NSToolbar(identifier: "TapSpaceMain")
+        toolbar.allowsUserCustomization = false
+        w.toolbar = toolbar
+        w.toolbarStyle = .unified
         w.backgroundColor = .white
+        w.isOpaque = true
         w.isReleasedWhenClosed = false
         w.minSize = NSSize(width: 960, height: 620)
         w.appearance = NSAppearance(named: .aqua)
+        w.collectionBehavior.insert(.fullScreenPrimary)
         w.delegate = self
         hosting = NSHostingView(rootView: RootView(store: store, visual: visual))
         hosting.sizingOptions = []
@@ -112,12 +122,64 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             w.setContentSize(NSSize(width: 1240, height: 820))
             w.setFrameOrigin(NSPoint(x: -30000, y: 200))
         } else {
-            w.center()
-            w.setFrameAutosaveName("TapSpaceMain")
+            // Restores the last frame if one was saved, and keeps saving it.
+            if !w.setFrameUsingName(Self.frameName) { w.center() }
+            w.setFrameAutosaveName(Self.frameName)
+            fitOnScreen(w)
         }
         window = w
         w.makeKeyAndOrderFront(nil)
         Motion.main.attach(to: hosting)
+        hosting.layoutSubtreeIfNeeded()
+        ShellChrome.shared.measure(w)
+    }
+
+    private static let frameName = "TapSpaceMain"
+
+    /// A frame saved on a display that is gone comes back fully visible.
+    private func fitOnScreen(_ w: NSWindow) {
+        guard let screen = w.screen ?? NSScreen.main else { return }
+        let vis = screen.visibleFrame
+        var f = w.frame
+        f.size.width = min(f.width, vis.width)
+        f.size.height = min(f.height, vis.height)
+        f.origin.x = min(max(f.minX, vis.minX), vis.maxX - f.width)
+        f.origin.y = min(max(f.minY, vis.minY), vis.maxY - f.height)
+        if f != w.frame { w.setFrame(f, display: false) }
+    }
+
+    // Delegate callbacks can arrive while the window is still being built
+    // (before `window` is set), so they read the notification's window.
+    private func remeasure(_ n: Notification) {
+        guard let w = n.object as? NSWindow else { return }
+        ShellChrome.shared.measure(w)
+    }
+    func windowDidResize(_ notification: Notification) { remeasure(notification) }
+    func windowDidEnterFullScreen(_ notification: Notification) { remeasure(notification) }
+    func windowDidExitFullScreen(_ notification: Notification) { remeasure(notification) }
+    func windowDidChangeScreen(_ notification: Notification) {
+        remeasure(notification)
+        // The display link follows the view to the new display.
+        Motion.main.wake()
+    }
+
+    /// Leaving Chat hands the keyboard back (the composer is hidden, so
+    /// typing on Visual must not land in it); coming back gives it back.
+    private func watchTab() {
+        withObservationTracking { _ = store.tab } onChange: { [weak self] in
+            Task { @MainActor in
+                guard let self else { return }
+                if self.store.tab == .visual, let tv = self.window.firstResponder as? NSTextView,
+                   tv.isDescendant(of: self.hosting) {
+                    self.chatResponder = tv
+                    self.window.makeFirstResponder(nil)
+                } else if self.store.tab == .chat, let tv = self.chatResponder, tv.window === self.window,
+                          !(self.window.firstResponder is NSTextView) {
+                    self.window.makeFirstResponder(tv)
+                }
+                self.watchTab()
+            }
+        }
     }
 
     func showWindow() {
