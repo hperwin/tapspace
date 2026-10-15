@@ -14,6 +14,11 @@ authored with the tap label (TAPSPACE_TAP_LABEL, default nava), read and
 messaged through gh as you. Taps are scoped by issue AUTHOR, never comment
 author, so nobody else's taps ever show up here.
 
+A master can publish its run (tap.py goal / step: a north star, the steps, the current one).
+Cards know the master that owns them from the Claude session tap.py runs in; a change note
+shows under that master until it posts a new version or its thread is opened. Agent-to-agent
+messages show as links (links.py).
+
 Run:  python3 server.py     (or: python3 tap.py up)
 URL:  http://127.0.0.1:4747
 """
@@ -33,6 +38,7 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlencode
 
+import links
 import qr
 
 # media a version can carry; videos stream with Range support so the space can scrub
@@ -482,9 +488,10 @@ def _agents_watch():
     while True:
         try:
             rows = _agent_rows()
-            sig = [(r["name"], r["state"], r["where"], r["title"], (r["progress"] or {}).get("updated"),
-                    r["notes_read"], [(n["ticket"], n["version"], n["ts"]) for n in r["notes"]])
-                   for r in rows]
+            sig = ([(r["name"], r["state"], r["where"], r["title"], (r["progress"] or {}).get("updated"),
+                     r["notes_read"], [(n["ticket"], n["version"], n["ts"]) for n in r["notes"]])
+                    for r in rows],
+                   links.rows({r["name"] for r in rows}))
             if sig != last:
                 last = sig
                 _bump("agents")
@@ -1076,10 +1083,11 @@ class H(BaseHTTPRequestHandler):
             return
         if path == "/api/activity":
             self._json({"rows": _activity_rows(), "sessions": dict(SESSIONS),
-                        "now": time.time()})
+                        "now": time.time(), "links": links.stats()})
             return
         if path == "/api/agents":
-            self._json({"agents": _agent_rows()})
+            rows = _agent_rows()
+            self._json({"agents": rows, "links": links.rows({r["name"] for r in rows})})
             return
         if path == "/api/projects":
             self._json({"projects": _projects()})
@@ -1539,5 +1547,6 @@ if __name__ == "__main__":
     threading.Thread(target=_scan_sessions, daemon=True).start()
     threading.Thread(target=_taps_loop, daemon=True).start()
     threading.Thread(target=_watch_loop, daemon=True).start()
+    links.start(DATA, _bump)
     print(f"TapSpace serving on http://127.0.0.1:{PORT}")
     ThreadingHTTPServer(("127.0.0.1", PORT), H).serve_forever()
