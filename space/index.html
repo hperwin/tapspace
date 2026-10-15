@@ -221,6 +221,26 @@
   .chip.starting{background:rgba(var(--hl),.1);color:rgb(var(--hl))} .chip.starting i{animation:breathe .9s ease-in-out infinite}
   .orb.starting{animation:orbswap 1.4s ease-in-out infinite}
   .railempty{font-size:12px;color:var(--faint);padding:8px 12px;line-height:1.5}
+  /* rail: under each agent, who it is talking with and the cards you sent it change notes on */
+  .agrp{display:flex;flex-direction:column}
+  .agrp .talk{display:flex;align-items:center;gap:6px;min-width:0;padding:0 12px 4px 62px;font-size:11px;color:rgb(var(--hl))}
+  .agrp .talk[hidden]{display:none}
+  .agrp .talk span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .agrp .talk i{width:5px;height:5px;border-radius:50%;background:currentColor;flex:none;animation:breathe 1.4s ease-in-out infinite}
+  .notes{display:flex;flex-direction:column;gap:1px;padding:0 6px 4px 54px}
+  .notes:empty{display:none}
+  .note{appearance:none;border:0;background:transparent;font:inherit;color:inherit;text-align:left;cursor:pointer;width:100%;
+    display:flex;align-items:center;gap:8px;padding:4px 8px;border-radius:10px;max-height:34px;overflow:hidden;
+    transition:background .25s ease,transform .2s ease}
+  .note:hover{background:rgba(0,0,0,.03)}
+  .note:active{transform:scale(.98)}
+  .note img{width:24px;height:24px;border-radius:6px;flex:none;object-fit:cover;object-position:top;background:#f2f2f3}
+  .note .nx{flex:1;min-width:0;font-size:11.5px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .note .nx b{font-weight:600;color:var(--ink)}
+  .note.enter{animation:railin .7s cubic-bezier(.22,.9,.24,1) both}
+  .note.out{animation:noteout .34s ease forwards;pointer-events:none}
+  @keyframes noteout{to{opacity:0;filter:blur(6px);max-height:0;padding-top:0;padding-bottom:0}}
+  .notes .more{font-size:10.5px;color:var(--faint);padding:2px 8px 4px}
 
   .orb{width:38px;height:38px;border-radius:50%;flex:none;position:relative;
     background:rgb(var(--hl))}
@@ -366,6 +386,8 @@
     .goal{width:200px}
     #pane{border-radius:18px}
     .msg{max-width:90%}
+    .agrp{display:contents}
+    .agrp .talk,.notes{display:none}
   }
 
   @media (max-width:900px){
@@ -899,7 +921,9 @@ function openImage(src){
 msgsEl.addEventListener('click', e => { const im = e.target.closest('.imgs img'); if (im) openImage(im.src); });
 const taplist = $('#taplist');
 let current = store('tapspace.thread') || '';
-let agents = [];                  // [{name, state, seen, where, last, count}]
+let agents = [];                  // rows of GET /api/agents: name (hidden key), title, state, first, seen, last_master, progress, notes, notes_read
+let links = [];                   // agent-to-agent links of GET /api/agents: {a, b, from, last, count, summary, active}
+const notesHidden = {};           // NAME -> newest note ts this page marked read (hides the rows before the server answers)
 let chat = {agent: '', messages: []};   // the open agent thread
 const agentKey = n => 'agent:' + n;
 const isAgent = k => k.startsWith('agent:');
@@ -953,6 +977,93 @@ function readAt(key){ return +(store('tapspace.read.' + key) || 0); }
 function markRead(key){ store('tapspace.read.' + key, String(Date.now())); }
 function isUnread(key){ return lastTheirs(key) > readAt(key) && !(document.body.classList.contains("chatmode") && key === current && document.hasFocus()); }
 
+/* ---- per agent: the cards you sent change notes on (newest first), and who it is talking with ---- */
+function titleOf(name){ const a = agents.find(x => x.name === name); return a ? (a.title || 'Claude') : ''; }
+function visibleNotes(a){
+  const cut = Math.max(+a.notes_read || 0, notesHidden[a.name] || 0);
+  return (Array.isArray(a.notes) ? a.notes : []).filter(n => n && +n.ts > cut).sort((x, y) => y.ts - x.ts);
+}
+function readNotes(name){         // opening an agent's thread reads its notes on every client (a server read mark)
+  const a = agents.find(x => x.name === name);
+  const shown = a ? visibleNotes(a) : [];
+  if (!shown.length) return;
+  notesHidden[name] = Math.max(...shown.map(n => +n.ts));
+  fetch('/api/agents/read', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({name})}).catch(() => {});
+  window.tsPanel?.render(agents, links);
+}
+function talkText(name){
+  const t = links.filter(l => l && l.active && l.a !== l.b && (l.a === name || l.b === name))
+    .sort((x, y) => (+y.last || 0) - (+x.last || 0))
+    .map(l => ({title: titleOf(l.a === name ? l.b : l.a), summary: String(l.summary || '')}))
+    .filter(x => x.title);
+  if (!t.length) return {text: '', tip: ''};
+  const more = t.length === 2 ? ' and ' + t[1].title : t.length > 2 ? ' and ' + (t.length - 1) + ' more' : '';
+  return {text: 'Talking with ' + t[0].title + more, tip: t[0].summary};
+}
+const THUMB = /^\/shots\/[\w.-]+\/\d+\.(?:png|jpe?g|gif|webp)$/i;   // a card version's own screenshot; anything else shows the title
+function noteTitled(n, words){ return `<span class="nx"><b>${esc(String(n.title || 'Card'))}</b> · ${words}</span>`; }
+function syncNotes(box, key, notes){
+  const live = () => [...box.querySelectorAll('.note:not(.out)')];
+  const have = new Map(live().map(el => [el.dataset.k, el]));
+  notes.slice(0, 4).forEach((n, i) => {
+    const k = n.ticket + '#' + n.version + '#' + n.ts;
+    let el = have.get(k);
+    if (!el){
+      el = document.createElement('button'); el.type = 'button'; el.className = 'note enter'; el.dataset.k = k;
+      el.style.animationDelay = (i * 60) + 'ms';
+      el.title = String(n.title || 'Card') + ': ' + String(n.note || '');
+      const words = esc(String(n.note || '').replace(/\s+/g, ' ').trim());
+      if (THUMB.test(n.thumb || '')){
+        el.innerHTML = `<img src="${n.thumb}" alt="" loading="lazy" decoding="async"><span class="nx">${words}</span>`;
+        el.firstChild.addEventListener('error', () => { el.innerHTML = noteTitled(n, words); }, {once: true});
+      } else el.innerHTML = noteTitled(n, words);
+      el.addEventListener('click', () => openThread(key));
+    }
+    const slot = live()[i];
+    if (slot !== el) box.insertBefore(el, slot || box.querySelector('.more'));
+    have.delete(k);
+  });
+  have.forEach(el => { el.classList.add('out'); setTimeout(() => el.remove(), 360); });
+  const more = Math.max(0, notes.length - 4);
+  let m = box.querySelector('.more');
+  if (more){ if (!m){ m = document.createElement('div'); m.className = 'more'; box.appendChild(m); } m.textContent = '+' + more + ' more'; }
+  else if (m) m.remove();
+}
+function syncAgents(){
+  const box = $('#agentlist');
+  if (!agents.length){ box.innerHTML = `<div class="railempty">No agents in the space yet. Any agent joins with tap.py listen --as NAME.</div>`; return; }
+  if (box.querySelector('.railempty')) box.innerHTML = '';
+  const have = new Map([...box.children].map(el => [el.dataset.key, el]));
+  agents.forEach((a, i) => {
+    const key = agentKey(a.name);
+    let g = have.get(key);
+    if (!g){
+      g = document.createElement('div'); g.className = 'agrp'; g.dataset.key = key;
+      const b = document.createElement('button'); b.className = 'thread enter';
+      b.style.animationDelay = (i * 70) + 'ms';
+      b.addEventListener('click', () => openThread(key));
+      const talk = document.createElement('div'); talk.className = 'talk'; talk.hidden = true; talk.innerHTML = '<i></i><span></span>';
+      const notes = document.createElement('div'); notes.className = 'notes';
+      g.append(b, talk, notes);
+    }
+    const [b, talk, notes] = g.children;
+    const sig = a.state + '|' + a.title + '|' + a.count;
+    if (b.dataset.sig !== sig){ b.dataset.sig = sig;
+      b.innerHTML = `<span class="orb ${a.state}"></span><span class="tx"><div class="nm">${esc(a.title || 'Claude')}</div>
+        <div class="sub">${MASTER[a.state] || ''}</div></span><span class="unread"></span>`; }
+    b.classList.toggle('on', current === key);
+    const shown = visibleNotes(a);
+    b.querySelector('.unread').classList.toggle('show', isUnread(key) || shown.length > 0);
+    const tk = talkText(a.name);
+    talk.hidden = !tk.text; talk.title = tk.tip;
+    if (talk.lastChild.textContent !== tk.text) talk.lastChild.textContent = tk.text;
+    syncNotes(notes, key, shown);
+    if (box.children[i] !== g) box.insertBefore(g, box.children[i] || null);
+    have.delete(key);
+  });
+  have.forEach(el => el.remove());
+}
+
 function syncList(box, items, keyOf, sigOf, html, emptyText){
   if (!items.length){ box.innerHTML = `<div class="railempty">${emptyText}</div>`; return; }
   if (box.querySelector('.railempty')) box.innerHTML = '';
@@ -977,10 +1088,7 @@ function syncList(box, items, keyOf, sigOf, html, emptyText){
 }
 
 function renderRail(){
-  syncList($('#agentlist'), agents, a => agentKey(a.name), a => a.state + '|' + a.title + '|' + a.count,
-    a => `<span class="orb ${a.state}"></span><span class="tx"><div class="nm">${esc(a.title || 'Claude')}</div>
-      <div class="sub">${MASTER[a.state]}</div></span><span class="unread"></span>`,
-    'No agents in the space yet. Any agent joins with tap.py listen --as NAME.');
+  syncAgents();
 
   syncList(taplist, taps.items, t => t.key, t => t.status + '|' + t.title + '|' + t.messages.length, t => {
       const last = t.messages.filter(m => m.who === 'tap').pop();
@@ -1088,7 +1196,8 @@ function renderThread(){
 function openThread(key){
   current = key; store('tapspace.thread', key);
   if (!isAgent(key)) fetch('/api/taps/refresh', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({key})});
-  markRead(key); renderRail(); restoreDraft();
+  markRead(key); if (isAgent(key)) readNotes(agentOf(key));
+  renderRail(); restoreDraft();
   if (isAgent(key)) pollChat(); else renderThread();
   ta.focus();
 }
@@ -1162,8 +1271,11 @@ clearall.addEventListener('click', async () => {
 });
 
 async function pollAgents(){
-  try{ agents = (await (await fetch('/api/agents')).json()).agents; }catch(e){ return; }
+  let d; try{ d = await (await fetch('/api/agents')).json(); }catch(e){ return; }
+  if (!Array.isArray(d.agents)) return;
+  agents = d.agents; links = Array.isArray(d.links) ? d.links : [];
   renderRail(); renderThread();
+  window.tsPanel?.render(agents, links);
 }
 async function pollChat(){
   if (!isAgent(current)) return;
