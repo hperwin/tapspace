@@ -259,8 +259,25 @@ final class VisualModel {
         let gen = AVAssetImageGenerator(asset: AVURLAsset(url: url))
         gen.appliesPreferredTrackTransform = true
         gen.maximumSize = CGSize(width: 1600, height: 1600)
-        guard let (cg, _) = try? await gen.image(at: CMTime(seconds: 0.6, preferredTimescale: 600)) else { return nil }
+        guard let (frame, _) = try? await gen.image(at: CMTime(seconds: 0.6, preferredTimescale: 600)),
+              let cg = await Task.detached(priority: .userInitiated, operation: { Self.bitmap(frame) }).value
+        else { return nil }
         return NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
+    }
+
+    /// The generator hands back a video frame (a lazy data provider in the
+    /// movie's 'nclc' video color space) that Core Animation converts on its
+    /// own schedule, so an offscreen `cacheDisplay` can catch it undrawn.
+    /// Redrawn once into a plain decoded sRGB BGRA bitmap, the poster is the
+    /// same kind of image as every ImageIO-decoded card picture.
+    nonisolated private static func bitmap(_ src: CGImage) -> CGImage? {
+        guard let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let ctx = CGContext(data: nil, width: src.width, height: src.height, bitsPerComponent: 8, bytesPerRow: 0, space: space,
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
+        else { return nil }
+        ctx.interpolationQuality = .high
+        ctx.draw(src, in: CGRect(x: 0, y: 0, width: src.width, height: src.height))
+        return ctx.makeImage()
     }
 
     // MARK: Decisions
