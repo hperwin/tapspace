@@ -8,14 +8,19 @@ import SwiftUI
 ///   --fps              log display-link frames per second with a still/moving state
 ///   --demo             a scripted ~10 s loop (tabs, rail, a bubble, the pill) for fps runs
 ///   --tab chat|visual  open on a tab;  --thread agent:NAME | owner/repo#n  open on a thread
+/// and from the environment:
+///   TAPSPACE_CHAT_SESSION=<dir>  ChatHarness's New session drive (runs behind the front app)
+///   TAPSPACE_BACKGROUND=1        a launch behind the front app (install.sh OPEN=1)
 struct Flags {
     var snapshot: String?
     var fps = false
     var demo = false
     var tab: Tab?
     var thread: String?
+    var chatSession = false
+    var background = false
 
-    init(_ args: [String]) {
+    init(_ args: [String], env: [String: String] = ProcessInfo.processInfo.environment) {
         var it = args.makeIterator()
         while let a = it.next() {
             switch a {
@@ -27,7 +32,16 @@ struct Flags {
             default: break
             }
         }
+        chatSession = env["TAPSPACE_CHAT_SESSION"] != nil
+        background = env["TAPSPACE_BACKGROUND"] == "1"
     }
+
+    /// A render nobody sees (--snapshot, scenes or link frames): no Dock icon, never
+    /// activates, the window and the pill parked off every screen, writes off, and
+    /// only against a scratch server.
+    var offscreen: Bool { snapshot != nil }
+    /// The launch takes the foreground: only one meant to be looked at.
+    var activates: Bool { !offscreen && !chatSession && !background }
 }
 
 final class MainWindow: NSWindow {
@@ -50,8 +64,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private weak var chatResponder: NSTextView?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApp.setActivationPolicy(.regular)
-        if flags.demo || flags.snapshot != nil { API.allowWrites = false }
+        // An offscreen render writes nothing, but it reads, refreshes taps and would
+        // restart a server that is down: only against a scratch server in TAPSPACE_URL.
+        if flags.offscreen, let why = ChatHarness.refusal() {
+            Harness.log("SNAPSHOT refused: \(why). Point TAPSPACE_URL at a scratch server (Scripts/seed.sh).")
+            exit(2)
+        }
+        NSApp.setActivationPolicy(flags.offscreen ? .accessory : .regular)
+        if flags.demo || flags.offscreen { API.allowWrites = false }
         if let t = flags.tab { store.tab = t }
         if let th = flags.thread { store.thread = th }
         store.tabProgress.snap(store.tab == .chat ? 1 : 0)
@@ -62,6 +82,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         pill = PillController(store: store)
         pill.onOpen = { [weak self] item in self?.open(item) }
         pill.install()
+        // Off every screen in the same turn it was ordered in, so it never shows at the menu bar.
+        if flags.offscreen, let p = pill.panel { p.setFrameOrigin(NSPoint(x: -32000, y: p.frame.minY)) }
 
         store.onTickets = { [weak self] t in self?.visual.sync(t) }
         store.onChange = { [weak self] in self?.pill.wake(onlyIfNear: false) }
@@ -80,8 +102,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         if flags.fps { startFPSLog() }
         Harness.run(flags: flags, app: self)
-        // The session drive runs behind whatever Hayden is using.
-        if ProcessInfo.processInfo.environment["TAPSPACE_CHAT_SESSION"] == nil { NSApp.activate() }
+        // Renders, the session drive and background launches stay behind whatever Hayden is using.
+        if flags.activates { NSApp.activate() }
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -119,7 +141,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             self.visual.closeLightbox()
             return true
         }
-        if flags.snapshot != nil {
+        if flags.offscreen {
             w.setContentSize(NSSize(width: 1240, height: 820))
             w.setFrameOrigin(NSPoint(x: -30000, y: 200))
         } else {
@@ -129,7 +151,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             fitOnScreen(w)
         }
         window = w
-        w.makeKeyAndOrderFront(nil)
+        // A background launch waits behind the front app for the Dock icon or the pill.
+        if flags.background { w.orderBack(nil) } else { w.makeKeyAndOrderFront(nil) }
         Motion.main.attach(to: hosting)
         hosting.layoutSubtreeIfNeeded()
         ShellChrome.shared.measure(w)
