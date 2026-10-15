@@ -110,8 +110,8 @@ enum ChatHarness {
             }
             try? await Task.sleep(for: .seconds(3))
             shot(dir, "c4-landed")
-            let k = ChatMedia.shared.images.keys.sorted().last
-            if let k, let p = ChatMedia.shared.images[k]?.first, let img = await ChatMedia.shared.load(p) {
+            let p = store.agent(store.thread).flatMap { store.chats[$0.name]?.last { !$0.images.isEmpty }?.images.first }
+            if let p, let img = await ChatMedia.shared.load(p) {
                 ChatMedia.shared.lightbox.open(p, image: img, from: .zero)
                 try? await Task.sleep(for: .seconds(1.2))
                 shot(dir, "c5-lightbox")

@@ -412,8 +412,8 @@ struct ToastView: View {
 }
 
 /// The calm first-launch state: the mark breathing while the first state
-/// loads. If it takes a moment (the app is starting the server with
-/// `tap.py up`), the label says so.
+/// loads. If it takes a moment and the app is starting a server
+/// (`CoreServer.canStart`), the label says so.
 struct ConnectingView: View {
     let down: Bool
     @State private var slow = false
@@ -422,7 +422,7 @@ struct ConnectingView: View {
         Breathing(low: 0.3, high: 1, period: 2.8, scale: 0.06) {
             VStack(spacing: 14) {
                 TapMark(size: 34)
-                Text(down || slow ? "STARTING TAPSPACE" : "CONNECTING")
+                Text((down || slow) && CoreServer.canStart ? "STARTING TAPSPACE" : "CONNECTING")
                     .font(.system(size: 11.5, weight: .medium))
                     .tracking(2.2)
                     .foregroundStyle(Color.dim)

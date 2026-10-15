@@ -577,12 +577,11 @@ struct MessageList: View {
         let key = store.thread
         var out: [DisplayMessage] = []
         if let agent {
-            let media = ChatMedia.shared.images
             var present = Set<String>()
             for m in store.chats[agent.name] ?? [] {
                 let id = "\(key)#\(m.id)"
                 present.insert(id)
-                out.append(DisplayMessage(id: id, mine: m.role == "you", body: m.body, ts: m.ts, images: media[id] ?? []))
+                out.append(DisplayMessage(id: id, mine: m.role == "you", body: m.body, ts: m.ts, images: m.images))
             }
             // Sends with images, until their server row is in the thread.
             let outbox = ChatOutbox.shared
@@ -677,11 +676,7 @@ struct MessageList: View {
                 lastThread = store.thread
                 if switched { pinUntil = Date().addingTimeInterval(0.8) }
                 if store.isViewingCandidate { store.markRead(store.thread) }
-                if let agent {
-                    ChatOutbox.shared.prune(Set(msgs.map(\.id)))
-                    let name = agent.name, ids = (store.chats[name] ?? []).map(\.id)
-                    Task { await ChatMedia.shared.index(agent: name, ids: ids) }
-                }
+                if agent != nil { ChatOutbox.shared.prune(Set(msgs.map(\.id))) }
                 // A switched thread is a fresh scroll view already at its bottom.
                 guard !switched, nearBottom else { return }
                 DispatchQueue.main.async {

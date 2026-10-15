@@ -228,11 +228,9 @@ final class ChatOutbox {
                                           "images": images.map { ["b64": $0.data.base64EncodedString(), "ext": $0.ext] }]
             let data = try await API.postData("/api/chat", payload)
             if let row = (try? JSONDecoder().decode(MediaPost.self, from: data))?.message {
-                let k = "\(key)#\(row.id)"
-                confirmed[k] = item.id
+                confirmed["\(key)#\(row.id)"] = item.id
                 // The served copies are the bytes we just sent: show them from memory, no reload.
-                for (path, a) in zip(row.images ?? [], images) { ChatMedia.shared.seed(path, a) }
-                ChatMedia.shared.record(k, row.images ?? [])
+                for (path, a) in zip(row.images, images) { ChatMedia.shared.seed(path, a) }
             }
             store.chatPoller.kick()
             store.agentsPoller.kick()
@@ -256,44 +254,16 @@ final class ChatOutbox {
     }
 }
 
-private struct MediaRow: Decodable {
-    let id: Int
-    let images: [String]?
-}
-private struct MediaRows: Decodable { let messages: Lossy<MediaRow> }
-private struct MediaPost: Decodable { let message: MediaRow? }
+private struct MediaPost: Decodable { let message: ChatMessage? }
 
-/// The `images` of chat rows (keyed "agent:NAME#id"), decoded images, and the lightbox.
+/// Decoded chat images (sent ones straight from memory) and the lightbox.
+/// Which rows carry images comes from `ChatMessage.images`.
 @MainActor @Observable
 final class ChatMedia {
     static let shared = ChatMedia()
 
-    private(set) var images: [String: [String]] = [:]
     let lightbox = ChatLightbox()
-    @ObservationIgnored private var indexed: [String: Set<Int>] = [:]
-    @ObservationIgnored private var fetching: Set<String> = []
     @ObservationIgnored private var local: [String: ChatAttachment] = [:]
-
-    func record(_ key: String, _ paths: [String]) {
-        if !paths.isEmpty, images[key] != paths { images[key] = paths }
-    }
-
-    /// Reads which rows of this agent's thread carry images. Runs only when
-    /// rows it has not seen appear (a new message), never on an idle poll.
-    func index(agent name: String, ids: [Int]) async {
-        guard !ids.isEmpty, !fetching.contains(name) else { return }
-        let seen = indexed[name] ?? []
-        guard ids.contains(where: { !seen.contains($0) }) else { return }
-        fetching.insert(name)
-        defer { fetching.remove(name) }
-        guard let rows = try? await API.get(MediaRows.self, "/api/chat", ["agent": name]).messages.items else { return }
-        var s = seen
-        for r in rows {
-            s.insert(r.id)
-            record("agent:\(name)#\(r.id)", r.images ?? [])
-        }
-        indexed[name] = s
-    }
 
     func seed(_ path: String, _ a: ChatAttachment) { local[path] = a }
 

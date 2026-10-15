@@ -21,7 +21,7 @@ Package.swift: core lane (only if a lane asks; no new dependencies).
 - `Ticket` (Identifiable): `id, agent, title, campaign?, version, versions: [TicketVersion], status`; `entry(_ v:)`, `current`, `isVideo`, `videoDeleted`, `lastTs`, `mediaPath(_ v:) -> String` (`/shots/<id>/<v>.<ext>`), `versionKey` (`"id#v"`).
 - `TicketVersion`: `v, note?, ts, media?, ext?, video_deleted?`; `isVideo`.
 - `Agent` (Identifiable, id = name): `name, state ("thinking"|"here"|"away"), seen, first?, where?, last, count, last_master?`; `key` = `"agent:" + name`.
-- `ChatMessage` (Identifiable): `id: Int, agent, role ("master" = agent side, else Hayden), body, ts`.
+- `ChatMessage` (Identifiable): `id: Int, agent, role ("master" = agent side, else Hayden), body, ts, images: [String]` (`/chat-media/<file>` paths, [] when none; the bubble grid and the pill read it directly).
 - `Tap` (Identifiable, id = key): `key ("owner/repo#n"), repo, number, title, url, status ("flying"|"needs-you"|"boarding"|"landed"), goals: [TapGoal], messages: [TapMessage], created, closed?, last`; `name`, `repoName`.
 - `TapGoal { text, done }`, `TapMessage { who ("you" = Hayden), body, ts (ISO), seen?, url? }` + `date: Double`.
 - `TapsResponse { me, items: [Tap], fetched, error }`, `ActivityRow { campaign, agent, verb, detail, kind, age, state }` + `key`, `Sessions { working, recent }`, `ActivityResponse { rows, sessions }`.
@@ -40,7 +40,7 @@ Package.swift: core lane (only if a lane asks; no new dependencies).
 - Enums: `Tab { visual, chat }` (String raw), `Connection { connecting, live, down }`. Structs: `PendingMessage { id, key, body, ts, demo }`, `Toast { id, text }`.
 - State (read-only outside core unless noted): `connection, tickets, ticketsLoaded, agents (rw), agentsLoaded, chats: [agentName: [ChatMessage]], taps: TapsResponse, activity, sessions, pending, confirmed, decided, reads, windowKey (rw), toast (rw), focusCard (rw), tab (rw), thread (rw, a thread key: "agent:NAME" or "owner/repo#n")`.
 - `tabProgress: SpringBox` (0 visual .. 1 chat). Hooks: `onTickets: ([Ticket]) -> Void`, `onChange: () -> Void`.
-- `start()` begins polling and starts the server via tap.py up if down (retries every 20 s while down). Cadence: state 1.5 s always; agents 2 s and taps 5 s while live (the pill needs them); activity 2 s only while the main window is visible; the open agent chat 1.5 s only while visible AND on the Chat tab (a thread picked elsewhere is fetched once, so the tab opens on loaded content). Unchanged polls write nothing. `onTickets`/`onChange` fire only on change.
+- `start()` begins polling and, if the server is down, starts the one `CoreServer.plan()` allows (retries every 20 s while down). Cadence: state 1.5 s always; agents 2 s and taps 5 s while live (the pill needs them); activity 2 s only while the main window is visible; the open agent chat 1.5 s only while visible AND on the Chat tab (a thread picked elsewhere is fetched once, so the tab opens on loaded content). Unchanged polls write nothing. `onTickets`/`onChange` fire only on change.
 - Added: `windowVisible` (main window on screen; forced true under --snapshot/--demo), `refreshAll() async` (every endpoint once, awaited: harness), `pollers` / `statePoller` ... `activityPoller` (`CorePoller`: `kick()`, `now() async`, `count`), `surfaces` (`CoreSurfaces`).
 - Reads persist in UserDefaults key `reads` (coalesced writes, pruned). First launch ever (no saved reads) marks existing threads read once data loads. Unread agent threads that are not open get their chat fetched once so the pill can quote the reply.
 - Threads: `threadMissing`, `threadKeys`, `agent(_ key:)`, `tap(_ key:)`, `readAt(_:)`, `markRead(_:)`, `lastTheirs(_:)`, `isViewing(_:)`, `isUnread(_:)`.
@@ -49,6 +49,10 @@ Package.swift: core lane (only if a lane asks; no new dependencies).
 - `Images.shared` keeps the 160 most recent decoded bitmaps (`limit`).
 - Extensions living in other lanes' files (owned by that lane, callable by all): `isViewingCandidate`, `open(_ key:)` (ChatView.swift, chat); `pillItems: [PillItem]` (PillView.swift, pill).
 - `Images.shared` (Store.swift): `cached(_ path:, maxPixel:) -> NSImage?`, `load(_ path:, maxPixel:) async -> NSImage?` (downsampled, deduped).
+
+## CoreServer (CoreServer.swift, core)
+
+- `enum CoreServer`: `plan()` (nil, or what to start: the live rig via `tap.py up` for the default 127.0.0.1/localhost:4747 with no `TAPSPACE_DATA`; an app-owned `server.py` on `TAPSPACE_DATA` and the URL's port, stopped by a supervisor when the app exits; nothing for any other port), `canStart: Bool` (static, MainActor-free; the shell's ConnectingView says "STARTING TAPSPACE" only when true), `start()`. `Store.bootServerIfNeeded()` goes through it.
 
 ## Motion (Motion.swift, core)
 

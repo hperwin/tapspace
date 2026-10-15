@@ -64,6 +64,8 @@ struct ChatMessage: Decodable, Equatable, Identifiable {
     let role: String
     let body: String
     let ts: Double
+    /// Attached image paths (`/chat-media/<file>`), [] when none.
+    var images: [String] = []
 }
 
 private struct ChatResponse: Decodable { let messages: Lossy<ChatMessage> }
@@ -203,6 +205,18 @@ extension Agent {
         last = c.or(Keys("last"), 0)
         count = c.or(Keys("count"), 0)
         last_master = c.opt(Keys("last_master"))
+    }
+}
+
+extension ChatMessage {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        id = try c.decode(Int.self, forKey: Keys("id"))
+        agent = c.or(Keys("agent"), "")
+        role = c.or(Keys("role"), "master")
+        body = c.or(Keys("body"), "")
+        ts = c.or(Keys("ts"), 0)
+        images = c.lossy(Keys("images"))
     }
 }
 
