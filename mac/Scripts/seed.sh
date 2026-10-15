@@ -51,8 +51,11 @@ scratch_port() {
 # (unset: this Mac's own, read-only).
 serve() {   # serve <port> <data-dir> [claude-dir]
     if [[ -n "${3:-}" ]]; then export TAPSPACE_CLAUDE_DIR="$3"; else unset TAPSPACE_CLAUDE_DIR; fi
+    # The server outlives this shell: start it without any Claude Code session's identity (as tap.py up does).
     TAPSPACE_PORT="$1" TAPSPACE_DATA="$2" TAPSPACE_APNS_DIR="$2/no-apns" \
-        nohup python3 "$REPO/server.py" >"$2/server.log" 2>&1 &
+        nohup env -u CLAUDE_CODE_SESSION_ID -u CLAUDE_PID -u CLAUDE_CODE_MESSAGING_SOCKET \
+        -u CLAUDE_CODE_MESSAGING_TOKEN -u CODEX_COMPANION_SESSION_ID -u CODEX_COMPANION_TRANSCRIPT_PATH \
+        python3 "$REPO/server.py" >"$2/server.log" 2>&1 &
     echo "$!" >"$2/server.pid"
     for _ in $(seq 1 50); do
         curl -fs -o /dev/null "http://127.0.0.1:$1/api/state" && return 0
