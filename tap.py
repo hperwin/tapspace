@@ -29,14 +29,20 @@
                                             logged in, else an ngrok tunnel) and prints the Glint
                                             pairing link and QR code; --off closes the ngrok tunnel
 
+Cards land under their master by themselves: inside Claude Code every call names the session it
+runs in (only when that Claude process is an ancestor of this one, so an id inherited through tmux
+or a launcher is never sent). Outside Claude Code, post with --owner NAME.
+
 Server default http://127.0.0.1:4747 (override: TAPSPACE_URL).
-Screenshots must be REAL renders of the running surface — never generated images.
+Screenshots must be REAL renders of the running surface, never generated images.
 """
 import argparse
 import base64
+import functools
 import json
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 import sys
@@ -49,15 +55,55 @@ BASE = os.environ.get("TAPSPACE_URL", "http://127.0.0.1:4747")
 DATA = pathlib.Path(os.environ.get("TAPSPACE_DATA") or pathlib.Path(__file__).resolve().parent / "data")
 TAILSCALE = shutil.which("tailscale") or "/Applications/Tailscale.app/Contents/MacOS/Tailscale"
 NGROK = shutil.which("ngrok") or "/opt/homebrew/bin/ngrok"
+_SID = re.compile(r"^[0-9A-Fa-f-]{8,64}$")
+# one Claude Code session's identity; a process that outlives the session must not carry it
+SESSION_ENV = ("CLAUDE_CODE_SESSION_ID", "CLAUDE_PID", "CLAUDE_CODE_MESSAGING_SOCKET",
+               "CLAUDE_CODE_MESSAGING_TOKEN", "CODEX_COMPANION_SESSION_ID",
+               "CODEX_COMPANION_TRANSCRIPT_PATH")
+
+
+def _ancestors():
+    """The pids above this process, nearest first (one ps call; empty when ps is unavailable)."""
+    try:
+        out = subprocess.run(["ps", "-A", "-o", "pid=", "-o", "ppid="], capture_output=True,
+                             text=True, timeout=5).stdout
+    except Exception:
+        return []
+    up = {}
+    for line in out.splitlines():
+        f = line.split()
+        if len(f) == 2 and f[0].isdigit() and f[1].isdigit():
+            up[int(f[0])] = int(f[1])
+    chain, p = [], os.getppid()
+    while p > 1 and p not in chain:
+        chain.append(p)
+        p = up.get(p, 0)
+    return chain
+
+
+@functools.lru_cache(maxsize=None)
+def _who():
+    """Headers naming the Claude Code session this tap.py runs in, so the server can file cards
+    under their master. Sent only when CLAUDE_PID is one of our ancestors: tmux and launchers
+    hand stale ids of other sessions to processes that are not theirs."""
+    pid = os.environ.get("CLAUDE_PID", "")
+    if not pid.isdigit() or int(pid) not in _ancestors():
+        return {}
+    sid = os.environ.get("CLAUDE_CODE_SESSION_ID") or os.environ.get("CODEX_COMPANION_SESSION_ID") or ""
+    return {"X-Claude-Pid": pid, **({"X-Claude-Session": sid} if _SID.match(sid) else {})}
+
+
+def _daemon_env(env):
+    """env without any Claude Code session's identity (for the server, which outlives its starter)."""
+    return {k: v for k, v in env.items() if k not in SESSION_ENV}
 
 
 def _call(path, payload=None):
-    if payload is None:
-        req = urllib.request.Request(BASE + path)
-    else:
-        req = urllib.request.Request(
-            BASE + path, data=json.dumps(payload).encode(),
-            headers={"content-type": "application/json"})
+    headers = dict(_who())
+    if payload is not None:
+        headers["content-type"] = "application/json"
+    req = urllib.request.Request(BASE + path, headers=headers,
+                                 data=None if payload is None else json.dumps(payload).encode())
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
             return json.loads(r.read().decode())
@@ -189,6 +235,8 @@ def main():
     p.add_argument("--video", help="short screen recording (.mp4/.mov); scrubbable in the space")
     p.add_argument("--note", default="")
     p.add_argument("--campaign", default="")
+    p.add_argument("--owner", default="",
+                   help="the master's chat NAME; only for callers outside Claude Code, where it is automatic")
 
     u = sub.add_parser("update")
     u.add_argument("ticket")
@@ -251,7 +299,8 @@ def main():
         root = os.path.dirname(os.path.abspath(__file__))
         with open(os.path.join(root, "server.log"), "ab") as log:
             subprocess.Popen([sys.executable, os.path.join(root, "server.py")],
-                             stdout=log, stderr=log, start_new_session=True)
+                             stdout=log, stderr=log, start_new_session=True,
+                             env=_daemon_env(os.environ))
         for _ in range(25):
             time.sleep(0.3)
             try:
@@ -282,8 +331,8 @@ def main():
 
     if a.cmd == "post":
         r = _call("/api/post", {
-            "agent": a.agent, "title": a.title, "note": a.note,
-            "campaign": a.campaign, **_media(a)})
+            "agent": a.agent, "title": a.title, "note": a.note, "campaign": a.campaign,
+            **({"owner": a.owner} if a.owner else {}), **_media(a)})
         print(r["id"])
         return 0
 
