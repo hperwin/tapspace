@@ -225,7 +225,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             case .tap(let key), .agent(let key):
                 store.thread = key
                 store.tab = .chat
-                store.markRead(key)
+                store.open(key)
             }
         }
         showWindow()
