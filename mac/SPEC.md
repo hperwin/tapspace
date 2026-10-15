@@ -25,7 +25,8 @@ Hayden loves this widget. Mirror its feel EVERYWHERE, as much as possible:
 
 ## The app
 SwiftPM executable like SnappWAU (swift-tools 6.0, platforms .macOS("26.0"), swiftLanguageMode .v5), bundled into TapSpace.app by
-mac/Scripts/install.sh (release build, Info.plist, icon, ad-hoc codesign, rsync to /Applications/TapSpace.app, then open it).
+mac/Scripts/install.sh (release build, Info.plist, icon, ad-hoc codesign, rsync to /Applications/TapSpace.app; a running copy is
+never quit, relaunched or brought forward, and picks up the new build when it is next opened).
 Bundle id com.hayden.tapspace. A regular app (Dock icon) PLUS a menu-bar liquid pill (below). App icon: Resources/TapSpace.icon
 (Icon Composer format: a white tile with one flat blue dot), compiled by actool at install. Server URL: env
 TAPSPACE_URL, default http://127.0.0.1:4747. If the server is down at launch, start it with
@@ -80,6 +81,19 @@ above the bubble text (1 = natural aspect up to ~340 pt tall; 2/4 = 2 columns; 3
 lightbox. Images are served at /chat-media/<file>. Tap threads are text only: hide the paperclip there and toast
 "Images go to agents. Taps take text." on a drop.
 
+### Chat: masters' progress, card notes and links (added October 2026)
+Same data as the web page and Glint: `GET /api/agents` rows carry `progress`, `notes` and `notes_read`, plus a top-level `links`.
+- A third column when the window has room: one card per live master in a stable order (face with status dot, title, updated time,
+  unread dot, the goal in at most 2 lines, a segmented step track with the current step blue, and "3 of 5 · Build"; "No goal yet"
+  in muted text before a master publishes one). A click opens that master's thread.
+- Under each master in the rail: the cards Hayden sent back with notes that went to that master (thumbnail or title plus the
+  note's first words, newest first, at most 4 rows then "+N more") and the blue dot on the master. A row leaves when the master
+  posts a new version; opening the master's thread posts the read mark (POST /api/agents/read), so the web page, the app and
+  Glint agree.
+- Two masters messaging each other: their cards sit together, joined by a line that draws and pulses with TapSpace's chase (Core
+  Animation, paused when idle), one line "Title A → Title B · summary", and "Talking with <title>" under each in the rail.
+- Titles only (never a NAME with a session code, a path, a hex id or an issue number), no em dashes, flat colors.
+
 ### Menu-bar liquid pill (mirror SnappWAU as directly as possible)
 A borderless non-activating NSPanel at status-bar level, placed just RIGHT of the notch (SnappWAU sits LEFT of it; do not collide;
 on non-notch screens, near the right of the menu bar's center). Reuse/adapt Liquid.swift: a white pill showing the TapSpace mark
@@ -98,16 +112,21 @@ main window forward on that tab/thread. Same display-link sleep/wake discipline 
   app processes by PID when done (never pkill -f patterns; never touch SnappWAU or the live 4747 server).
 - No em dashes in any user-visible string. Product name "Snapp" has two Ps.
 - Built-in verification flags (like SnappWAU's): `--snapshot <dir>` renders each scene to PNG at 2x and exits (visual tab, a card in
-  notes mode, lightbox, chat tab on an agent thread, chat tab on a tap thread, pill collapsed, pill bulging, pill expanded) using the
-  real view hierarchy (NSView cacheDisplay / bitmapImageRepForCachingDisplay); `--fps` logs display-link frames per second with a
-  still/moving state; `--demo` scripts a ~10 s loop (switch tabs, move the rail selection, send-in a bubble, expand/collapse the pill)
-  so fps can be measured without a human. Optional `--tab chat --thread agent:NAME|owner/repo#n` to open a specific place.
+  notes mode, lightbox, chat tab on an agent thread, the same at 1512 x 887, chat tab on a tap thread, pill collapsed, pill bulging,
+  pill expanded) using the real view hierarchy (NSView cacheDisplay / bitmapImageRepForCachingDisplay); `--fps` logs display-link
+  frames per second with a still/moving state; `--demo` scripts a ~10 s loop (switch tabs, move the rail selection, send-in a bubble,
+  expand/collapse the pill) so fps can be measured without a human. Optional `--tab chat --thread agent:NAME|owner/repo#n` to open a
+  specific place.
+- Verification never takes the screen from the person using the Mac: `--snapshot` (the scenes, and the link frames with
+  `TAPSPACE_LINK_FRAMES=1`) runs offscreen as an accessory app (no Dock icon), never activates, and refuses any server but a
+  scratch one on this Mac. `--demo`, fps.sh and the ChatHarness drives run on screen:
+  only with that person's go.
 - Real signals only: `swift build -c release` clean (no warnings you introduced if avoidable), snapshots you actually LOOKED at with
   the Read tool, fps logs >= 110 while animating and the link paused when still, no crash in 30 s of --demo.
 - Do not run more than two heavy jobs at once. No Docker. No Xcode project needed (SwiftPM only).
 
 ## Done condition for the build
-mac/ builds in release; install.sh produces /Applications/TapSpace.app and opens it pointed at the LIVE server read-only use is fine
-(just opening it is fine: opening does not decide or post); all snapshot scenes rendered from a seeded scratch server and inspected;
+mac/ builds in release; install.sh produces /Applications/TapSpace.app without disturbing a running copy (OPEN=1 opens it behind the
+front app when none runs; opening does not decide or post); all snapshot scenes rendered from a seeded scratch server and inspected;
 fps measured; README.md gets a "Mac app" section (install, flags). Report: what you built (files), commits, snapshot paths, fps
 numbers, and anything not done with the honest reason.

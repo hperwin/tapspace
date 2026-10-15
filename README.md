@@ -246,12 +246,15 @@ Python 3.8+. No packages. Any modern browser.
 
 `mac/` is a native macOS app for the same server: the Visual and Chat tabs, plus a liquid pill in the menu bar (just right of the notch) that counts what is waiting on you and spreads into a list when you hover it. SwiftPM only, macOS 26.
 
-Install (release build, bundled as `TapSpace.app` with its icon, ad-hoc signed, copied to `/Applications`, then opened):
+On the Chat tab, a window wide enough for it gets a third column: one card per live master with its goal, its steps and the step it is on (masters publish these with `tap.py goal` and `tap.py step`). Under each master in the rail sit the cards you sent back with notes that went to that master, newest first, with a blue dot on the master. A row leaves when the master posts a new version, and they all clear when you open that master's thread (the web page and Glint clear too). When two masters message each other, their cards sit together, joined by a line that draws and pulses, and the rail says who each one is talking with.
+
+Install (release build, bundled as `TapSpace.app` with its icon, ad-hoc signed, copied to `/Applications`). Installing never quits, relaunches or brings forward a TapSpace that is running: it keeps its build until you next open it.
 
 ```bash
-mac/Scripts/install.sh                                      # opens on http://127.0.0.1:4747
-NO_OPEN=1 mac/Scripts/install.sh                            # install only
-TAPSPACE_URL=http://127.0.0.1:4748 mac/Scripts/install.sh   # open it on another server
+mac/Scripts/install.sh                                            # build and install
+BUNDLE_ONLY=1 mac/Scripts/install.sh                              # build and sign mac/.build/TapSpace.app only
+OPEN=1 mac/Scripts/install.sh                                     # also open it behind the front app, when it is not running
+OPEN=1 TAPSPACE_URL=http://127.0.0.1:4748 mac/Scripts/install.sh  # ... on another server
 ```
 
 The app reads `TAPSPACE_URL` (default `http://127.0.0.1:4747`) and starts the server with `tap.py up` if it is down.
@@ -260,19 +263,25 @@ Flags, for verification:
 
 | Flag | What it does |
 |---|---|
-| `--snapshot <dir>` | Renders every scene from the real views to 2x PNGs (Visual, a card in notes mode, lightbox, an agent thread, a thinking agent, a tap thread, the pill collapsed, bulging and expanded), writes `scenes.json`, and exits. |
-| `--demo` | A scripted 10 s loop (tabs, notes, rail selection, a bubble flying in, the pill spreading and retracting) that repeats until you quit. Never sends anything. |
+| `--snapshot <dir>` | Renders every scene from the real views to 2x PNGs (Visual, a card in notes mode, lightbox, an agent thread, the same thread in a 1512 by 887 window, a thinking agent opened the way a click opens it, a tap thread, the pill collapsed, bulging and expanded), writes `scenes.json` (each scene, any problems, and the masters data the app decoded), and exits. It runs offscreen with no Dock icon and never takes focus, and it refuses to run (exit 2) unless `TAPSPACE_URL` names a scratch server on this Mac. |
+| `--snapshot <dir>` with `TAPSPACE_LINK_FRAMES=1` | Instead of the scenes, checks the progress column's ordering and pairing rules and renders the line between two masters forming, chasing, turning and ending as 2x frames, 30 per second of motion (`f000.png`..., `frames.json`), offscreen like the scenes. |
+| `--demo` | A scripted 10 s loop (tabs, notes, rail selection, a bubble flying in, the pill spreading and retracting) that repeats until you quit. Never sends anything. On screen. |
 | `--fps` | Logs display-link frames per second each second, and whether each surface is moving, still or paused. |
 | `--tab visual\|chat`, `--thread agent:NAME\|owner/repo#n` | Open on a tab or thread. |
 
-Never test decisions or chat against the live server. The scripts work on a scratch one:
+Never test against the live server. The scripts work on a scratch one:
 
 ```bash
-mac/Scripts/seed.sh 4748                    # scratch server on :4748 seeded with real screenshots and two agents
-mac/Scripts/fps.sh http://127.0.0.1:4748 30 # --demo --fps for 30 s, then a frame-rate summary and crash check
-mac/Scripts/verify.sh 4748                  # all of it: seed, build, snapshots, fps, stop the server
-mac/Scripts/seed.sh --stop <data dir>       # stop a scratch server seed.sh started
+mac/Scripts/seed.sh 4748                      # scratch server: real screenshots, two masters with goal cards, two cards sent back with notes, chat
+mac/Scripts/seed.sh --link <its data dir>     # the two masters exchange a message (active for 10 minutes): right before a render
+mac/Scripts/seed.sh --copy 4749               # scratch server on a copy of the live cards, chat and agents
+mac/Scripts/verify.sh 4748                    # build, seed, link, what the server serves, offscreen scenes and link.mp4, the app against the server
+FPS=1 mac/Scripts/verify.sh 4748              # also the --demo fps run: a window and a second pill ON SCREEN
+mac/Scripts/fps.sh http://127.0.0.1:4748 30   # --demo --fps for 30 s on screen, then a frame-rate summary and crash check
+mac/Scripts/seed.sh --stop <its data dir>     # stop a scratch server seed.sh started
 ```
+
+A scratch server never pushes to a phone. A seeded one reads only its own Claude Code folder (its one link is the seeded exchange); a copy reads this Mac's transcripts, read-only, for links between the real masters. seed.sh only ever wipes a folder it made itself.
 
 The icon is `mac/Resources/TapSpace.icon` (Icon Composer format: a white tile with one blue dot); install.sh compiles it with `actool` into the app's `Assets.car` and `TapSpace.icns`.
 
