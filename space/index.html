@@ -205,6 +205,35 @@
   .thread .unread.show{transform:scale(1)}
   .thread.enter{animation:railin .8s cubic-bezier(.22,.9,.24,1) both}
   @keyframes railin{from{opacity:0;filter:blur(12px);transform:translateY(8px)}to{opacity:1;filter:blur(0);transform:none}}
+  .railtools{display:flex;gap:8px;padding:4px 4px 2px}
+  .rbtn{appearance:none;border:0;cursor:pointer;font:600 12.5px/1 -apple-system,BlinkMacSystemFont,sans-serif;
+    padding:10px 14px;border-radius:12px;display:flex;align-items:center;gap:7px;white-space:nowrap;
+    transition:transform .2s cubic-bezier(.22,.9,.24,1),background .25s ease,color .25s ease}
+  .rbtn:active{transform:scale(.96)}
+  .rbtn.new{background:var(--ink);color:#fff;flex:1;justify-content:center}
+  .rbtn.clear{background:rgba(0,0,0,.05);color:var(--ink)}
+  .rbtn.clear.arm{background:rgba(var(--hl),.12);color:rgb(var(--hl))}
+  .rbtn svg{width:14px;height:14px}
+  #newsheet{position:fixed;inset:0;z-index:60;display:flex;align-items:center;justify-content:center;
+    background:rgba(0,0,0,0);pointer-events:none;transition:background .35s ease}
+  #newsheet.in{background:rgba(0,0,0,.18);pointer-events:auto}
+  #newsheet .box{width:min(440px,calc(100vw - 32px));max-height:min(560px,80vh);display:flex;flex-direction:column;
+    background:#fff;border-radius:22px;box-shadow:var(--shadow);overflow:hidden;
+    transform:translateY(16px) scale(.97);opacity:0;transition:transform .45s cubic-bezier(.22,1.2,.36,1),opacity .25s ease}
+  #newsheet.in .box{transform:none;opacity:1}
+  #newsheet h4{margin:0;padding:18px 20px 4px;font-size:17px;font-weight:650;letter-spacing:-.01em}
+  #newsheet .hint{padding:0 20px 10px;font-size:12.5px;color:var(--faint)}
+  #newsheet .list{overflow-y:auto;padding:0 10px 10px}
+  #newsheet .proj{appearance:none;border:0;background:transparent;width:100%;text-align:left;cursor:pointer;
+    padding:11px 12px;border-radius:12px;font:inherit;display:flex;justify-content:space-between;gap:10px;
+    transition:background .2s ease,transform .2s ease}
+  #newsheet .proj:hover{background:rgba(0,0,0,.04)} #newsheet .proj:active{transform:scale(.98)}
+  #newsheet .proj b{font-weight:600;font-size:14px} #newsheet .proj span{font-size:12px;color:var(--faint)}
+  #newsheet form{display:flex;gap:8px;padding:10px 14px 14px;border-top:1px solid rgba(0,0,0,.06)}
+  #newsheet form .rbtn{flex:none;padding:10px 18px}
+  #newsheet input{flex:1;border:0;background:rgba(0,0,0,.045);border-radius:12px;padding:10px 12px;font:13.5px -apple-system,sans-serif;outline:none}
+  .chip.starting{background:rgba(var(--hl),.1);color:rgb(var(--hl))} .chip.starting i{animation:breathe .9s ease-in-out infinite}
+  .orb.starting{animation:orbswap 1.4s ease-in-out infinite}
   .railempty{font-size:12px;color:var(--faint);padding:8px 12px;line-height:1.5}
 
   .orb{width:38px;height:38px;border-radius:50%;flex:none;position:relative;
@@ -347,6 +376,7 @@
     .thread{width:auto;flex:none;max-width:230px;padding:8px 12px 8px 8px}
     .thread .sub{display:none}
     #agentlist,#taplist{display:contents}
+    .railtools{padding:0;flex:none} .rbtn.new{flex:none}
     .goal{width:200px}
     #pane{border-radius:18px}
     .msg{max-width:90%}
@@ -377,6 +407,10 @@
 <main id="space"></main>
 <section id="chatview">
   <aside id="rail">
+    <div class="railtools">
+      <button class="rbtn new" id="newsession" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg>New session</button>
+      <button class="rbtn clear" id="clearall" type="button">Clear all</button>
+    </div>
     <div class="railhead">Agents</div>
     <div id="agentlist"><div class="railempty">No agents in the space yet.</div></div>
     <div class="railhead">Your taps</div>
@@ -396,6 +430,12 @@
   </section>
 </section>
 <div class="toast" id="toast"></div>
+<div id="newsheet"><div class="box">
+  <h4>New session</h4>
+  <div class="hint">Starts a new master agent in a project. It joins this chat in a few seconds.</div>
+  <div class="list" id="projlist"></div>
+  <form id="projform"><input id="projpath" placeholder="Or a folder path, like ~/Developer/glint" autocomplete="off"><button class="rbtn new" type="submit">Start</button></form>
+</div></div>
 <div id="lightbox"><div id="lbstage"><img id="lbimg" alt=""></div><div id="lbcap"></div></div>
 
 <script>
@@ -893,7 +933,7 @@ function when(ts){
   return new Date(t).toLocaleDateString([], {month:'short', day:'numeric'});
 }
 const STATUS = {'needs-you':'Needs you', flying:'Flying', boarding:'Boarding', landed:'Landed'};
-const MASTER = {thinking:'Thinking', here:'Here', away:'Away', switching:'Switching car'};
+const MASTER = {thinking:'Thinking', here:'Here', away:'Away', switching:'Switching car', starting:'Starting'};
 function tapName(t){ return t.title.replace(/^\[[^\]]*\]\s*/, ''); }
 function tapAvatar(t){
   return `<span class="tapav ${t.status}"><svg viewBox="0 0 38 38"><circle class="trk" cx="19" cy="19" r="17"/>
@@ -1089,6 +1129,46 @@ $('#composer').addEventListener('submit', async e => {
     }, 1000);
     setTimeout(pollTaps, 2500); setTimeout(pollTaps, 6000);
   }
+});
+
+
+// ---- New session (a new master agent for a project) + Clear all ----
+const sheet = $('#newsheet');
+const postJ = (url, obj) => fetch(url, {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(obj)}).then(r => r.json()).catch(() => ({error:'TapSpace is not answering'}));
+function closeSheet(){ sheet.classList.remove('in'); }
+async function startSession(folder){
+  closeSheet();
+  const r = await postJ('/api/agents/new', {folder});
+  if (!r.ok){ toast(r.error || 'Could not start it'); return; }
+  toast('Starting ' + r.agent);
+  await pollAgents(); openThread(agentKey(r.agent));
+}
+$('#newsession').addEventListener('click', async () => {
+  $('#projpath').value = ''; sheet.classList.add('in');
+  const list = $('#projlist'); list.innerHTML = '<div class="railempty">Loading projects…</div>';
+  const d = await (await fetch('/api/projects')).json().catch(() => ({projects: []}));
+  list.innerHTML = '';
+  for (const p of d.projects || []){
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'proj';
+    b.innerHTML = `<b>${esc(p.name)}</b><span>${esc(p.short)}</span>`;
+    b.addEventListener('click', () => startSession(p.path)); list.appendChild(b);
+  }
+  $('#projpath').focus();
+});
+$('#projform').addEventListener('submit', e => { e.preventDefault(); const v = $('#projpath').value.trim(); if (v) startSession(v); });
+sheet.addEventListener('click', e => { if (e.target === sheet) closeSheet(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeSheet(); });
+let clearArm = 0;
+$('#clearall').addEventListener('click', async () => {
+  const btn = $('#clearall');
+  if (Date.now() > clearArm){ clearArm = Date.now() + 3000; btn.classList.add('arm'); btn.textContent = 'Tap to confirm';
+    setTimeout(() => { if (Date.now() >= clearArm){ btn.classList.remove('arm'); btn.textContent = 'Clear all'; } }, 3050); return; }
+  clearArm = 0; btn.classList.remove('arm'); btn.textContent = 'Clear all';
+  const r = await postJ('/api/chat/clear', {});
+  if (!r.ok){ toast(r.error || 'Could not clear'); return; }
+  toast(`Cleared ${r.archived_messages} messages. Saved in the archive.`);
+  chat = {agent: '', messages: []}; rendered = {key: null, sig: '', count: 0};
+  await pollAgents(); pollChat();
 });
 
 async function pollAgents(){

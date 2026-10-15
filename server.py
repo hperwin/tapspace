@@ -239,10 +239,19 @@ def _chat_import(path):
     return "/chat-media/" + name
 
 
+CHAT_SEQ = DATA / "chat-seq"           # last id ever used, so ids stay unique after a clear
+
+
 def _chat_add(agent, role, body, images=None):
     with _lock:
         rows = _chat_rows()
-        row = {"id": (rows[-1]["id"] + 1) if rows else 1, "agent": agent,
+        try:
+            seq = int(CHAT_SEQ.read_text())
+        except Exception:
+            seq = 0
+        nid = max(seq, rows[-1]["id"] if rows else 0) + 1
+        CHAT_SEQ.write_text(str(nid))
+        row = {"id": nid, "agent": agent,
                "role": role, "body": body, "ts": time.time()}
         if images:
             row["images"] = images
@@ -262,6 +271,8 @@ def _agent_state(info, rows):
     # the new car clears this the moment it starts listening
     if info.get("switching", 0) > info.get("listen", 0):
         return "switching"
+    if info.get("spawned", 0) > info.get("listen", 0):
+        return "starting"       # a New session that has not joined the chat yet
     if _chat_pending(rows):
         return "thinking"
     return "here" if time.time() - info.get("listen", 0) < 30 else "away"
@@ -282,10 +293,69 @@ def _agent_rows():
                     "seen": info.get("seen", 0), "first": info.get("first", 0),
                     "where": info.get("where", ""), "last": last, "count": len(rows),
                     "last_master": said[-1] if said else 0})
-    rank = {"thinking": 0, "switching": 0, "here": 1, "away": 2}
+    rank = {"thinking": 0, "switching": 0, "starting": 0, "here": 1, "away": 2}
     out.sort(key=lambda r: -r["last"])
     out.sort(key=lambda r: rank[r["state"]])
     return out
+
+
+def _chat_clear():
+    """Clear all: every thread's history and every agent that is not live moves to
+    data/archive/ (nothing is deleted). Live agents stay, with empty threads."""
+    with _lock:
+        arch = DATA / "archive"
+        arch.mkdir(exist_ok=True)
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        rows = _chat_rows()
+        if CHAT.exists():
+            shutil.copyfile(CHAT, arch / f"chat-{stamp}.jsonl")
+            if rows:
+                CHAT_SEQ.write_text(str(max(int(CHAT_SEQ.read_text() or 0) if CHAT_SEQ.exists() else 0,
+                                            rows[-1]["id"])))
+            CHAT.write_text("")
+        a = _agents()
+        if AGENTS.exists():
+            shutil.copyfile(AGENTS, arch / f"agents-{stamp}.json")
+        now = time.time()
+        keep = {n: i for n, i in a.items()
+                if now - i.get("listen", 0) < 30 or i.get("spawned", 0) > i.get("listen", 0)
+                or i.get("switching", 0) > i.get("listen", 0)}
+        tmp = AGENTS.with_suffix(".tmp")
+        tmp.write_text(json.dumps(keep, indent=1))
+        tmp.replace(AGENTS)
+    return len(rows), len(a) - len(keep)
+
+
+def _projects():
+    """Folders a New session can start in: git repos under ~/Developer, newest first."""
+    home = pathlib.Path.home()
+    seen = []
+    for d in [home / "Developer", home / "Developer" / "SnappStats"]:
+        if d.is_dir():
+            seen += [c for c in d.iterdir() if c.is_dir() and (c / ".git").is_dir()]   # repos, not worktrees
+    seen.sort(key=lambda c: -c.stat().st_mtime)
+    return [{"path": str(c), "name": c.name, "short": "~/" + str(c.relative_to(home))}
+            for c in seen[:40]]
+
+
+def _spawn_master(folder, name):
+    home = pathlib.Path.home().resolve()
+    f = pathlib.Path(folder).expanduser().resolve()
+    if not f.is_dir() or not (str(f) + "/").startswith(str(home) + "/"):
+        raise ValueError("pick a folder in your home folder")
+    name = name or f"Claude · {f.name} · {uuid.uuid4().hex[:4]}"
+    if not _NAME.match(name):
+        raise ValueError("bad name")
+    if name in _agents() and _agent_state(_agents()[name], []) in ("here", "starting"):
+        raise ValueError("an agent with that name is already running")
+    where = "~/" + str(f.relative_to(home)) if f != home else "~"
+    _agent_touch(name, spawned=time.time(), where=where)
+    log = DATA / "spawn.log"
+    with log.open("a") as fh:
+        subprocess.Popen(["bash", str(ROOT / "new-master.sh"), str(f), name],
+                         stdout=fh, stderr=subprocess.STDOUT, start_new_session=True,
+                         env={**os.environ, "TAPSPACE_URL": f"http://127.0.0.1:{PORT}"})
+    return name
 
 
 # ---- taps (the reviewer's own pilot issues, read through gh) ----
@@ -559,6 +629,9 @@ class H(BaseHTTPRequestHandler):
         if path == "/api/agents":
             self._json({"agents": _agent_rows()})
             return
+        if path == "/api/projects":
+            self._json({"projects": _projects()})
+            return
         if path == "/api/chat":
             self._json({"messages": _chat_rows(self._q("agent"))})
             return
@@ -647,13 +720,26 @@ class H(BaseHTTPRequestHandler):
             self._json({"error": "bad json"}, 400)
             return
 
-        if self.path in ("/api/chat", "/api/chat/reply", "/api/taps/say", "/api/chat/import"):
+        if self.path in ("/api/chat", "/api/chat/reply", "/api/taps/say", "/api/chat/import",
+                         "/api/agents/new", "/api/chat/clear"):
             # these speak for the reviewer: same-origin JSON only, so no other
             # page can drive them through the browser
             origin = self.headers.get("Origin")
             if (self.headers.get("content-type") or "").split(";")[0] != "application/json" or \
                (origin and origin not in (f"http://127.0.0.1:{PORT}", f"http://localhost:{PORT}")):
                 self._json({"error": "forbidden"}, 403)
+                return
+            if self.path == "/api/agents/new":
+                try:
+                    name = _spawn_master(str(p.get("folder") or ""), str(p.get("name") or "").strip())
+                except Exception as e:
+                    self._json({"error": str(e)}, 400)
+                    return
+                self._json({"ok": True, "agent": name})
+                return
+            if self.path == "/api/chat/clear":
+                msgs, agents = _chat_clear()
+                self._json({"ok": True, "archived_messages": msgs, "archived_agents": agents})
                 return
             if self.path == "/api/chat/import":
                 try:
