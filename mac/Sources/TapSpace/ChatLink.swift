@@ -24,12 +24,12 @@ enum ChatLinkBoard {
     /// "Glint app → TapSpace · Is the feed live?": titles in ink, the rest dim.
     /// Titles only; a missing title (never expected: both ends hold cards) is blank.
     static func label(_ l: AgentLink, titles: [String: String]) -> AttributedString {
-        var line = AttributedString(titles[l.from] ?? "")
+        var line = AttributedString(short(titles[l.from] ?? ""))
         line.foregroundColor = Color.ink
         line.font = .system(size: 11, weight: .semibold)
         var arrow = AttributedString(" → ")
         arrow.foregroundColor = Color.dim
-        var to = AttributedString(titles[l.to] ?? "")
+        var to = AttributedString(short(titles[l.to] ?? ""))
         to.foregroundColor = Color.ink
         to.font = .system(size: 11, weight: .semibold)
         line.append(arrow)
@@ -41,6 +41,12 @@ enum ChatLinkBoard {
             line.append(rest)
         }
         return line
+    }
+
+    /// A long title is cut short in the line so the message's own words still show
+    /// (both cards, with their full titles, sit right beside it).
+    static func short(_ title: String) -> String {
+        title.count > 14 ? title.prefix(13).trimmingCharacters(in: .whitespaces) + "\u{2026}" : title
     }
 
     /// VoiceOver: "Glint app is talking to TapSpace: Is the feed live?".

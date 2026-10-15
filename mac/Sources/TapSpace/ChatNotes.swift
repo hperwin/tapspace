@@ -119,7 +119,10 @@ struct RailNoteRow: View {
                         .fontWeight(.semibold)
                         .foregroundStyle(Color.ink)
                 } else {
-                    Text("\(Text(note.title).fontWeight(.semibold).foregroundStyle(Color.ink)) · \(Text(words).foregroundStyle(Color.dim))")
+                    // A long card title is cut short so the note's own words still show.
+                    let title = note.title.count > 24
+                        ? note.title.prefix(22).trimmingCharacters(in: .whitespaces) + "…" : note.title
+                    Text("\(Text(title).fontWeight(.semibold).foregroundStyle(Color.ink)) · \(Text(words).foregroundStyle(Color.dim))")
                 }
                 Spacer(minLength: 0)
             }
