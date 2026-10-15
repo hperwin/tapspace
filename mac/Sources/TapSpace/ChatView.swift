@@ -350,7 +350,7 @@ struct PaneView: View {
                     PaneHeader(agent: agent, tap: tap)
                         .modifier(SwapIn(box: swap, rise: 4))
                     Rectangle().fill(Color.hairline).frame(height: 1)
-                    if let tap, !tap.goals.isEmpty {
+                    if let tap, !tap.goals.isEmpty, ProcessInfo.processInfo.environment["CHATEXP_NOGOALS"] == nil {
                         GoalsStrip(goals: tap.goals)
                             .modifier(SwapIn(box: swap, rise: 4))
                         Rectangle().fill(Color.hairline).frame(height: 1)
@@ -606,9 +606,11 @@ struct MessageList: View {
     var body: some View {
         let _ = (animator.geo = geo)
         let msgs = messages
-        // Thinking means a message of Hayden's is unanswered; once the reply is
-        // in the thread the dots go, without waiting for the next agents poll.
-        let typing = agent?.state == "thinking" && msgs.last?.mine == true
+        // An agent: thinking with a message of Hayden's unanswered; once the
+        // reply is in the thread the dots go, without waiting for the next
+        // agents poll. A tap: it has seen (👀) his latest comment and not
+        // answered yet, the server's `replying`.
+        let typing = agent.map { $0.state == "thinking" && msgs.last?.mine == true } ?? (tap?.chatReplying ?? false)
         // A server row that confirmed an optimistic bubble keeps that bubble's
         // key (one row, one identity, its flight state intact) and still flies:
         // on a local server the row lands within the first frames of the flight.
@@ -625,12 +627,15 @@ struct MessageList: View {
         GeometryReader { box in
             let maxW = min(620, box.size.width * 0.82)
             ScrollView(.vertical) {
-                VStack(spacing: 12) {
+                // Lazy: opening a thread builds and lays out only the bubbles
+                // on screen (the bottom of it), not every message, so the tab
+                // slide and the rail glide never wait on a long thread.
+                LazyVStack(spacing: 12) {
                     if msgs.isEmpty {
                         Hello(agent: agent, tap: tap)
                             .frame(minHeight: box.size.height - 60)
                     }
-                    ForEach(rows, id: \.1) { m, k in
+                    ForEach(ProcessInfo.processInfo.environment["CHATEXP_NOLIST"] == nil ? rows : [], id: \.1) { m, k in
                         BubbleRow(m: m, box: animator.box(k), maxWidth: maxW, geo: geo)
                     }
                     // The dots' spring is scoped to the dots: on the list it would also
@@ -638,7 +643,7 @@ struct MessageList: View {
                     // on), washing out its flight out of the composer.
                     ZStack(alignment: .leading) {
                         if typing {
-                            TypingBubble()
+                            TypingBubble(caption: tap != nil ? "working on a reply" : nil)
                                 .transition(.asymmetric(
                                     insertion: .scale(scale: 0.4, anchor: .bottomLeading).combined(with: .opacity),
                                     removal: .scale(scale: 0.8, anchor: .bottomLeading).combined(with: .opacity)))
@@ -655,12 +660,11 @@ struct MessageList: View {
             // pass), except while a sent bubble lifts out of the composer below.
             // A mask here re-rendered the whole list offscreen every frame.
             .scrollClipDisabled(geo.flights > 0)
-            .scrollPosition($position)
-            .defaultScrollAnchor(.bottom)
+            .modifier(ExpPos(position: $position))
             // A fresh scroll view per thread opens at the bottom in the frame
             // that builds it; scrolling the old one there afterwards cost a
             // second full layout of the thread a frame later, mid-glide.
-            .id(store.thread)
+            .id(ProcessInfo.processInfo.environment["CHATEXP_NOID"] == nil ? store.thread : "one")
             // Stay pinned to the end while content or the viewport changes size
             // (markdown settling, goals appearing, the composer growing), when we
             // were at the end before the change or a thread just opened.
@@ -749,6 +753,7 @@ struct BubbleRow: View {
 
     var body: some View {
         let p = box?.value ?? 1
+        let _ = ProcessInfo.processInfo.environment["CHATEXP_COUNT"] != nil ? Harness.log("BUBBLE \(m.id)") : ()
         let flying = m.fly && box != nil && p != 1
         let measured = row != .zero && size != .zero && geo?.composer ?? .zero != .zero
         let lift = flying && measured ? flight() : nil
@@ -892,14 +897,26 @@ struct ReceiptLabel: View {
 }
 
 struct TypingBubble: View {
+    /// A tap thread says what the dots mean, in the meta line's voice.
+    var caption: String? = nil
+
     var body: some View {
-        TypingDots()
-            .frame(width: 26, height: 12)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
-            .background(UnevenRoundedRectangle(cornerRadii: .init(topLeading: bubbleR, bottomLeading: bubbleTail,
-                                                                  bottomTrailing: bubbleR, topTrailing: bubbleR),
-                                               style: .continuous).fill(Color.bubbleGrey))
+        VStack(alignment: .leading, spacing: 4) {
+            TypingDots()
+                .frame(width: 26, height: 12)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .background(UnevenRoundedRectangle(cornerRadii: .init(topLeading: bubbleR, bottomLeading: bubbleTail,
+                                                                      bottomTrailing: bubbleR, topTrailing: bubbleR),
+                                                   style: .continuous).fill(Color.bubbleGrey))
+            if let caption {
+                Text(caption)
+                    .font(.system(size: 10.5))
+                    .tracking(0.2)
+                    .foregroundStyle(Color.faint)
+                    .padding(.horizontal, 6)
+            }
+        }
     }
 }
 
@@ -1011,5 +1028,15 @@ struct SendButton: View {
         .opacity(0.25 + 0.75 * clamp01(v))
         .onAppear { s.snap(ready ? 1 : 0) }
         .onChange(of: ready) { _, r in s.set(r ? 1 : 0, r ? .pop : .snappy) }
+    }
+}
+
+struct ExpPos: ViewModifier {
+    @Binding var position: ScrollPosition
+    func body(content: Content) -> some View {
+        let e = ProcessInfo.processInfo.environment
+        if e["CHATEXP_NOPOS"] != nil { content.defaultScrollAnchor(.bottom) }
+        else if e["CHATEXP_INIT"] != nil { content.scrollPosition($position).defaultScrollAnchor(.bottom, for: .initialOffset).defaultScrollAnchor(.bottom) }
+        else { content.scrollPosition($position).defaultScrollAnchor(.bottom) }
     }
 }

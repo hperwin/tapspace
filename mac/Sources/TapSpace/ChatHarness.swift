@@ -1,8 +1,9 @@
 import AppKit
 
 /// Chat-lane verification drive (like PillHarness for the pill). Only runs
-/// when TAPSPACE_CHAT_DRIVE names an output directory; writes go to whatever
-/// TAPSPACE_URL points at, so point it at a SCRATCH server, never :4747.
+/// when TAPSPACE_CHAT_DRIVE names an output directory and TAPSPACE_URL names a
+/// local scratch server: it refuses (logs CHATDRIVE refused, drives nothing)
+/// when TAPSPACE_URL is unset or on the live port 4747.
 ///
 ///   TAPSPACE_CHAT_DRIVE=<dir>          where the PNG frames land
 ///   TAPSPACE_CHAT_IMAGES=<a.png:b.png> images to attach (paperclip path)
@@ -46,10 +47,37 @@ enum ChatHarness {
         lastRailFrame = now
     }
 
-    static var enabled: Bool { ProcessInfo.processInfo.environment["TAPSPACE_CHAT_DRIVE"] != nil }
+    /// The drive hooks are published only when a drive was asked for AND
+    /// the server is a scratch one.
+    static var enabled: Bool {
+        ProcessInfo.processInfo.environment["TAPSPACE_CHAT_DRIVE"] != nil && refusal() == nil
+    }
+
+    /// Why a drive must not run against this server, or nil when it may.
+    /// Both modes act as Hayden (the drive POSTs /api/chat; the rail marks
+    /// threads read and refreshes taps), so they only run against a server
+    /// named explicitly in TAPSPACE_URL, on this machine, off the live port.
+    static func refusal(base: URL = API.base,
+                        env: [String: String] = ProcessInfo.processInfo.environment) -> String? {
+        guard let raw = env["TAPSPACE_URL"], !raw.isEmpty else {
+            return "TAPSPACE_URL is unset, so the base is the live server"
+        }
+        guard ["127.0.0.1", "localhost"].contains(base.host ?? "") else {
+            return "\(base.absoluteString) is not a local scratch server"
+        }
+        let port = base.port ?? (base.scheme == "https" ? 443 : 80)
+        if port == CoreServer.livePort { return "port \(port) is the live server" }
+        return nil
+    }
 
     static func startIfAsked(store: Store) {
         let env = ProcessInfo.processInfo.environment
+        let asked = env["TAPSPACE_CHAT_RAIL"] != nil || env["TAPSPACE_CHAT_DRIVE"] != nil
+        if asked, !started, let why = refusal() {
+            started = true
+            Harness.log("CHATDRIVE refused: \(why). Point TAPSPACE_URL at a scratch server.")
+            return
+        }
         if env["TAPSPACE_CHAT_RAIL"] != nil, !started {
             // Rail-only motion for --fps: the selection steps every 1.5 s, nothing else moves.
             started = true

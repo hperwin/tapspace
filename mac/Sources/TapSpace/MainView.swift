@@ -5,13 +5,14 @@ import SwiftUI
 struct RootView: View {
     let store: Store
     let visual: VisualModel
-    /// 0 while the first state is in flight, springs to 1 when it lands:
-    /// the space blurs up into focus as the connecting mark dissolves.
+    /// 0 while the first state is in flight, springs to 1 when it lands: the
+    /// space opens from white as the connecting mark dissolves. Read only by
+    /// ShellEntranceVeil and ShellEntranceMark, so a frame of the entrance
+    /// re-evaluates those two and never RootView or the tab trees.
     @State private var ready = SpringBox(0, SpringPreset(stiffness: 150, damping: 22))
 
     var body: some View {
         let lb = visual.lightbox?.progress.value ?? 0
-        let r = clamp01(ready.value)
         ZStack(alignment: .top) {
             Color.white
             ZStack(alignment: .top) {
@@ -26,19 +27,11 @@ struct RootView: View {
                     .modifier(ShellTabSlide(progress: store.tabProgress, side: 1))
                     .allowsHitTesting(store.tab == .chat)
                 ShellTabVeil(progress: store.tabProgress)
+                ShellEntranceVeil(ready: ready)
             }
             .blur(radius: 14 * clamp01(lb))
-            .opacity(r)
-            .blur(radius: r < 0.999 ? 16 * (1 - r) : 0)
-            .scaleEffect(0.985 + 0.015 * r)
             TopBar(store: store)
-            if r < 0.999 {
-                ConnectingView(down: store.connection == .down)
-                    .opacity(1 - r)
-                    .blur(radius: 10 * r)
-                    .scaleEffect(1 + 0.05 * r)
-                    .allowsHitTesting(false)
-            }
+            ShellEntranceMark(ready: ready, down: store.connection == .down)
             if let box = visual.lightbox {
                 LightboxView(lb: box, model: visual)
             }
@@ -50,7 +43,7 @@ struct RootView: View {
         .onChange(of: store.ticketsLoaded, initial: true) { was, loaded in
             guard loaded else { return }
             // Already there when the window appeared: no entrance to play.
-            if was == loaded { ready.snap(1) } else { ready.set(1) }
+            if was == loaded { ready.snap(1) } else { ShellEntranceProbe.play(ready) }
         }
     }
 }
@@ -430,7 +423,6 @@ struct ConnectingView: View {
             }
         }
         .frame(width: 280, height: 120)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task {
             try? await Task.sleep(for: .seconds(2.5))
             withAnimation(.smooth(duration: 0.6)) { slow = true }

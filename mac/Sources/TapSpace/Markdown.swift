@@ -99,7 +99,7 @@ struct MarkdownText: View {
         .lineSpacing(2.5)
         .foregroundStyle(ink)
         .tint(ink)
-        .textSelection(.enabled)
+        .modifier(ExpSel())
     }
 }
 
@@ -164,5 +164,11 @@ struct MDCode: View {
                 .padding(10)
         }
         .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(well))
+    }
+}
+
+struct ExpSel: ViewModifier {
+    func body(content: Content) -> some View {
+        if ProcessInfo.processInfo.environment["CHATEXP_NOSEL"] == nil { content.textSelection(.enabled) } else { content }
     }
 }
