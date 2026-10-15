@@ -162,7 +162,7 @@ final class HarnessSnapshot {
 
     /// Titles only, like every surface Hayden sees, plus what the rail lists under it.
     private func chatNote(_ agent: Agent) -> String {
-        "\(agent.title) (\(agent.state)), notes \(listedNotes(agent)), links \(store.links.filter(\.active).count) active"
+        "\(agent.title) (\(agent.state)), messages \(store.chats[agent.name]?.count ?? 0), notes \(listedNotes(agent)), links \(store.links.filter(\.active).count) active"
     }
 
     /// Snap every spring to rest, across a few layout passes (layout can arm
