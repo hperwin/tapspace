@@ -639,7 +639,7 @@ def _served(t, ix):
 
 
 # ---- a master's run: its north star, its steps, where it is now (tap.py goal / step) ----
-_PLAIN = re.compile(r'^[^\x00-\x1f<>"–—]+$')    # one plain line: no markup, quotes or long dashes
+_PLAIN = re.compile(r'^[^\x00-\x1f<>"\u2013\u2014]+$')    # one plain line: no markup, quotes or long dashes
 
 
 def _bad(msg):
