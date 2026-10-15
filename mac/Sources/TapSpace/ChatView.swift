@@ -739,9 +739,12 @@ extension Store {
     /// The chat tab is up on this thread (window focus aside): reading counts.
     var isViewingCandidate: Bool { tab == .chat && windowKey }
 
+    /// An explicit open (rail row, note row, progress card): its replies and its
+    /// card notes are read. Notes are read only here and when one lands on screen.
     func open(_ key: String) {
         thread = key
         markRead(key)
+        readNotes(key)
     }
 }
 
