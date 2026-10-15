@@ -18,8 +18,11 @@ Run:  python3 server.py     (or: python3 tap.py up)
 URL:  http://127.0.0.1:4747
 """
 import base64
+import hmac
+import html
 import json
 import os
+import secrets
 import shutil
 import subprocess
 import pathlib
@@ -28,6 +31,9 @@ import threading
 import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import urlencode
+
+import qr
 
 # media a version can carry; videos stream with Range support so the space can scrub
 _CTYPES = {".png": "image/png", ".mp4": "video/mp4", ".mov": "video/quicktime",
@@ -85,6 +91,127 @@ INBOX = DATA / "INBOX.jsonl"
 CHAT = DATA / "chat.jsonl"
 MEDIA = DATA / "chat-media"          # images attached in the Chat tab
 PORT = int(os.environ.get("TAPSPACE_PORT", "4747"))
+VERSION = _rig(pathlib.Path(__file__).read_bytes())
+
+# ---- the phone (Glint): token, route, push ----
+# Local callers (tap.py, the page, the Mac app) need nothing. Anything else, which
+# includes every request through a tunnel, sends `Authorization: Bearer <data/token>`.
+TOKEN_FILE = DATA / "token"
+TOKEN = ""                           # read at startup
+REMOTE = DATA / "remote.json"        # the phone's route to this Mac, written by tap.py pair
+DEVICES = DATA / "devices.json"      # phone push tokens (POST /api/devices)
+APNS = pathlib.Path(os.environ.get("TAPSPACE_APNS_DIR") or pathlib.Path.home() / ".config/glint/apns")
+OPENSSL = shutil.which("openssl") or "/usr/bin/openssl"
+
+
+def _token():
+    if not TOKEN_FILE.exists():
+        fd = os.open(TOKEN_FILE, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        os.write(fd, secrets.token_urlsafe(32).encode())
+        os.close(fd)
+    return TOKEN_FILE.read_text().strip()
+
+
+def _pair_link():
+    """glint://pair?url=...&token=... for the route tap.py pair opened, or None."""
+    try:
+        return "glint://pair?" + urlencode({"url": json.loads(REMOTE.read_text())["url"],
+                                            "token": TOKEN})
+    except Exception:
+        return None
+
+
+def _apns():
+    """The APNs key config, or None until ~/.config/glint/apns holds AuthKey_*.p8 + key.json."""
+    try:
+        conf = {"team_id": "289D9TAJCH", "topic": "com.tappinai.glint",
+                **json.loads((APNS / "key.json").read_text())}
+        conf["p8"] = str(next(APNS.glob("AuthKey_*.p8")))
+        return conf if conf.get("key_id") else None
+    except Exception:
+        return None
+
+
+def _b64u(b):
+    return base64.urlsafe_b64encode(b).rstrip(b"=").decode()
+
+
+_JWT = {"kid": "", "ts": 0.0, "v": ""}
+
+
+def _jwt(c):
+    """ES256 provider token, signed by openssl and reused for 50 minutes (APNs allows 60)."""
+    if _JWT["kid"] == c["key_id"] and time.time() - _JWT["ts"] < 3000:
+        return _JWT["v"]
+    head = _b64u(json.dumps({"alg": "ES256", "kid": c["key_id"]}).encode()) + "." + \
+        _b64u(json.dumps({"iss": c["team_id"], "iat": int(time.time())}).encode())
+    der = subprocess.run([OPENSSL, "dgst", "-sha256", "-sign", c["p8"]], input=head.encode(),
+                         capture_output=True, check=True).stdout
+    # DER SEQUENCE { INTEGER r, INTEGER s } -> the fixed 64-byte r||s a JWT carries
+    r = der[4:4 + der[3]]
+    s = der[6 + der[3]:6 + der[3] + der[5 + der[3]]]
+    _JWT.update(kid=c["key_id"], ts=time.time(),
+                v=head + "." + _b64u(r[-32:].rjust(32, b"\0") + s[-32:].rjust(32, b"\0")))
+    return _JWT["v"]
+
+
+def _push(title, body, **ref):
+    """Alerts every registered phone; ref is {key: thread} or {id: card}, for the tap-through."""
+    c = _apns()
+    try:
+        devs = json.loads(DEVICES.read_text())
+    except Exception:
+        devs = {}
+    if not c or not devs:
+        return
+    payload = json.dumps({"aps": {"alert": {"title": title, "body": (body or "Sent you an image")[:140]},
+                                  "sound": "default", "thread-id": next(iter(ref.values()))}, **ref})
+    threading.Thread(target=_push_send, args=(c, devs, payload), daemon=True).start()
+
+
+def _push_send(c, devs, payload):
+    dead = []
+    with (DATA / "push.log").open("a") as log:
+        for tok, d in devs.items():
+            host = "api.sandbox.push.apple.com" if d.get("env") == "sandbox" else "api.push.apple.com"
+            try:
+                r = subprocess.run(["curl", "-s", "--http2", "-w", "\n%{http_code}",
+                                    "-H", f"authorization: bearer {_jwt(c)}",
+                                    "-H", f"apns-topic: {c['topic']}", "-H", "apns-push-type: alert",
+                                    "-d", payload, f"https://{host}/3/device/{tok}"],
+                                   capture_output=True, text=True, timeout=20)
+                out, _, code = r.stdout.rpartition("\n")
+            except Exception as e:
+                out, code = str(e), "error"
+            log.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {tok[:8]} {code} {out[:200]}\n")
+            if code == "410" or "BadDeviceToken" in out:
+                dead.append(tok)
+    if dead:
+        with _lock:
+            left = {k: v for k, v in json.loads(DEVICES.read_text()).items() if k not in dead}
+            DEVICES.write_text(json.dumps(left, indent=1))
+
+
+# ---- change cursor: GET /api/wait returns the moment anything a client shows changes ----
+# It starts at the boot time in ms, so a cursor from before a restart is never ahead.
+_cv = threading.Condition()
+KINDS = ("agents", "chat", "taps", "cards")
+CURSOR = dict.fromkeys(("n",) + KINDS, int(time.time() * 1000))
+
+
+def _bump(*kinds):
+    with _cv:
+        CURSOR["n"] += 1
+        CURSOR.update(dict.fromkeys(kinds, CURSOR["n"]))
+        _cv.notify_all()
+
+
+def _wait(since, timeout):
+    with _cv:
+        fresh = 0 < since <= CURSOR["n"]          # else: first call, or a cursor from another boot
+        if fresh:
+            _cv.wait_for(lambda: CURSOR["n"] > since, timeout)
+        return {"cursor": CURSOR["n"], "changed": [k for k in KINDS if not fresh or CURSOR[k] > since]}
 
 # taps = the reviewer's own agent issues on GitHub (authored by them, tap label)
 TAP_LABEL = os.environ.get("TAPSPACE_TAP_LABEL", "nava")
@@ -257,6 +384,7 @@ def _chat_add(agent, role, body, images=None):
             row["images"] = images
         with CHAT.open("a") as fh:
             fh.write(json.dumps(row) + "\n")
+    _bump("chat", "agents")
     return row
 
 
@@ -299,6 +427,21 @@ def _agent_rows():
     return out
 
 
+def _agents_watch():
+    """Agent state also changes with time (Here goes Away, a new car starts listening),
+    so the cursor follows the rendered rows, not only the writes."""
+    last = None
+    while True:
+        try:
+            sig = [(r["name"], r["state"], r["where"]) for r in _agent_rows()]
+            if sig != last:
+                last = sig
+                _bump("agents")
+        except Exception:
+            pass
+        time.sleep(1)
+
+
 def _chat_clear():
     """Clear all: every thread's history and every agent that is not live moves to
     data/archive/ (nothing is deleted). Live agents stay, with empty threads."""
@@ -323,6 +466,7 @@ def _chat_clear():
         tmp = AGENTS.with_suffix(".tmp")
         tmp.write_text(json.dumps(keep, indent=1))
         tmp.replace(AGENTS)
+    _bump("chat", "agents")
     return len(rows), len(a) - len(keep)
 
 
@@ -451,7 +595,16 @@ _ORDER = {"needs-you": 0, "flying": 1, "boarding": 2, "landed": 3}
 def _publish(items):
     items.sort(key=lambda t: t["last"], reverse=True)       # newest first...
     items.sort(key=lambda t: _ORDER[t["status"]])          # ...within each status
+    old, known = TAPS["items"], TAPS["fetched"]
     TAPS.update({"items": items, "fetched": time.time(), "error": ""})
+    if items == old:
+        return
+    _bump("taps")
+    before = {t["key"]: len(t["messages"]) for t in old}
+    for t in items if known else []:
+        said = [m for m in t["messages"][before.get(t["key"], len(t["messages"])):] if m["who"] == "tap"]
+        if said:
+            _push(t["title"], said[-1]["body"], key=t["key"])
 
 
 def _refresh_taps():
@@ -566,6 +719,7 @@ def _save(state):
     tmp = STATE.with_suffix(".tmp")
     tmp.write_text(json.dumps(state, indent=1))
     tmp.replace(STATE)
+    _bump("cards")
 
 
 def _find(state, tid):
@@ -606,7 +760,23 @@ class H(BaseHTTPRequestHandler):
         from urllib.parse import parse_qs, urlsplit
         return (parse_qs(urlsplit(self.path).query).get(key) or [""])[0].strip()
 
+    def _local(self):
+        """On this Mac: a loopback client with no proxy header. Tunnels (Tailscale Serve,
+        ngrok) also connect from loopback, and they always add one of these headers."""
+        return (self.client_address[0].startswith("127.") or self.client_address[0] == "::1") and \
+            not any(k.lower() in ("forwarded", "x-real-ip", "tailscale-user-login") or
+                    k.lower().startswith(("x-forwarded-", "ngrok-")) for k in self.headers.keys())
+
+    def _allowed(self):
+        if self._local() or (TOKEN and hmac.compare_digest(
+                (self.headers.get("Authorization") or "").encode(), f"Bearer {TOKEN}".encode())):
+            return True
+        self._json({"error": "unauthorized"}, 401)
+        return False
+
     def do_GET(self):
+        if not self._allowed():
+            return
         path = self.path.split("?")[0]
         if path in ("/", "/index.html"):
             raw = (SPACE / "index.html").read_bytes()
@@ -633,7 +803,35 @@ class H(BaseHTTPRequestHandler):
             self._json({"projects": _projects()})
             return
         if path == "/api/chat":
-            self._json({"messages": _chat_rows(self._q("agent"))})
+            after = int(self._q("after")) if self._q("after").isdigit() else 0
+            self._json({"messages": [r for r in _chat_rows(self._q("agent")) if r["id"] > after]})
+            return
+        if path == "/api/wait":
+            try:
+                since = int(self._q("since") or 0)
+                timeout = min(30.0, max(0.0, float(self._q("timeout") or 25)))
+            except ValueError:
+                self._json({"error": "since and timeout are numbers"}, 400)
+                return
+            self._json(_wait(since, timeout))
+            return
+        if path == "/api/health":
+            self._json({"ok": True, "version": VERSION, "push": bool(_apns()), "time": time.time()})
+            return
+        if path == "/pair":
+            if not self._local():
+                self._json({"error": "pairing is only shown on this Mac"}, 403)
+                return
+            link = _pair_link()
+            body = (f"<p>In Glint, open You, then Pair with your Mac, and scan this.</p>{qr.svg(link)}"
+                    f"<p><code>{html.escape(link)}</code></p>" if link else
+                    "<p>No route to your phone yet. Run <code>python3 tap.py pair</code> on this Mac, "
+                    "then reload this page.</p>")
+            self._bytes(("<!doctype html><meta name=viewport content='width=device-width'>"
+                         "<title>Pair Glint</title><style>body{font:16px -apple-system,system-ui;"
+                         "max-width:420px;margin:40px auto;padding:0 16px}svg{width:100%;height:auto}"
+                         "code{word-break:break-all;font-size:12px}</style><h1>Pair Glint</h1>" +
+                         body).encode(), "text/html; charset=utf-8")
             return
         if path == "/api/chat/listen":
             # an agent's poll: joins the space under its name, gets its unanswered messages
@@ -713,6 +911,8 @@ class H(BaseHTTPRequestHandler):
         self.send_error(404)
 
     def do_POST(self):
+        if not self._allowed():
+            return
         try:
             n = int(self.headers.get("content-length", 0))
             p = json.loads(self.rfile.read(n).decode())
@@ -721,7 +921,7 @@ class H(BaseHTTPRequestHandler):
             return
 
         if self.path in ("/api/chat", "/api/chat/reply", "/api/taps/say", "/api/chat/import",
-                         "/api/agents/new", "/api/chat/clear"):
+                         "/api/agents/new", "/api/chat/clear", "/api/devices"):
             # these speak for the reviewer: same-origin JSON only, so no other
             # page can drive them through the browser
             origin = self.headers.get("Origin")
@@ -741,7 +941,25 @@ class H(BaseHTTPRequestHandler):
                 msgs, agents = _chat_clear()
                 self._json({"ok": True, "archived_messages": msgs, "archived_agents": agents})
                 return
+            if self.path == "/api/devices":
+                tok = str(p.get("token") or "").strip()
+                if not re.match(r"^[0-9a-fA-F]{64,200}$", tok):
+                    self._json({"error": "bad device token"}, 400)
+                    return
+                with _lock:
+                    try:
+                        devs = json.loads(DEVICES.read_text())
+                    except Exception:
+                        devs = {}
+                    devs[tok] = {"env": "sandbox" if p.get("env") == "sandbox" else "production",
+                                 "ts": time.time()}
+                    DEVICES.write_text(json.dumps(devs, indent=1))
+                self._json({"ok": True, "push": bool(_apns())})
+                return
             if self.path == "/api/chat/import":
+                if not self._local():       # it reads files on this Mac
+                    self._json({"error": "only from this Mac"}, 403)
+                    return
                 try:
                     self._json({"ok": True, "url": _chat_import(str(p.get("path") or ""))})
                 except Exception as e:
@@ -772,6 +990,7 @@ class H(BaseHTTPRequestHandler):
                 else:
                     _agent_touch(name, listen=time.time())
                     row = _chat_add(name, "master", body, images)
+                    _push(name, body, key="agent:" + name)
                 self._json({"ok": True, "message": row})
                 return
             key = p.get("key", "")
@@ -850,6 +1069,7 @@ class H(BaseHTTPRequestHandler):
                 })
                 _save(state)
             _touch(p.get("campaign"), p["agent"], "posted", p["title"])
+            _push("New visual", p["title"], id=tid)
             self._json({"ok": True, "id": tid, "version": 1})
             return
 
@@ -876,6 +1096,7 @@ class H(BaseHTTPRequestHandler):
                 _save(state)
             _touch(t.get("campaign"), t["agent"], "iterating",
                    p.get("note", "") or t["title"])
+            _push("New visual", t["title"], id=tid)
             self._json({"ok": True, "id": tid, "version": v})
             return
 
@@ -944,6 +1165,8 @@ if __name__ == "__main__":
     INBOX.touch(exist_ok=True)
     if not STATE.exists():
         _save({"tickets": []})
+    TOKEN = _token()
+    threading.Thread(target=_agents_watch, daemon=True).start()
     threading.Thread(target=_scan_sessions, daemon=True).start()
     threading.Thread(target=_taps_loop, daemon=True).start()
     threading.Thread(target=_watch_loop, daemon=True).start()
