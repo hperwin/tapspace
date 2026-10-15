@@ -1191,7 +1191,7 @@ function renderHead(d){
     const t = d.tap;
     sig = t.key + '|' + t.status + '|' + t.title;
     html = tapAvatar(t) + `<span class="tx"><div class="nm">${esc(tapName(t))}</div>
-      <div class="sub">${esc(t.key)} · <a href="${esc(t.url)}" target="_blank" rel="noopener">open issue</a></div></span>
+      <div class="sub">${esc(t.repo.split('/')[1] || t.repo)} · <a href="${esc(t.url)}" target="_blank" rel="noopener">open issue</a></div></span>
       <span class="chip ${t.status}"><i></i>${STATUS[t.status]}</span>`;
   }
   if (head.dataset.sig !== sig){
@@ -1234,7 +1234,7 @@ function renderThread(){
   msgsEl.innerHTML = '';
   if (!d.msgs.length){
     msgsEl.innerHTML = d.agent
-      ? `<div class="hello"><div class="big">Hey.</div>A direct line to ${esc(d.agent.name)}. Say anything.</div>`
+      ? `<div class="hello"><div class="big">Hey.</div>A direct line to ${esc(d.agent.title || 'Claude')}. Say anything.</div>`
       : `<div class="hello"><div class="big">Boarding.</div>This tap hasn’t said anything yet. It posts its plan here when it takes off.</div>`;
   }
   for (const m of d.msgs){
@@ -1368,7 +1368,7 @@ setInterval(() => { rendered.sig = ''; renderThread(); renderRail(); }, 30000); 
 </script>
 
 <script type="module">
-/* ---- presence HUD (top right) — fully automatic, agents report nothing ----
+/* ---- presence HUD (top right): fully automatic, agents report nothing ----
    Rows come from the server's own request stream; the session count comes
    from Claude transcript mtimes on disk. anime.js drives the motion; if the
    import ever fails the HUD still renders statically. */
@@ -1401,7 +1401,7 @@ function animateRing(row){
   if (!A){ return; }
   if (row.state === 'fading'){ return; }
   if (row.kind === 'waiting'){
-    // full quiet ring, breathing — "your move"
+    // full quiet ring, breathing: "your move"
     c.removeAttribute('stroke-dasharray');
     row.anims.push(A.animate(c, {opacity: [.3, .95], duration: 1500,
       alternate: true, loop: true, ease: 'inOutSine'}));
