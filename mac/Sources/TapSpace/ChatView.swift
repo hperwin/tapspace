@@ -7,16 +7,32 @@ private let agentLabel = ["thinking": "Thinking", "here": "Here", "away": "Away"
 
 struct ChatView: View {
     let store: Store
+    /// Room for the masters' progress column beside the thread.
+    @State private var wide = true
+
+    static let panelWidth: CGFloat = 288
 
     var body: some View {
         HStack(alignment: .top, spacing: 22) {
             RailView(store: store)
                 .frame(width: 300)
             PaneView(store: store)
+            if wide {
+                ChatProgressPanel()
+                    .frame(width: Self.panelWidth)
+                    .frame(maxHeight: .infinity, alignment: .top)
+            }
         }
         .padding(.horizontal, 40)
-        .frame(maxWidth: 1240)
+        .frame(maxWidth: wide ? 1600 : 1240)
         .frame(maxWidth: .infinity)
+        // The window's width, not the capped one. The column shows from 1190 pt
+        // and leaves below 1160 (no flicker on a live resize near the edge), and
+        // never animates: a springing width would relayout the thread every frame.
+        .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { w in
+            let next = wide ? w >= 1160 : w >= 1190
+            if next != wide { wide = next }
+        }
         .overlay { ChatLightboxView(lb: ChatMedia.shared.lightbox) }
         .coordinateSpace(.named("chat"))
     }
