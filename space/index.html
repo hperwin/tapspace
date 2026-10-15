@@ -236,7 +236,7 @@
   .note:active{transform:scale(.98)}
   .note img{width:24px;height:24px;border-radius:6px;flex:none;object-fit:cover;object-position:top;background:#f2f2f3}
   .note .nx{flex:1;min-width:0;font-size:11.5px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .note .nx b{font-weight:600;color:var(--ink)}
+  .note .nx b{font-weight:600;color:var(--ink);display:inline-block;max-width:58%;overflow:hidden;text-overflow:ellipsis;vertical-align:top}
   .note.enter{animation:railin .7s cubic-bezier(.22,.9,.24,1) both}
   .note.out{animation:noteout .34s ease forwards;pointer-events:none}
   @keyframes noteout{to{opacity:0;filter:blur(6px);max-height:0;padding-top:0;padding-bottom:0}}
@@ -417,7 +417,7 @@
     transition:height .5s cubic-bezier(.22,.9,.24,1),margin-top .5s cubic-bezier(.22,.9,.24,1),opacity .35s ease}
   .pgap.open{height:20px;margin-top:0;opacity:1}
   .pgap span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
-  .pgap b{font-weight:600;color:var(--ink)}
+  .pgap b{font-weight:600;color:var(--ink);display:inline-block;max-width:36%;overflow:hidden;text-overflow:ellipsis;vertical-align:top}
   .pgap em{flex:none;margin-left:8px;font-style:normal;color:var(--faint);font-variant-numeric:tabular-nums}
   #progress .railempty{padding:8px 4px}
   @media (min-width:1181px){
