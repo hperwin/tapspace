@@ -180,6 +180,38 @@ Endpoints: `GET /api/agents`, `GET /api/chat?agent=NAME`,
 `POST /api/chat/reply {agent, body, images?}` (images: `[{b64, ext}]`), `GET /api/taps`,
 `POST /api/taps/say {key: "owner/repo#n", body}`, `POST /api/taps/refresh`.
 The endpoints that speak for you accept same-origin JSON only.
+`GET /api/chat?agent=NAME&after=ID` returns only the rows after that id.
+
+## Your phone (Glint)
+
+The Glint iPhone app is a remote for the same space: the same agents, threads,
+taps and cards as this page and the Mac app.
+
+1. **Pair.** On the Mac, run `python3 tap.py pair`. It opens a route from your
+   phone to this Mac and prints a `glint://pair?url=...&token=...` link plus a QR
+   code (also at `http://127.0.0.1:4747/pair`, which only this Mac can open). In
+   Glint, open You, then Pair with your Mac, and scan it.
+   - **Tailscale Serve** (private HTTPS, preferred) when this Mac is logged in to
+     Tailscale. Log in on the Mac and on your phone, run `tap.py pair` again, and
+     it switches over and closes ngrok.
+   - **ngrok** otherwise: a public URL, reused while the tunnel runs (set
+     `TAPSPACE_NGROK_DOMAIN` for a reserved domain). `tap.py pair --off` closes it.
+2. **Token.** The server makes `data/token` on first start (mode 600). A request
+   counts as local only when it comes from loopback with no proxy header
+   (`X-Forwarded-*`, `Forwarded`, `X-Real-IP`, `Tailscale-User-Login`, `Ngrok-*`).
+   Every other request needs `Authorization: Bearer <token>` or gets 401; local
+   callers need nothing. `/api/chat/import` and `/pair` answer local callers only.
+3. **Live updates.** `GET /api/wait?since=<cursor>&timeout=25` (30 max) returns
+   `{cursor, changed: ["agents", "chat", "taps", "cards"]}` the moment any of
+   them changes, at once when you are behind, and an empty `changed` on timeout.
+   Start with `since=0`.
+4. **Push.** `POST /api/devices {token, env: "sandbox"|"production"}` stores the
+   phone in `data/devices.json`. Agent replies, tap comments and new or updated
+   cards then send a notification, once an APNs key exists:
+   `~/.config/glint/apns/AuthKey_<KEYID>.p8` plus `key.json`
+   `{"key_id": "<KEYID>", "team_id": "289D9TAJCH", "topic": "com.tappinai.glint"}`.
+   `GET /api/health` returns `{ok, version, push, time}`; `push` says whether the
+   key is in place. Sends are logged to `data/push.log`.
 
 ## The presence HUD
 
@@ -204,7 +236,7 @@ Keep recordings short (5 to 20 seconds, under ~60MB; the CLI enforces the cap). 
 
 ## Security
 
-The server binds to `127.0.0.1` only and has no auth. It is built for one human and their agents on one machine. Do not expose it beyond localhost.
+The server binds to `127.0.0.1` only. Callers on this Mac need no auth; everything else, which includes every request through a tunnel, needs the bearer token in `data/token` (see "Your phone"). Reach it from elsewhere only through `tap.py pair`, never by changing the bind address.
 
 ## Requirements
 
