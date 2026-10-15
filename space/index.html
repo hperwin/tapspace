@@ -1038,14 +1038,16 @@ function renderThread(){
 function openThread(key){
   current = key; store('tapspace.thread', key);
   if (!isAgent(key)) fetch('/api/taps/refresh', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({key})});
-  markRead(key); renderRail();
+  markRead(key); renderRail(); restoreDraft();
   if (isAgent(key)) pollChat(); else renderThread();
   ta.focus();
 }
 
 function toast(t){ const el = $('#toast'); el.textContent = t; el.classList.add('show'); setTimeout(() => el.classList.remove('show'), 2600); }
 
-ta.addEventListener('input', () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 160) + 'px'; syncSend(); });
+// the draft survives a reload (the page reloads itself when TapSpace updates)
+ta.addEventListener('input', () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 160) + 'px'; syncSend(); store('tapspace.draft.' + current, ta.value); });
+function restoreDraft(){ ta.value = store('tapspace.draft.' + current) || ''; ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 160) + 'px'; syncSend(); }
 ta.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing){ e.preventDefault(); $('#composer').requestSubmit(); } });
 $('#composer').addEventListener('submit', async e => {
   e.preventDefault();
@@ -1053,7 +1055,7 @@ $('#composer').addEventListener('submit', async e => {
   const body = ta.value.trim();
   const shots = isAgent(key) ? pending.slice() : [];
   if (!body && !shots.length) return;
-  ta.value = ''; ta.style.height = ''; sendBtn.disabled = true;
+  ta.value = ''; ta.style.height = ''; sendBtn.disabled = true; store('tapspace.draft.' + key, '');
   if (shots.length){ pending = []; renderTray(); }
   const post = (url, obj) => fetch(url, {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(obj)}).then(r => r.json());
   if (isAgent(key)){
@@ -1105,7 +1107,7 @@ window.addEventListener('resize', () => setTab(document.body.classList.contains(
 
 const start = location.hash === '#chat' || location.hash === '#visual' ? location.hash.slice(1) : (store('tapspace.tab') || 'visual');
 requestAnimationFrame(() => setTab(start, true));
-pollAgents(); pollChat(); pollTaps();
+pollAgents(); pollChat(); pollTaps(); restoreDraft();
 setInterval(pollAgents, 2000);
 setInterval(pollChat, 1500);
 setInterval(pollTaps, 2000);
