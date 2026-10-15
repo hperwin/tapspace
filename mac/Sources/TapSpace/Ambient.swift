@@ -159,12 +159,16 @@ struct RingView: NSViewRepresentable {
         case .spin(let color, let length, let period):
             arc.strokeColor = color.cgColor
             arc.strokeEnd = length
-            arc.add(loop("transform.rotation.z", from: 0, to: 2 * Double.pi, duration: period, timing: .linear), forKey: "spin")
+            if period > 0 {   // period 0 = a still arc (in flight, not working right now)
+                arc.add(loop("transform.rotation.z", from: 0, to: 2 * Double.pi, duration: period, timing: .linear), forKey: "spin")
+            }
         case .dotted(let color, let period):
             arc.strokeColor = color.cgColor
             arc.lineDashPattern = [3, 6]
             arc.lineCap = .round
-            arc.add(loop("transform.rotation.z", from: 0, to: 2 * Double.pi, duration: period, timing: .linear), forKey: "spin")
+            if period > 0 {
+                arc.add(loop("transform.rotation.z", from: 0, to: 2 * Double.pi, duration: period, timing: .linear), forKey: "spin")
+            }
         case .breathe(let color, let period):
             arc.strokeColor = color.cgColor
             arc.add(loop("opacity", from: 0.3, to: 1.0, duration: period / 2, autoreverses: true), forKey: "breathe")
@@ -261,28 +265,12 @@ struct OrbView: NSViewRepresentable {
         guard c.state != state else { return }
         c.state = state
         let away = state == "away"
-        // radial-gradient(circle at 32% 28%, #fff 0, #cfe3ff 18%, #5aa2ff 46%, #1f5fd6 78%, #173f8f 100%)
-        let lively: [NSColor] = [
-            NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 1),
-            NSColor(srgbRed: 0xcf / 255, green: 0xe3 / 255, blue: 1, alpha: 1),
-            NSColor(srgbRed: 0x5a / 255, green: 0xa2 / 255, blue: 1, alpha: 1),
-            NSColor(srgbRed: 0x1f / 255, green: 0x5f / 255, blue: 0xd6 / 255, alpha: 1),
-            NSColor(srgbRed: 0x17 / 255, green: 0x3f / 255, blue: 0x8f / 255, alpha: 1),
-        ]
-        let colors = away ? lively.map { desaturate($0, 0.25) } : lively
-        c.body.colors = colors.map(\.cgColor)
-        c.body.locations = [0, 0.18, 0.46, 0.78, 1]
-        c.body.startPoint = CGPoint(x: 0.32, y: 0.28)
-        c.body.endPoint = CGPoint(x: 1.31, y: 1.27)
-        c.shade.colors = [NSColor.black.withAlphaComponent(0).cgColor, NSColor.black.withAlphaComponent(0.18).cgColor]
-        c.shade.locations = [0.6, 1]
-        c.shade.startPoint = CGPoint(x: 0.5, y: 0)
-        c.shade.endPoint = CGPoint(x: 0.5, y: 1)
-        c.shine.colors = [NSColor.white.withAlphaComponent(0.85).cgColor, NSColor.white.withAlphaComponent(0).cgColor]
-        c.shine.startPoint = CGPoint(x: 0.34, y: 0.24)
-        c.shine.endPoint = CGPoint(x: 0.58, y: 0.46)
-        c.glow.shadowColor = (away ? Palette.faint : Palette.blue).cgColor
-        c.glow.shadowOpacity = away ? 0.25 : 0.35
+        // flat, like Glint: one solid fill, no gradient, shine or glow
+        let fill = away ? NSColor(srgbRed: 0xd1 / 255, green: 0xd1 / 255, blue: 0xd6 / 255, alpha: 1) : Palette.blue
+        c.body.colors = [fill.cgColor, fill.cgColor]
+        c.shade.colors = [NSColor.clear.cgColor, NSColor.clear.cgColor]
+        c.shine.colors = [NSColor.clear.cgColor, NSColor.clear.cgColor]
+        c.glow.shadowOpacity = 0
         c.ripple.strokeColor = Palette.blue.withAlphaComponent(0.35).cgColor
         c.ripple.opacity = 0
 
@@ -290,7 +278,6 @@ struct OrbView: NSViewRepresentable {
         switch state {
         case "thinking":
             c.body.add(loop("transform.scale", from: 1.0, to: 1.06, duration: 0.8, autoreverses: true), forKey: "pulse")
-            c.glow.add(loop("transform.scale", from: 1.0, to: 1.06, duration: 0.8, autoreverses: true), forKey: "pulse")
             let g = CAAnimationGroup()
             let s = CABasicAnimation(keyPath: "transform.scale"); s.fromValue = 0.85; s.toValue = 1.35
             let o = CABasicAnimation(keyPath: "opacity"); o.fromValue = 0.9; o.toValue = 0
@@ -301,9 +288,7 @@ struct OrbView: NSViewRepresentable {
             c.ripple.add(g, forKey: "ripple")
         case "switching", "starting":
             c.body.add(loop("transform.scale", from: 1.0, to: 0.86, duration: 0.7, autoreverses: true), forKey: "swap")
-            c.glow.add(loop("shadowOpacity", from: 0.2, to: 0.7, duration: 0.7, autoreverses: true), forKey: "swap")
         case "here":
-            c.glow.add(loop("shadowOpacity", from: 0.25, to: 0.6, duration: 1.6, autoreverses: true), forKey: "glow")
             c.body.add(loop("transform.scale", from: 1.0, to: 1.025, duration: 1.6, autoreverses: true), forKey: "float")
         default:
             break

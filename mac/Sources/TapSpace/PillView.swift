@@ -15,6 +15,8 @@ struct PillItem: Identifiable, Equatable {
     /// A card's current media path (thumbnail), empty otherwise.
     var media: String = ""
     var isVideo = false
+    /// a tap's pilot is working on a reply right now
+    var replying = false
 }
 
 final class PillPanel: NSPanel {
@@ -358,7 +360,7 @@ extension Store {
                                 media: t.videoDeleted ? "" : t.mediaPath(t.version), isVideo: t.isVideo))
         }
         for t in needsYouTaps {
-            out.append(PillItem(id: t.key, kind: .tap(t.key), who: t.repoName, text: t.name, status: t.status, number: t.number))
+            out.append(PillItem(id: t.key, kind: .tap(t.key), who: t.repoName, text: t.name, status: t.status, number: t.number, replying: t.replying == true))
         }
         for a in unreadAgents {
             let row = chats[a.name]?.last { $0.role == "master" }
@@ -509,7 +511,7 @@ struct PillRow: View {
                 PillThumb(path: item.media, isVideo: item.isVideo)
             }
         case .tap:
-            TapAvatar(status: item.status, number: item.number, size: 22)
+            TapAvatar(status: item.status, working: item.replying, size: 22)
         case .agent:
             OrbView(state: item.status).frame(width: 18, height: 18)
         }

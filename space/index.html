@@ -237,15 +237,14 @@
   .railempty{font-size:12px;color:var(--faint);padding:8px 12px;line-height:1.5}
 
   .orb{width:38px;height:38px;border-radius:50%;flex:none;position:relative;
-    background:radial-gradient(circle at 32% 28%,#fff 0,#cfe3ff 18%,#5aa2ff 46%,#1f5fd6 78%,#173f8f 100%);
-    box-shadow:0 4px 14px rgba(var(--hl),.35), inset 0 -3px 8px rgba(0,0,0,.18)}
+    background:rgb(var(--hl))}
   .orb::after{content:"";position:absolute;inset:-4px;border-radius:50%;border:1.5px solid rgba(var(--hl),.35);
     opacity:0;transform:scale(.85)}
   .orb.thinking::after{animation:ripple 1.6s ease-out infinite}
   .orb.thinking{animation:orbpulse 1.6s ease-in-out infinite}
   @keyframes ripple{0%{opacity:.9;transform:scale(.85)}100%{opacity:0;transform:scale(1.35)}}
   @keyframes orbpulse{0%,100%{transform:scale(1)}50%{transform:scale(1.06)}}
-  .orb.away{filter:saturate(.25) brightness(1.1)}
+  .orb.away{background:#d1d1d6}
 
   .tapav{width:38px;height:38px;border-radius:50%;flex:none;position:relative;display:flex;align-items:center;justify-content:center;
     background:#f4f4f6}
@@ -253,8 +252,9 @@
   .tapav .trk{fill:none;stroke:rgba(0,0,0,.06);stroke-width:2.2}
   .tapav .arc{fill:none;stroke:var(--ink);stroke-width:2.2;stroke-linecap:round}
   .tapav .num{font-size:9.5px;font-weight:700;color:var(--dim);font-variant-numeric:tabular-nums;letter-spacing:.02em}
-  .tapav.flying .arc{stroke-dasharray:30 80;animation:spin 1.6s linear infinite;transform-origin:19px 19px}
-  .tapav.boarding .arc{stroke:var(--faint);stroke-dasharray:3 6;animation:spin 6s linear infinite;transform-origin:19px 19px}
+  .tapav.flying .arc{stroke-dasharray:30 80;transform-origin:19px 19px}
+  .tapav.working .arc{animation:spin 1.6s linear infinite}
+  .tapav.boarding .arc{stroke:var(--faint);stroke-dasharray:3 6;transform-origin:19px 19px}
   .tapav.needs-you{background:rgba(var(--hl),.08)}
   .tapav.needs-you .arc{stroke:rgb(var(--hl));animation:breathe 1.5s ease-in-out infinite}
   .tapav.needs-you .num{color:rgb(var(--hl))}
@@ -936,9 +936,9 @@ const STATUS = {'needs-you':'Needs you', flying:'Flying', boarding:'Boarding', l
 const MASTER = {thinking:'Thinking', here:'Here', away:'Away', switching:'Switching car', starting:'Starting'};
 function tapName(t){ return t.title.replace(/^\[[^\]]*\]\s*/, ''); }
 function tapAvatar(t){
-  return `<span class="tapav ${t.status}"><svg viewBox="0 0 38 38"><circle class="trk" cx="19" cy="19" r="17"/>
+  return `<span class="tapav ${t.status}${t.replying ? ' working' : ''}"><svg viewBox="0 0 38 38"><circle class="trk" cx="19" cy="19" r="17"/>
     <circle class="arc" cx="19" cy="19" r="17"${t.status === 'landed' || t.status === 'needs-you' ? '' : ''}/></svg>
-    <span class="num">${t.status === 'landed' ? '✓' : '#' + String(t.number).slice(-4)}</span></span>`;
+    <span class="num">${t.status === 'landed' ? '✓' : ''}</span></span>`;
 }
 
 /* unread = the other side said something after you last looked at that thread */

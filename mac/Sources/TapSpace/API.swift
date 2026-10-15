@@ -108,6 +108,8 @@ struct Tap: Decodable, Equatable, Identifiable {
     let created: String
     let closed: String?
     let last: String
+    /// the pilot is working on a reply right now
+    let replying: Bool?
 
     var id: String { key }
     /// "[tap] Fix the thing" -> "Fix the thing"
@@ -255,6 +257,7 @@ extension Tap {
         created = c.or(Keys("created"), "")
         closed = c.opt(Keys("closed"))
         last = c.or(Keys("last"), created)
+        replying = c.opt(Keys("replying"))
     }
 }
 

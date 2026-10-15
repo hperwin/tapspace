@@ -52,7 +52,7 @@ struct RailView: View {
                 }
                 ForEach(Array(store.taps.items.enumerated()), id: \.element.key) { i, t in
                     RailRow(key: t.key, index: store.agents.count + i, store: store, onFrame: { frames[t.key] = $0 }) {
-                        TapAvatar(status: t.status, number: t.number)
+                        TapAvatar(status: t.status, working: t.replying == true)
                         RowText(title: t.name, sub: tapSub(t))
                     }
                 }
@@ -350,13 +350,14 @@ struct UnreadDot: View {
 /// dotted slow spin = boarding, green check = landed.
 struct TapAvatar: View {
     let status: String
-    let number: Int
+    var working = false
     var size: CGFloat = 38
 
     var body: some View {
+        // the ring only moves while the pilot is actually working
         let style: RingStyle = switch status {
-        case "flying": .spin(Palette.ink, length: 0.27, period: 1.6)
-        case "boarding": .dotted(Palette.faint, period: 6)
+        case "flying": .spin(Palette.ink, length: 0.27, period: working ? 1.6 : 0)
+        case "boarding": .dotted(Palette.faint, period: working ? 6 : 0)
         case "needs-you": .breathe(Palette.blue, period: 1.5)
         default: .solid(Palette.green)
         }
@@ -374,15 +375,6 @@ struct TapAvatar: View {
                     Image(systemName: "checkmark")
                         .font(.system(size: 11 * size / 38, weight: .bold))
                         .transition(.symbolEffect(.drawOn))
-                } else {
-                    Text("#" + String(String(number).suffix(4)))
-                        .font(.system(size: 9.5 * size / 38, weight: .bold))
-                        .monospacedDigit()
-                        .tracking(-0.2)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.6)
-                        .frame(width: size * 0.7)
-                        .transition(.blurReplace)
                 }
             }
             .foregroundStyle(fg)
@@ -548,7 +540,7 @@ struct PaneHeader: View {
                 Spacer(minLength: 8)
                 StatusChip(state: agent.state, label: agentLabel[agent.state, default: agent.state])
             } else if let tap {
-                TapAvatar(status: tap.status, number: tap.number)
+                TapAvatar(status: tap.status, working: tap.replying == true)
                 VStack(alignment: .leading, spacing: 2) {
                     HeaderTitle(text: tap.name)
                     HStack(spacing: 4) {
