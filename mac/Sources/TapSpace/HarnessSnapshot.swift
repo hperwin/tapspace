@@ -5,12 +5,17 @@ import CoreGraphics
 /// SPEC.md, settles all springs, renders each with `cacheDisplay` into an
 /// exact 2x bitmap, writes `<dir>/NN-scene.png` plus `scenes.json`, and exits
 /// (0 = every scene rendered and has ink, 1 = something was missing).
+/// The run is offscreen and never activates (App.swift parks the window and
+/// the pill). `scenes.json` also carries `masters`: what the app decoded for
+/// the masters column, the rail notes and the links, which Scripts/verify.sh
+/// holds against what the server served.
 @MainActor
 final class HarnessSnapshot {
     let app: AppDelegate
     let dir: URL
     private var scenes: [[String: Any]] = []
     private var problems: [String] = []
+    private var masters: [String: Int] = [:]
     private var finished = false
 
     private var store: Store { app.store }
@@ -35,8 +40,7 @@ final class HarnessSnapshot {
     private func run() async {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         Harness.log("SNAPSHOT server \(API.base.absoluteString) -> \(dir.path)")
-        // Pose the pill off the real menu bar; its view still renders on demand.
-        if let p = app.pill.panel { p.setFrameOrigin(NSPoint(x: -32000, y: p.frame.minY)) }
+        // The pill is already parked off the real menu bar (App.swift); its view still renders on demand.
 
         // Data and media first: cards, decoded images, the v2 change boxes.
         let cardsReady = await Harness.wait(30) {
@@ -78,17 +82,49 @@ final class HarnessSnapshot {
             problems.append("lightbox: no image card")
         }
 
-        // 4-5. Chat on agent threads: one mid-conversation, one thinking.
-        store.tab = .chat
+        // 4, 10, 5. Chat on agent threads. 04 opens a master with no card notes, so
+        // another master's note rows stay in the rail; 10 is the same pose in a window
+        // the size of Hayden's (1512 x 887); 05 opens a thinking master the way a rail
+        // click does, which reads its notes.
         await Harness.wait(10) { store.agentsLoaded && !store.agents.isEmpty }
-        let talking = store.agents.first { $0.state != "thinking" && $0.count > 0 } ?? store.agents.first
-        let thinking = store.agents.first { $0.state == "thinking" && $0.key != talking?.key }
-        for (name, agent) in [("04-chat-agent", talking), ("05-chat-agent-thinking", thinking)] {
-            guard let agent else { problems.append("\(name): no such agent on the server"); continue }
-            store.thread = agent.key
-            await Harness.wait(6) { !(store.chats[agent.name] ?? []).isEmpty }
+        masters = mastersData()
+        let agents = store.agents
+        let talking = agents.first { $0.state != "thinking" && $0.count > 0 && $0.notes.isEmpty }
+            ?? agents.first { $0.state != "thinking" && $0.count > 0 } ?? agents.first
+        let thinking = agents.first { $0.state == "thinking" && $0.key != talking?.key && !$0.notes.isEmpty }
+            ?? agents.first { $0.state == "thinking" && $0.key != talking?.key }
+        // The thread before the tab: switching to Chat reads the open thread, and a
+        // thread restored from an earlier run must not lose its notes unseen.
+        if let talking { store.thread = talking.key }
+        // Key, as when Hayden looks at it (an offscreen launch is never made key).
+        store.windowKey = true
+        store.tab = .chat
+        if let talking {
+            await openThread(talking)
+            let others = store.agents.filter { $0.key != talking.key }
+            let sent = others.reduce(0) { $0 + $1.notes.count }
+            let listed = others.reduce(0) { $0 + listedNotes($1) }
+            if sent > 0, listed == 0 { problems.append("04-chat-agent: the server sent \(sent) notes, the rail lists none") }
+            shot("04-chat-agent", note: chatNote(talking))
+            app.window.setContentSize(NSSize(width: 1512, height: 887))
             await settle()
-            shot(name, note: "\(agent.key) (\(agent.state))")
+            shot("10-chat-wide", note: chatNote(talking))
+            app.window.setContentSize(NSSize(width: 1240, height: 820))
+            await settle()
+        } else {
+            problems.append("04-chat-agent: no such agent on the server")
+        }
+        if let thinking {
+            let before = listedNotes(thinking)
+            await openThread(thinking)
+            shot("05-chat-agent-thinking", note: chatNote(thinking))
+            let after = listedNotes(thinking)
+            if before > 0 {
+                masters["notes_after_open"] = after
+                if after > 0 { problems.append("05-chat-agent-thinking: \(after) notes still listed after opening the thread") }
+            }
+        } else {
+            problems.append("05-chat-agent-thinking: no such agent on the server")
         }
 
         // 6. Chat on a tap thread (real GitHub data through the server, read-only).
@@ -96,7 +132,7 @@ final class HarnessSnapshot {
         if let tap = store.taps.items.max(by: { $0.messages.count < $1.messages.count }) {
             store.thread = tap.key
             await settle()
-            shot("06-chat-tap", note: "\(tap.key) (\(tap.status))")
+            shot("06-chat-tap", note: "\(tap.title) (\(tap.status))")
         } else {
             problems.append("06-chat-tap: no taps (\(store.taps.error.isEmpty ? "none under this user" : store.taps.error))")
         }
@@ -115,6 +151,18 @@ final class HarnessSnapshot {
         }
         app.pill.releasePose()
         finish()
+    }
+
+    /// A rail click: the thread opens and reads (Store.open), then its messages land.
+    private func openThread(_ agent: Agent) async {
+        store.open(agent.key)
+        await Harness.wait(6) { !(store.chats[agent.name] ?? []).isEmpty }
+        await settle()
+    }
+
+    /// Titles only, like every surface Hayden sees, plus what the rail lists under it.
+    private func chatNote(_ agent: Agent) -> String {
+        "\(agent.title) (\(agent.state)), notes \(listedNotes(agent)), links \(store.links.filter(\.active).count) active"
     }
 
     /// Snap every spring to rest, across a few layout passes (layout can arm
@@ -238,7 +286,8 @@ final class HarnessSnapshot {
     private func finish() {
         guard !finished else { return }
         finished = true
-        let manifest: [String: Any] = ["server": API.base.absoluteString, "scale": 2, "scenes": scenes, "problems": problems]
+        let manifest: [String: Any] = ["server": API.base.absoluteString, "scale": 2, "scenes": scenes, "problems": problems,
+                                       "masters": masters]
         if let data = try? JSONSerialization.data(withJSONObject: manifest, options: [.prettyPrinted, .sortedKeys]) {
             try? data.write(to: dir.appendingPathComponent("scenes.json"))
         }
@@ -246,4 +295,23 @@ final class HarnessSnapshot {
         for p in problems { Harness.log("SNAPSHOT problem: \(p)") }
         exit(problems.isEmpty ? 0 : 1)
     }
+}
+
+// MARK: Masters data (the column, the rail notes, the links), read through the core lane's models
+
+private extension HarnessSnapshot {
+    /// What the app decoded, before any thread opens, for verify.sh to hold
+    /// against what the server served.
+    func mastersData() -> [String: Int] {
+        let agents = store.agents
+        return ["agents": agents.count,
+                "with_progress": agents.filter { $0.progress != nil }.count,
+                "notes": agents.reduce(0) { $0 + listedNotes($1) },
+                "links": store.links.count,
+                "links_active": store.links.filter(\.active).count,
+                "owned_cards": store.tickets.filter { $0.owner != nil }.count]
+    }
+
+    /// The note rows the rail lists under a master.
+    func listedNotes(_ agent: Agent) -> Int { store.notes(for: agent.key).count }
 }
