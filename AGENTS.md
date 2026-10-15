@@ -22,7 +22,7 @@ It assumes the server is at `http://127.0.0.1:4747` and `tap.py` is reachable at
    ```bash
    python3 /path/to/tapspace/tap.py post --agent T2-cards --title "Combined stat card" --image shot.png --campaign <campaign>
    ```
-   Save the printed TICKET_ID in your report. One card per coherent unit; a stream with five units posts five cards over its life.
+   Save the printed TICKET_ID in your report. One card per coherent unit; a stream with five units posts five cards over its life. The card lands under your master by itself (`tap.py` tells the server which Claude Code session it runs in); outside Claude Code, add `--owner "<master's chat NAME>"`.
 
 4. **Do not park on the card.** Keep working your next unit. Check decisions at natural boundaries (`tap.py status TICKET`), or block with `tap.py wait TICKET --timeout 900` only when the decision truly gates your next edit. Exit codes: 0 = approved, 3 = changes (the reviewer's message is on stdout), 4 = timeout (note it in your report and continue other work; your orchestrator will wake you when the decision lands).
 
@@ -50,7 +50,7 @@ You don't need an orchestrator: a solo agent can post and `wait`. But if one pro
    ```
    In Claude Code this is a Monitor on that tail command. In any other framework it's the same tail plus your own event handling. After a restart or context compaction, check whether a live tail already exists before re-arming: duplication, not death, is the usual failure mode.
 
-2. **Relay every decision event to the owning agent** (the event names it): forward the action and message verbatim, AND append it to that agent's brief or task file under a `## TAPSPACE DECISIONS` heading. The message is the notification; the file is the source of truth that survives restarts.
+2. **Relay every decision event to the owning agent** (`agent` names the lane, `owner` the master whose session posted the card): forward the action and message verbatim, AND append it to that agent's brief or task file under a `## TAPSPACE DECISIONS` heading. The message is the notification; the file is the source of truth that survives restarts. When several masters share one space, relay the events whose `owner` is your own chat NAME, plus any without an owner whose `agent` is one of your lanes.
 
 3. **Relay approvals too.** An approved card may be exactly the gate a lane is politely polling on.
 
@@ -61,6 +61,13 @@ You don't need an orchestrator: a solo agent can post and `wait`. But if one pro
    curl -s -X POST 127.0.0.1:4747/api/archive -H 'content-type: application/json' -d '{"campaign":"<campaign>"}'
    ```
    The server stays up; the space empties itself.
+
+6. **Keep your goal card current** (a master in the Chat tab). Publish the run once, then move it at each real completion signal (a sentinel, a finished workflow, an opened PR), never on intent:
+   ```bash
+   python3 /path/to/tapspace/tap.py goal --as "NAME" "<the outcome the human will see, one plain line>" --steps "Audit|Spec|Build|Review|PR open"
+   python3 /path/to/tapspace/tap.py step --as "NAME" next --note "14 of 20 builders done"
+   ```
+   The goal is one line under 90 characters; steps are 3 to 7 phases of one or two words, in order, and scope rows roll up into the note. The card lives under your NAME, so a relay keeps it: the next car reads it with `tap.py progress --as "NAME"` and keeps moving it. Lanes never publish one.
 
 ---
 
@@ -74,6 +81,7 @@ You don't need an orchestrator: a solo agent can post and `wait`. But if one pro
 | Agent | iteration | `tap.py update`. Version+1, status `waiting`, card re-blurs in |
 | Agent | read decision | `tap.py wait` (blocking) / `tap.py status` (instant) |
 | Orchestrator | wake + truth | tail on INBOX -> relay verbatim + append to the agent's brief |
+| Master | goal card | `tap.py goal` once, then `tap.py step` as each step lands |
 
 Decision JSON, as returned by `tap.py wait` (and stored per-version in the ticket's `decisions` array):
 
@@ -85,14 +93,16 @@ The `INBOX.jsonl` event carries a richer shape, and it is what names the owning 
 
 ```json
 {"kind": "tapspace-decision", "ticket": "3f7de0b7af", "agent": "T2-cards",
- "title": "Combined stat card", "campaign": "my-feature", "version": 2,
- "action": "change", "message": "less white, make the pills look like glass",
+ "owner": "Claude \u00b7 main", "title": "Combined stat card", "campaign": "my-feature",
+ "version": 2, "action": "change", "message": "less white, make the pills look like glass",
  "received_epoch": 1755640000.0}
 ```
 
+`owner` is the master's chat NAME (ASCII JSON: the `·` reads `\u00b7`).
+
 ## Notes that keep the loop honest
 
-- **The presence HUD is automatic.** Do not build status reporting into agent prompts; the server derives presence from its own request stream. The HUD sees traffic, not claims.
+- **The presence HUD is automatic.** Do not build status reporting into agent prompts; the server derives presence from its own request stream. The HUD sees traffic, not claims. Card owners and agent-to-agent links are detected the same way, so lanes never report them. The one thing a master publishes on purpose is its goal card (Orchestrator duty 6).
 - **On v2+ the space pixel-diffs the new capture against the previous version** and highlights changed regions. This only works when captures are same-surface, same-device renders, which is one more reason they must be.
 - **Campaign tags keep wraps clean** when several fleets share one space. Keep agent names unique within a campaign (presence rows are keyed by campaign + agent).
 - **The human views the space in their own browser.** If you verify the page with an automation browser, close it when done; never leave a script-pinned viewport open as the human's viewer.
