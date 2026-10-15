@@ -79,7 +79,6 @@ final class Store {
     @ObservationIgnored var onChange: (() -> Void)?
     @ObservationIgnored private var failures = 0
     @ObservationIgnored private var booted = false
-    @ObservationIgnored private var refreshedTaps: Set<String> = []
     @ObservationIgnored private var started = false
     /// No read state was ever saved: the first full load marks everything read.
     @ObservationIgnored private var seedReads = false
@@ -144,9 +143,13 @@ final class Store {
     }
 
     private func threadOpened(poll: Bool = true) {
-        if !thread.hasPrefix("agent:"), !thread.isEmpty, !refreshedTaps.contains(thread) {
-            refreshedTaps.insert(thread)
-            Task { try? await API.post("/api/taps/refresh", [:], speaksForHayden: false) }
+        // A thread chosen before start() (launch flag, restored default) opens once, from start().
+        guard started else { return }
+        // Every tap open marks that tap hot, as the web page does: the server re-reads
+        // it from GitHub now and every few seconds while someone is looking at it.
+        if !thread.hasPrefix("agent:"), !thread.isEmpty {
+            let key = thread
+            Task { try? await API.post("/api/taps/refresh", ["key": key], speaksForHayden: false) }
         }
         guard poll, thread.hasPrefix("agent:") else { return }
         // On the Chat tab the loop picks it up now; elsewhere fetch it once,
