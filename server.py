@@ -370,7 +370,7 @@ def _chat_import(path):
 CHAT_SEQ = DATA / "chat-seq"           # last id ever used, so ids stay unique after a clear
 
 
-def _chat_add(agent, role, body, images=None):
+def _chat_add(agent, role, body, images=None, nonce=""):
     with _lock:
         rows = _chat_rows()
         try:
@@ -383,6 +383,8 @@ def _chat_add(agent, role, body, images=None):
                "role": role, "body": body, "ts": time.time()}
         if images:
             row["images"] = images
+        if nonce:
+            row["nonce"] = nonce
         with CHAT.open("a") as fh:
             fh.write(json.dumps(row) + "\n")
     _bump("chat", "agents")
@@ -401,7 +403,9 @@ def _agent_state(info, rows):
     if info.get("switching", 0) > info.get("listen", 0):
         return "switching"
     if info.get("spawned", 0) > info.get("listen", 0):
-        return "starting"       # a New session that has not joined the chat yet
+        if time.time() - info["spawned"] < 180:
+            return "starting"   # a New session that has not joined the chat yet
+        return "away"           # it never joined; do not say Starting forever
     if _chat_pending(rows):
         return "thinking"
     return "here" if time.time() - info.get("listen", 0) < 30 else "away"
@@ -999,14 +1003,21 @@ class H(BaseHTTPRequestHandler):
                 except Exception as e:
                     self._json({"error": str(e)}, 400)
                     return
+                nonce = str(p.get("nonce") or "")[:64]
+                if self.path == "/api/chat" and nonce:
+                    # the phone retries a send whose answer it lost: same nonce, same row
+                    dup = next((r for r in _chat_rows(name) if r.get("nonce") == nonce), None)
+                    if dup:
+                        self._json({"ok": True, "message": dup})
+                        return
                 if self.path == "/api/chat":
-                    row = _chat_add(name, "you", body, images)
+                    row = _chat_add(name, "you", body, images, nonce=nonce)
                     _inbox({"kind": "tapspace-chat", "agent": name, "id": row["id"],
                             "message": body, "images": images})
                 else:
                     _agent_touch(name, listen=time.time())
                     row = _chat_add(name, "master", body, images)
-                    _push(name, body, key="agent:" + name)
+                    _push(_title(_agents().get(name, {})), body, key="agent:" + name)
                 self._json({"ok": True, "message": row})
                 return
             key = p.get("key", "")
