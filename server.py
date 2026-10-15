@@ -155,11 +155,12 @@ def _jwt(c):
     return _JWT["v"]
 
 
-def _push(title, body, **ref):
-    """Alerts every registered phone; ref is {key: thread} or {id: card}, for the tap-through."""
+def _push(title, body, kind="replies", **ref):
+    """Alerts every registered phone that wants this kind ("replies" or "needs_you");
+    ref is {key: thread} or {id: card}, for the tap-through."""
     c = _apns()
     try:
-        devs = json.loads(DEVICES.read_text())
+        devs = {t: d for t, d in json.loads(DEVICES.read_text()).items() if d.get(kind, True)}
     except Exception:
         devs = {}
     if not c or not devs:
@@ -965,6 +966,8 @@ class H(BaseHTTPRequestHandler):
                     except Exception:
                         devs = {}
                     devs[tok] = {"env": "sandbox" if p.get("env") == "sandbox" else "production",
+                                 "replies": p.get("replies") is not False,
+                                 "needs_you": p.get("needs_you") is not False,
                                  "ts": time.time()}
                     DEVICES.write_text(json.dumps(devs, indent=1))
                 self._json({"ok": True, "push": bool(_apns())})
@@ -1096,7 +1099,7 @@ class H(BaseHTTPRequestHandler):
                 })
                 _save(state)
             _touch(p.get("campaign"), p["agent"], "posted", p["title"])
-            _push("New visual", p["title"], id=tid)
+            _push("New visual", p["title"], kind="needs_you", id=tid)
             self._json({"ok": True, "id": tid, "version": 1})
             return
 
@@ -1123,7 +1126,7 @@ class H(BaseHTTPRequestHandler):
                 _save(state)
             _touch(t.get("campaign"), t["agent"], "iterating",
                    p.get("note", "") or t["title"])
-            _push("New visual", t["title"], id=tid)
+            _push("New visual", t["title"], kind="needs_you", id=tid)
             self._json({"ok": True, "id": tid, "version": v})
             return
 
