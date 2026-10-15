@@ -3,7 +3,7 @@ import Observation
 import SwiftUI
 
 private let statusLabel = ["needs-you": "Needs you", "flying": "Flying", "boarding": "Boarding", "landed": "Landed"]
-private let agentLabel = ["thinking": "Thinking", "here": "Here", "away": "Away"]
+private let agentLabel = ["thinking": "Thinking", "here": "Here", "away": "Away", "switching": "Switching car"]
 
 struct ChatView: View {
     let store: Store
@@ -466,7 +466,7 @@ struct StatusChip: View {
 
     var body: some View {
         let (fg, bg, breathe): (NSColor, Color, Double) = switch state {
-        case "thinking", "needs-you": (Palette.blue, Color.tapBlue.opacity(0.1), 1.0)
+        case "thinking", "needs-you", "switching": (Palette.blue, Color.tapBlue.opacity(0.1), 1.0)
         case "flying": (Palette.ink, Color.black.opacity(0.045), 1.2)
         case "landed": (Palette.green, Color.up.opacity(0.1), 0)
         case "here": (Palette.green, Color.black.opacity(0.045), 2.4)
@@ -641,6 +641,10 @@ struct MessageList: View {
                     // The dots' spring is scoped to the dots: on the list it would also
                     // fade in the bubble Hayden just sent (the same update flips typing
                     // on), washing out its flight out of the composer.
+                    // Session relay: the thread stays put while the next car takes over.
+                    if agent?.state == "switching" {
+                        SwitchingCar().transition(.scale(scale: 0.8).combined(with: .opacity))
+                    }
                     ZStack(alignment: .leading) {
                         if typing {
                             TypingBubble(caption: tap != nil ? "working on a reply" : nil)
@@ -1038,5 +1042,26 @@ struct ExpPos: ViewModifier {
         if e["CHATEXP_NOPOS"] != nil { content.defaultScrollAnchor(.bottom) }
         else if e["CHATEXP_INIT"] != nil { content.scrollPosition($position).defaultScrollAnchor(.bottom, for: .initialOffset).defaultScrollAnchor(.bottom) }
         else { content.scrollPosition($position).defaultScrollAnchor(.bottom) }
+    }
+}
+
+
+struct SwitchingCar: View {
+    @State private var spin = false
+    var body: some View {
+        HStack(spacing: 8) {
+            Circle().trim(from: 0, to: 0.72)
+                .stroke(Color.tapBlue, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                .frame(width: 12, height: 12)
+                .rotationEffect(.degrees(spin ? 360 : 0))
+                .animation(.linear(duration: 0.8).repeatForever(autoreverses: false), value: spin)
+            Text("SWITCHING CAR")
+                .font(.system(size: 11.5, weight: .semibold)).tracking(0.7)
+                .foregroundStyle(Color.tapBlue)
+        }
+        .padding(.horizontal, 14).padding(.vertical, 8)
+        .background(Capsule().fill(Color.tapBlue.opacity(0.07)))
+        .frame(maxWidth: .infinity)
+        .onAppear { spin = true }
     }
 }

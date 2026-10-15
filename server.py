@@ -258,6 +258,10 @@ def _chat_pending(rows):
 
 
 def _agent_state(info, rows):
+    # a session handing off to its next car (session relay): same thread, same name;
+    # the new car clears this the moment it starts listening
+    if info.get("switching", 0) > info.get("listen", 0):
+        return "switching"
     if _chat_pending(rows):
         return "thinking"
     return "here" if time.time() - info.get("listen", 0) < 30 else "away"
@@ -269,14 +273,16 @@ def _agent_rows():
     for name, info in _agents().items():
         rows = [r for r in allrows if r.get("agent") == name]
         last = rows[-1]["ts"] if rows else info.get("seen", 0)
-        if time.time() - max(last, info.get("seen", 0)) > 3 * 86400:
-            continue            # quiet for 3 days: off the rail, history kept
+        quiet = time.time() - max(last, info.get("seen", 0))
+        if quiet > (86400 if rows else 1800):
+            continue            # off the rail (an agent you never talked to after 30 min,
+                                # any other after a quiet day); history is kept
         said = [r["ts"] for r in rows if r["role"] == "master"]
         out.append({"name": name, "state": _agent_state(info, rows),
                     "seen": info.get("seen", 0), "first": info.get("first", 0),
                     "where": info.get("where", ""), "last": last, "count": len(rows),
                     "last_master": said[-1] if said else 0})
-    rank = {"thinking": 0, "here": 1, "away": 2}
+    rank = {"thinking": 0, "switching": 0, "here": 1, "away": 2}
     out.sort(key=lambda r: -r["last"])
     out.sort(key=lambda r: rank[r["state"]])
     return out
@@ -710,6 +716,15 @@ class H(BaseHTTPRequestHandler):
                     "via": via})
             _hot(key, 0.15)
             self._json({"ok": True, "url": url})
+            return
+
+        if self.path == "/api/agents/relay":
+            name = (p.get("agent") or "").strip()
+            if name not in _agents():
+                self._json({"error": "no agent by that name has joined"}, 404)
+                return
+            _agent_touch(name, switching=time.time())
+            self._json({"ok": True})
             return
 
         if self.path == "/api/taps/refresh":

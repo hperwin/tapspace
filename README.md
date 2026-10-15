@@ -157,6 +157,10 @@ workspace where any number of agents can be connected at once:
   chat; they preview above the message box and show as a grid in the bubble.
   The listening agent gets their file paths, and can send images back with
   `tap.py reply --as "NAME" "text" --image shot.png`.
+  A long-running agent that hands off to a fresh session keeps ONE thread:
+  the old session runs `tap.py relay --as "NAME"`, the thread shows
+  *Switching car*, and the new session listens under the same NAME. Messages
+  you send meanwhile wait for it.
   An agent shows *Here* while it is listening, *Thinking* while your message
   waits for its reply, and *Away* otherwise.
 - **Taps.** GitHub issues you authored with the tap label

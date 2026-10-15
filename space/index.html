@@ -242,6 +242,13 @@
   .chip.landed{background:rgba(48,161,78,.1);color:var(--green)}
   .chip.thinking{background:rgba(var(--hl),.1);color:rgb(var(--hl))} .chip.thinking i{animation:breathe 1s ease-in-out infinite}
   .chip.here{color:var(--green)} .chip.away{color:var(--faint)}
+  .chip.switching{background:rgba(var(--hl),.1);color:rgb(var(--hl))} .chip.switching i{animation:breathe .9s ease-in-out infinite}
+  .orb.switching{animation:orbswap 1.4s ease-in-out infinite}
+  @keyframes orbswap{0%,100%{transform:scale(1);filter:none}50%{transform:scale(.86);filter:blur(1.5px) brightness(1.15)}}
+  .switchline{align-self:center;display:flex;align-items:center;gap:8px;font-size:11.5px;font-weight:600;letter-spacing:.06em;
+    text-transform:uppercase;color:rgb(var(--hl));padding:8px 14px;border-radius:999px;background:rgba(var(--hl),.07);
+    animation:msgin .6s cubic-bezier(.22,.9,.24,1) both}
+  .switchline i{width:12px;height:12px;border-radius:50%;border:2px solid rgba(var(--hl),.25);border-top-color:rgb(var(--hl));animation:spin .8s linear infinite}
 
   #pane{background:#fff;border-radius:22px;box-shadow:var(--shadow);display:flex;flex-direction:column;min-height:0;overflow:hidden}
   #panehead{display:flex;align-items:center;gap:12px;padding:16px 20px 12px;border-bottom:1px solid var(--line)}
@@ -886,7 +893,7 @@ function when(ts){
   return new Date(t).toLocaleDateString([], {month:'short', day:'numeric'});
 }
 const STATUS = {'needs-you':'Needs you', flying:'Flying', boarding:'Boarding', landed:'Landed'};
-const MASTER = {thinking:'Thinking', here:'Here', away:'Away'};
+const MASTER = {thinking:'Thinking', here:'Here', away:'Away', switching:'Switching car'};
 function tapName(t){ return t.title.replace(/^\[[^\]]*\]\s*/, ''); }
 function tapAvatar(t){
   return `<span class="tapav ${t.status}"><svg viewBox="0 0 38 38"><circle class="trk" cx="19" cy="19" r="17"/>
@@ -950,7 +957,7 @@ function threadData(){
     if (!a) return null;
     const rows = chat.agent === a.name ? chat.messages : [];
     return {msgs: rows.map(r => ({who: r.role === 'you' ? 'you' : 'them', body: r.body, ts: r.ts, id: 'm' + r.id, images: r.images || []})),
-            typing: a.state === 'thinking', agent: a};
+            typing: a.state === 'thinking', switching: a.state === 'switching', agent: a};
   }
   const t = taps.items.find(x => x.key === current);
   if (!t) return null;
@@ -1006,7 +1013,7 @@ function renderThread(){
   ta.placeholder = d.agent ? 'Message ' + d.agent.name + '…' : 'Message this tap…';
   attachBtn.classList.toggle('hide', !d.agent);
   syncSend();
-  const sig = current + '|' + d.msgs.map(m => m.id + (m.seen ? 's' : '') + (m.pending ? 'p' : '') + ((m.images || []).length)).join(',') + '|' + d.typing;
+  const sig = current + '|' + d.msgs.map(m => m.id + (m.seen ? 's' : '') + (m.pending ? 'p' : '') + ((m.images || []).length)).join(',') + '|' + d.typing + '|' + d.switching;
   if (sig === rendered.sig) return;
   const switched = rendered.key !== current;
   const stick = switched || nearEnd();
@@ -1028,6 +1035,7 @@ function renderThread(){
     el.innerHTML = grid + (m.body ? `<div class="bub">${md(m.body)}</div>` : '') + `<div class="meta2">${meta}</div>`;
     msgsEl.appendChild(el);
   }
+  if (d.switching){ const sw = document.createElement('div'); sw.className = 'switchline'; sw.innerHTML = '<i></i>Switching car'; msgsEl.appendChild(sw); }
   if (d.typing){ const ty = document.createElement('div'); ty.className = 'typing'; ty.innerHTML = '<span></span><span></span><span></span>'; msgsEl.appendChild(ty);
     if (d.tap){ const n = document.createElement('div'); n.className = 'msg them'; n.innerHTML = '<div class="meta2">working on a reply</div>'; msgsEl.appendChild(n); } }
   rendered = {key: current, sig};

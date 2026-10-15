@@ -19,6 +19,8 @@
   tap.py tap-read KEY                    -> the whole thread of one tap (KEY = owner/repo#n)
   tap.py tap-say --as NAME KEY "text"    -> message a tap as the reviewer (signed "Sent by NAME")
   tap.py tap-watch [--timeout 3600]      -> blocks until any tap posts something new or changes status
+  tap.py relay --as NAME                 -> this session is handing off to its next car: the thread
+                                            shows "Switching car" until the new car listens --as NAME
   tap.py reply --as NAME "text" [--image a.png ...]
                                          -> that agent answers the reviewer in its thread (images optional;
                                             images the reviewer attaches print as absolute file paths)
@@ -109,6 +111,9 @@ def main():
     li = sub.add_parser("listen")
     li.add_argument("--as", dest="name", default=me, required=not me)
     li.add_argument("--timeout", type=int, default=3600)
+
+    rl = sub.add_parser("relay")
+    rl.add_argument("--as", dest="name", default=me, required=not me)
 
     sub.add_parser("taps")
     tr = sub.add_parser("tap-read")
@@ -223,6 +228,11 @@ def main():
             base = {k: (len(t["messages"]), t["status"]) for k, t in now.items()}
         print(json.dumps({"timeout": True}))
         return 4
+
+    if a.cmd == "relay":
+        r = _call("/api/agents/relay", {"agent": a.name})
+        print(json.dumps(r))
+        return 0 if r.get("ok") else 1
 
     if a.cmd == "tap-say":
         r = _call("/api/taps/say", {"key": a.key, "body": a.text, "via": a.name})
