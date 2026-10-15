@@ -638,6 +638,10 @@ function buildCard(t){
   const chat = el.querySelector('.chat');
   const ta = el.querySelector('textarea');
   const send = el.querySelector('.send');
+  // a change note being typed survives the page's self-reload (it reloads itself whenever TapSpace updates)
+  const draft = noteDraft(t.id);
+  if (draft){ ta.value = draft; chat.classList.add('open'); }
+  ta.addEventListener('input', () => noteDraft(t.id, ta.value));
 
   el.querySelector('.shot').addEventListener('click', () => {
     const cur = cards.get(t.id);
@@ -656,7 +660,7 @@ function buildCard(t){
     send.disabled = true;
     decide(t.id, 'change', msg).then(() => {
       chat.classList.remove('open');
-      ta.value = ''; send.disabled = false;
+      ta.value = ''; send.disabled = false; noteDraft(t.id, '');
       setState(el, t, 'changes');
     });
   });
@@ -667,7 +671,7 @@ function buildCard(t){
 }
 
 function settle(el, id){
-  settled.add(id);
+  settled.add(id); noteDraft(id, '');
   el.querySelector('.checkveil').classList.add('show');
   setTimeout(() => {
     el.classList.add('out');
@@ -678,8 +682,19 @@ function settle(el, id){
 function setState(el, t, status){
   el.classList.toggle('changes', status === 'changes');
   if (status === 'changes'){
-    el.querySelector('.statetxt').textContent = 'with ' + t.agent + ' — working on your notes';
+    // the master that owns the card, by its plain title (from the Chat rail's agents), else the posting label
+    const who = (t.owner && typeof titleOf === 'function' && titleOf(t.owner)) || t.agent;
+    const s = el.querySelector('.statetxt'), text = 'with ' + who + ' · working on your notes';
+    if (s.textContent !== text) s.textContent = text;
   }
+}
+function noteDraft(id, v){
+  const k = 'tapspace.note.' + id;
+  try{
+    if (v === undefined) return localStorage.getItem(k) || '';
+    if (v) localStorage.setItem(k, v); else localStorage.removeItem(k);
+  }catch(e){}
+  return '';
 }
 
 function verEntry(t, v){
@@ -759,11 +774,13 @@ async function tick(){
         c.version = t.version; c.status = t.status;
       } else {
         c.el.querySelector('.ver').textContent = 'v' + t.version + ' · ' + timeago(t.versions[t.versions.length-1].ts);
+        if (t.status === 'changes') setState(c.el, t, t.status);   // the owner's title arrives with the agents poll
       }
     }
   }
   for (const [id, c] of cards){
     if (!seen.has(id) && !settled.has(id)){
+      noteDraft(id, '');
       c.el.classList.add('out');
       setTimeout(() => { c.el.remove(); }, 750);
       cards.delete(id);
