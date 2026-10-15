@@ -448,7 +448,11 @@ def _title(info):
 def _agent_rows():
     out = []
     allrows = _chat_rows()
-    for name, info in _agents().items():
+    agents = _agents()
+    with _lock:
+        state = _load()
+    notes = _notes_by_owner(state, _owner_index(agents))
+    for name, info in agents.items():
         rows = [r for r in allrows if r.get("agent") == name]
         last = rows[-1]["ts"] if rows else info.get("seen", 0)
         quiet = time.time() - max(last, info.get("seen", 0))
@@ -456,12 +460,15 @@ def _agent_rows():
             continue            # off the rail (an agent you never talked to after 30 min,
                                 # any other after a quiet day); history is kept
         said = [r["ts"] for r in rows if r["role"] == "master"]
+        read = info.get("notes_read")
         out.append({"name": name, "state": _agent_state(info, rows),
                     "seen": info.get("seen", 0), "first": info.get("first", 0),
                     "where": info.get("where", ""), "last": last, "count": len(rows),
                     "last_master": said[-1] if said else 0,
                     "title": _title(info),
-                    "progress": info.get("progress")})
+                    "progress": info.get("progress"),
+                    "notes": [n for n in notes.get(name, []) if n["ts"] > (read or 0)][:NOTES_MAX],
+                    "notes_read": read})
     rank = {"thinking": 0, "switching": 0, "starting": 0, "here": 1, "away": 2}
     out.sort(key=lambda r: -r["last"])
     out.sort(key=lambda r: rank[r["state"]])
@@ -474,7 +481,10 @@ def _agents_watch():
     last = None
     while True:
         try:
-            sig = [(r["name"], r["state"], r["where"], r["title"]) for r in _agent_rows()]
+            rows = _agent_rows()
+            sig = [(r["name"], r["state"], r["where"], r["title"], (r["progress"] or {}).get("updated"),
+                    r["notes_read"], [(n["ticket"], n["version"], n["ts"]) for n in r["notes"]])
+                   for r in rows]
             if sig != last:
                 last = sig
                 _bump("agents")
@@ -699,6 +709,37 @@ def _progress_change(old, p):
         new["note"] = (_plain(note, 80) or _bad("note: one plain line up to 80 characters")) if note else None
     new["updated"] = time.time()
     return {k: new.get(k) for k in ("goal", "steps", "current", "note", "updated")}
+
+
+# ---- change notes per master: derived from the cards, never stored twice ----
+NOTES_MAX = 8
+
+
+def _note_words(s, cap=200):
+    s = " ".join(str(s or "").split())
+    return s if len(s) <= cap else s[:cap].rsplit(" ", 1)[0] + "..."
+
+
+def _notes_by_owner(state, ix):
+    """NAME -> the change notes still open on cards that agent owns, newest first: the card's latest
+    decision is a change on its current version (a new version or an approve closes it; archived
+    cards are gone). thumb is that version's image path, "" for a video (purged once decided)."""
+    out = {}
+    for t in state["tickets"]:
+        d = (t.get("decisions") or [{}])[-1]
+        if t.get("archived") or d.get("action") != "change" or d.get("version") != t.get("version"):
+            continue
+        owner = _owner_of(t, ix)[0]
+        if not owner:
+            continue
+        e = next((v for v in t.get("versions", []) if v.get("v") == t["version"]), {})
+        out.setdefault(owner, []).append({
+            "ticket": t["id"], "version": t["version"], "title": t.get("title", ""),
+            "note": _note_words(d.get("message")), "ts": d.get("ts", 0),
+            "thumb": "" if e.get("media") == "video" else f"/shots/{t['id']}/{t['version']}.{e.get('ext') or 'png'}"})
+    for notes in out.values():
+        notes.sort(key=lambda n: -n["ts"])
+    return out
 
 
 def _projects():
@@ -1169,7 +1210,7 @@ class H(BaseHTTPRequestHandler):
 
         if self.path in ("/api/chat", "/api/chat/reply", "/api/taps/say", "/api/chat/import",
                          "/api/agents/new", "/api/chat/clear", "/api/devices",
-                         "/api/agents/progress"):
+                         "/api/agents/progress", "/api/agents/read"):
             # these speak for the reviewer or write agent state: same-origin JSON only, so no
             # other page can drive them through the browser
             origin = self.headers.get("Origin")
@@ -1239,6 +1280,16 @@ class H(BaseHTTPRequestHandler):
                     return
                 _bump("agents")
                 self._json({"ok": True, "progress": out["progress"]})
+                return
+            if self.path == "/api/agents/read":
+                # the reviewer opened this agent's thread: its change notes read as seen on every client
+                name = str(p.get("name") or p.get("agent") or "").strip()
+                now = time.time()
+                if _agent_edit(name, lambda row: row.update(notes_read=now), seen=False) is None:
+                    self._json({"error": "no agent by that name has joined"}, 404)
+                    return
+                _bump("agents")
+                self._json({"ok": True, "notes_read": now})
                 return
             body = (p.get("body") or "").strip()
             chatting = self.path in ("/api/chat", "/api/chat/reply")
