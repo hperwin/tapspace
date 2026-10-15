@@ -191,7 +191,7 @@
 
   /* ---- chat view ---- */
   #chatview{position:fixed;top:62px;bottom:22px;left:0;right:0;padding:0 40px;
-    display:grid;grid-template-columns:300px minmax(0,1fr);gap:22px;max-width:1240px;margin:0 auto}
+    display:grid;grid-template-columns:300px minmax(0,1fr) 340px;gap:22px;max-width:1720px;margin:0 auto}
   #rail{overflow-y:auto;padding:6px 4px 20px;display:flex;flex-direction:column;gap:8px}
   .railhead{font-size:10.5px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:var(--faint);
     padding:12px 10px 2px}
@@ -204,9 +204,9 @@
   .thread .tx{flex:1;min-width:0}
   .thread .nm{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .thread .sub{font-size:11.5px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}
-  .thread .unread{width:8px;height:8px;border-radius:50%;background:rgb(var(--hl));flex:none;
+  .thread .unread,.plan .unread{width:8px;height:8px;border-radius:50%;background:rgb(var(--hl));flex:none;
     transform:scale(0);transition:transform .35s cubic-bezier(.3,1.6,.5,1)}
-  .thread .unread.show{transform:scale(1)}
+  .thread .unread.show,.plan .unread.show{transform:scale(1)}
   .thread.enter{animation:railin .8s cubic-bezier(.22,.9,.24,1) both}
   @keyframes railin{from{opacity:0;filter:blur(12px);transform:translateY(8px)}to{opacity:1;filter:blur(0);transform:none}}
   .railtools{display:flex;gap:8px;padding:4px 4px 2px}
@@ -373,6 +373,66 @@
     letter-spacing:.04em;pointer-events:none}
   #pane{position:relative}
 
+  /* ---- Chat tab, right column: one progress card per live agent, and the links between talking agents ---- */
+  #progress{display:flex;flex-direction:column;min-height:0;
+    padding-top:max(0px, calc(var(--hudb, 0px) - 54px));transition:padding-top .45s cubic-bezier(.22,.9,.24,1)}
+  #plans{position:relative;flex:1;min-height:0;overflow-y:auto;scrollbar-width:none;
+    display:flex;flex-direction:column;gap:10px;padding:6px 10px 24px}
+  #plans .links{position:absolute;left:0;top:0;width:100%;height:0;overflow:visible;pointer-events:none;z-index:2}
+  .links path{fill:none;stroke-width:2;stroke-linecap:round}
+  .links .lbase{stroke:rgba(0,0,0,.08)}
+  .links .lrun{stroke:rgb(var(--hl))}
+  .plan{position:relative;z-index:1;flex:none;appearance:none;border:0;text-align:left;font:inherit;color:inherit;cursor:pointer;
+    width:100%;display:flex;gap:10px;align-items:flex-start;padding:14px;border-radius:18px;background:var(--card);
+    box-shadow:0 1px 2px rgba(0,0,0,.05),0 6px 18px rgba(0,0,0,.07);transition:transform .2s ease,opacity .3s ease}
+  .plan:active{transform:scale(.98)}
+  .plan.away{opacity:.55}
+  .plan .orb{width:26px;height:26px}
+  .plan .pcol{display:block;flex:1;min-width:0}
+  .plan .ptop{display:flex;align-items:center;gap:8px;height:26px}
+  .plan .nm{flex:1;min-width:0;font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .plan .ago{flex:none;font-size:10.5px;color:var(--faint);font-variant-numeric:tabular-nums}
+  .plan .star{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;
+    margin-top:2px;font-size:12.5px;line-height:1.4;color:var(--ink)}
+  .plan .star.none{color:var(--faint)}
+  .plan .track{display:flex;align-items:center;gap:3px;height:8px;margin-top:10px}
+  .plan .track:empty{display:none}
+  .plan .track i{flex:1;min-width:2px;height:4px;border-radius:2px;background:rgba(0,0,0,.08);
+    transition:height .45s cubic-bezier(.22,.9,.24,1),background-color .45s ease}
+  .plan .track i.done{background:var(--ink)}
+  .plan .track i.now{height:8px;border-radius:4px;background:rgb(var(--hl))}
+  .plan .track.all i{background:rgb(var(--hl))}
+  .plan .track.long{display:block;position:relative}
+  .plan .track.long i{position:absolute;left:0;right:0;top:2px;height:4px}
+  .plan .track.long i.fill{right:auto;background:var(--ink);transition:width .7s cubic-bezier(.22,.9,.24,1)}
+  .plan .track.long.all i{background:rgb(var(--hl))}
+  .plan .track.long b{position:absolute;top:0;width:8px;height:8px;border-radius:50%;background:rgb(var(--hl));
+    transform:translateX(-50%);transition:left .7s cubic-bezier(.22,.9,.24,1)}
+  .plan .stepline{display:block;margin-top:6px;font-size:11.5px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .plan .stepline:empty{display:none}
+  .plan .stepline b{font-weight:600;color:var(--ink);font-variant-numeric:tabular-nums}
+  .orb.ping::after{animation:ripple 1.2s ease-out 1}
+  .pgap{flex:none;display:flex;align-items:center;height:0;margin-top:-10px;opacity:0;overflow:hidden;padding-left:50px;
+    padding-right:4px;font-size:11px;color:var(--dim);white-space:nowrap;
+    transition:height .5s cubic-bezier(.22,.9,.24,1),margin-top .5s cubic-bezier(.22,.9,.24,1),opacity .35s ease}
+  .pgap.open{height:20px;margin-top:0;opacity:1}
+  .pgap span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
+  .pgap b{font-weight:600;color:var(--ink)}
+  .pgap em{flex:none;margin-left:8px;font-style:normal;color:var(--faint);font-variant-numeric:tabular-nums}
+  #progress .railempty{padding:8px 4px}
+  @media (min-width:1181px){
+    /* with the right column showing, only the brand row is veiled; HUD rows float above the panel's top clearance */
+    body.chatmode header{background:none}
+    body.chatmode header::before{content:"";position:absolute;left:0;right:0;top:0;height:66px;z-index:-1;
+      background:linear-gradient(#fff 62%,rgba(255,255,255,0))}
+  }
+  @media (max-width:1360px){ #chatview{padding:0 28px;gap:18px;grid-template-columns:264px minmax(0,1fr) 296px} }
+  @media (max-width:1180px){ #chatview{padding:0 40px;gap:22px;grid-template-columns:300px minmax(0,1fr);max-width:1240px} #progress{display:none} }
+  @media (prefers-reduced-motion: reduce){
+    .agrp .talk i,.note.enter,.note.out,.orb.ping::after{animation:none}
+    #progress,.pgap,.plan .track i,.plan .track.long i.fill,.plan .track.long b{transition:none}
+  }
+
   @media (max-width:900px){
     #tabs{top:44px}
     body{padding-top:96px}
@@ -436,6 +496,10 @@
       <button type="submit" id="sendbtn" disabled aria-label="Send"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 16V4M4.5 9.5 10 4l5.5 5.5"/></svg></button>
     </form>
   </section>
+  <aside id="progress" aria-label="Progress">
+    <div class="railhead">Progress</div>
+    <div id="plans"><svg class="links" aria-hidden="true"></svg></div>
+  </aside>
 </section>
 <div class="toast" id="toast"></div>
 <div id="lightbox"><div id="lbstage"><img id="lbimg" alt=""></div><div id="lbcap"></div></div>
@@ -989,7 +1053,6 @@ function readNotes(name){         // opening an agent's thread reads its notes o
   if (!shown.length) return;
   notesHidden[name] = Math.max(...shown.map(n => +n.ts));
   fetch('/api/agents/read', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({name})}).catch(() => {});
-  window.tsPanel?.render(agents, links);
 }
 function talkText(name){
   const t = links.filter(l => l && l.active && l.a !== l.b && (l.a === name || l.b === name))
@@ -1197,7 +1260,7 @@ function openThread(key){
   current = key; store('tapspace.thread', key);
   if (!isAgent(key)) fetch('/api/taps/refresh', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({key})});
   markRead(key); if (isAgent(key)) readNotes(agentOf(key));
-  renderRail(); restoreDraft();
+  renderRail(); window.tsPanel?.render(agents, links); restoreDraft();   // the opened card's reply dot clears now, not on the next poll
   if (isAgent(key)) pollChat(); else renderThread();
   ta.focus();
 }
@@ -1444,6 +1507,306 @@ async function hudTick(){
 
 hudTick();
 setInterval(hudTick, 2000);
+</script>
+
+<script type="module">
+/* ---- progress panel (Chat tab, right column) + agent-to-agent links ----
+   One card per live agent: its goal, a segmented step track and where it is now.
+   Two agents talking to each other sit next to each other, joined in the face
+   column by a line that carries the HUD's chasing draw from sender to receiver.
+   Data rides script 2's /api/agents poll (window.tsPanel.render). Without
+   anime.js, or with Reduce Motion, everything renders still. */
+let A = null;
+try{ A = await import('/anime.esm.js'); }catch(e){}
+
+// ---- pure: who gets a card, the order, the talking pairs, the step line (no DOM) ----
+const LIVE_STATES = new Set(['thinking', 'here', 'switching', 'starting']);
+const KEEP = 600;     // an away agent keeps its card 10 minutes after it was last seen or spoke
+const WINDOW = 600;   // a pair draws while the server calls its link active and the newest message is under 10 minutes old
+function isLive(a, now){
+  return !!(a.progress && typeof a.progress === 'object') || LIVE_STATES.has(a.state) ||
+    now - Math.max(+a.seen || 0, +a.last_master || 0) < KEEP;
+}
+function planOf(a){
+  const p = a.progress;
+  if (!p || typeof p !== 'object') return null;
+  const steps = (Array.isArray(p.steps) ? p.steps : []).filter(s => typeof s === 'string' && s.trim()).map(s => s.trim());
+  const n = steps.length, c = Math.floor(+p.current);
+  const cur = Math.max(0, Math.min(Number.isFinite(c) ? c : 0, n));
+  return {goal: typeof p.goal === 'string' ? p.goal.trim() : '', steps, n, cur, done: n > 0 && cur >= n,
+          note: typeof p.note === 'string' ? p.note.trim() : '', updated: +p.updated || 0};
+}
+function stepLine(m){
+  if (!m || !m.n) return null;
+  return m.done ? {count: 'Done', text: m.n + ' of ' + m.n} : {count: (m.cur + 1) + ' of ' + m.n, text: m.steps[m.cur]};
+}
+function byFirst(x, y){
+  return ((+x.first || +x.seen || 0) - (+y.first || +y.seen || 0)) || (x.name < y.name ? -1 : x.name > y.name ? 1 : 0);
+}
+function board(list, links, now){
+  const live = (Array.isArray(list) ? list : []).filter(a => a && a.name && isLive(a, now)).sort(byFirst);
+  const names = new Set(live.map(a => a.name));
+  const best = new Map();                          // one link per pair, the newest
+  for (const l of Array.isArray(links) ? links : []){
+    if (!l || !l.active || now - (+l.last || 0) >= WINDOW || !l.a || !l.b || l.a === l.b || !names.has(l.a) || !names.has(l.b)) continue;
+    const k = l.a < l.b ? l.a + '|' + l.b : l.b + '|' + l.a;
+    if (!best.has(k) || (+l.last || 0) > (+best.get(k).last || 0)) best.set(k, l);
+  }
+  const partner = new Map();                       // greedy by newest: each agent joins at most one pair
+  for (const [k, l] of [...best].sort((x, y) => (+y[1].last || 0) - (+x[1].last || 0))){
+    if (partner.has(l.a) || partner.has(l.b)) continue;
+    partner.set(l.a, {k, l, other: l.b}); partner.set(l.b, {k, l, other: l.a});
+  }
+  const order = [], pairs = [], placed = new Set();
+  for (const a of live){                           // stable by first; a pair's later member moves up under the earlier
+    if (placed.has(a.name)) continue;
+    order.push(a); placed.add(a.name);
+    const p = partner.get(a.name);
+    if (p && !placed.has(p.other)){
+      order.push(live.find(x => x.name === p.other)); placed.add(p.other);
+      const from = p.l.from === p.other ? p.other : a.name;
+      pairs.push({key: p.k, upper: a.name, lower: p.other, from, to: from === a.name ? p.other : a.name, link: p.l});
+    }
+  }
+  return {order, pairs};
+}
+// ---- end pure ----
+
+const plansEl = document.getElementById('plans');
+const svg = plansEl.querySelector('.links');
+const SVGNS = 'http://www.w3.org/2000/svg';
+const RM = matchMedia('(prefers-reduced-motion: reduce)');
+const NARROW = matchMedia('(max-width:1180px)');
+const lb = document.getElementById('lightbox');
+const pcards = new Map();   // agent key -> card parts
+const pgaps = new Map();    // pair key -> the gap label + its connector paths
+let emptyEl = null;
+
+const still = () => !A || RM.matches;
+function shown(){
+  return document.body.classList.contains('chatmode') && !NARROW.matches &&
+    !lb.classList.contains('open') && document.visibilityState === 'visible';
+}
+function cancelAll(list){ for (const a of list){ try{ a.cancel(); }catch(e){} } list.length = 0; }
+function clean(el){ el.style.opacity = ''; el.style.filter = ''; el.style.transform = ''; }
+function enter(el, i){
+  if (still()){ clean(el); return; }
+  el.style.opacity = '0';
+  A.animate(el, {opacity: [0, 1], filter: ['blur(8px)', 'blur(0px)'], translateY: [8, 0], duration: 700,
+    delay: Math.min(i, 5) * 70, ease: 'out(3)', onComplete: () => clean(el)});
+}
+function exit(el, done){
+  if (still()){ done(); return; }
+  A.animate(el, {opacity: 0, filter: 'blur(8px)', translateY: 6, duration: 450, ease: 'in(2)', onComplete: done});
+}
+function nod(el){
+  if (still()) return;
+  A.animate(el, {scale: [1, 1.025, 1], duration: 520, ease: 'out(3)', onComplete: () => { el.style.transform = ''; }});
+}
+function setText(el, t){ if (el.textContent !== t) el.textContent = t; }
+
+let until = 0, raf = 0;
+function scheduleLayout(ms){
+  until = Math.max(until, performance.now() + ms);
+  if (!raf) raf = requestAnimationFrame(frame);
+}
+function frame(){ raf = 0; layout(); if (performance.now() < until) raf = requestAnimationFrame(frame); }
+function layout(){
+  if (!plansEl.offsetParent) return;               // panel hidden: Visual tab or a narrow window
+  svg.style.height = plansEl.scrollHeight + 'px';
+  for (const g of pgaps.values()){
+    const up = pcards.get(agentKey(g.upper)), lo = pcards.get(agentKey(g.lower));
+    if (!up || !lo || !up.el.isConnected || !lo.el.isConnected){ g.grp.style.display = 'none'; continue; }
+    const x = up.el.offsetLeft + up.orb.offsetLeft + up.orb.offsetWidth / 2;
+    const y1 = up.el.offsetTop + up.orb.offsetTop + up.orb.offsetHeight + 6;
+    const y2 = lo.el.offsetTop + lo.orb.offsetTop - 6;
+    g.grp.style.display = y2 - y1 > 4 ? '' : 'none';
+    const d = g.down ? `M${x} ${y1}L${x} ${y2}` : `M${x} ${y2}L${x} ${y1}`;
+    if (g.d !== d){ g.base.setAttribute('d', d); g.run.setAttribute('d', d); g.d = d; }
+  }
+}
+const ro = new ResizeObserver(() => scheduleLayout(0));
+ro.observe(plansEl);
+
+function makeCard(key){
+  const el = document.createElement('button');
+  el.type = 'button'; el.className = 'plan'; el.dataset.key = key;
+  el.innerHTML = `<span class="orb"></span><span class="pcol"><span class="ptop"><span class="nm"></span>` +
+    `<span class="ago"></span><span class="unread"></span></span><span class="star"></span>` +
+    `<span class="track"></span><span class="stepline"></span></span>`;
+  el.addEventListener('click', () => openThread(key));
+  const q = s => el.querySelector(s);
+  ro.observe(el);
+  return {key, el, orb: q('.orb'), nm: q('.nm'), ago: q('.ago'), dot: q('.unread'), star: q('.star'),
+          track: q('.track'), line: q('.stepline'), tsig: null, lsig: null, cur: null, pingT: 0};
+}
+function drawTrack(t, m){
+  if (!m || !m.n){ t.className = 'track'; t.textContent = ''; t.title = ''; return; }
+  if (m.n > 16){                                   // too many to segment: one bar, the done fraction and a knob
+    t.className = 'track long' + (m.done ? ' all' : '');
+    if (!t.querySelector('.fill')) t.innerHTML = '<i></i><i class="fill"></i><b></b>';
+    t.querySelector('.fill').style.width = (100 * m.cur / m.n) + '%';
+    t.querySelector('b').style.left = (m.done ? 100 : 100 * (m.cur + .5) / m.n) + '%';
+    t.title = m.done ? 'Done' : (m.cur + 1) + '. ' + m.steps[m.cur];
+    return;
+  }
+  t.className = 'track' + (m.done ? ' all' : ''); t.title = '';
+  if (t.querySelector('.fill')) t.textContent = '';
+  while (t.children.length < m.n) t.appendChild(document.createElement('i'));
+  while (t.children.length > m.n) t.lastChild.remove();
+  [...t.children].forEach((s, i) => { s.className = i < m.cur ? 'done' : i === m.cur ? 'now' : ''; s.title = (i + 1) + '. ' + m.steps[i]; });
+}
+function fillCard(c, a, now){
+  const m = planOf(a), sl = stepLine(m);
+  const cls = 'orb ' + (a.state || '') + (c.orb.classList.contains('ping') ? ' ping' : '');
+  if (c.orb.className !== cls) c.orb.className = cls;
+  c.el.classList.toggle('away', a.state === 'away');
+  setText(c.nm, a.title || 'Claude');
+  setText(c.ago, when(Math.max(m ? m.updated : 0, +a.last_master || 0) || +a.seen || now));
+  const unread = isUnread(c.key);                   // an unread reply; change notes keep the rail's dot and rows
+  c.dot.classList.toggle('show', unread);
+  const goal = m ? m.goal : '';
+  setText(c.star, goal || 'No goal yet'); c.star.classList.toggle('none', !goal); c.star.title = goal;
+  const tsig = m && m.n ? m.cur + '|' + m.steps.join('\n') : '';
+  if (c.tsig !== tsig){ drawTrack(c.track, m); c.tsig = tsig; }
+  const lsig = sl ? sl.count + '\n' + sl.text : '';
+  if (c.lsig !== lsig){ c.line.innerHTML = sl ? `<b>${esc(sl.count)}</b> · ${esc(sl.text)}` : ''; c.lsig = lsig; }
+  c.line.title = m && m.note ? m.note : '';
+  c.el.setAttribute('aria-label', [a.title || 'Claude', MASTER[a.state] || '', goal ? 'goal: ' + goal : 'no goal yet',
+    sl ? (m.done ? 'all ' + m.n + ' steps done' : 'step ' + sl.count + ', ' + sl.text) : '',
+    'updated ' + c.ago.textContent, unread ? 'unread' : ''].filter(Boolean).join(', '));
+  if (m && c.cur !== null && m.cur > c.cur) nod(c.el);    // the step moved on
+  c.cur = m ? m.cur : null;
+}
+function ping(c){                                   // a new message landed on this agent: one ripple, one nod
+  c.orb.classList.remove('ping'); void c.orb.offsetWidth; c.orb.classList.add('ping');
+  clearTimeout(c.pingT); c.pingT = setTimeout(() => c.orb.classList.remove('ping'), 1300);
+  nod(c.el);
+}
+
+function makeGap(p){
+  const el = document.createElement('div'); el.className = 'pgap';
+  const grp = document.createElementNS(SVGNS, 'g');
+  const base = document.createElementNS(SVGNS, 'path'), run = document.createElementNS(SVGNS, 'path');
+  base.setAttribute('class', 'lbase'); run.setAttribute('class', 'lrun'); run.style.opacity = '0';
+  grp.append(base, run); svg.appendChild(grp);
+  const g = {key: p.key, el, grp, base, run, html: '', d: '', last: null, drawn: still(), chase: [], timer: 0};
+  requestAnimationFrame(() => el.classList.add('open'));
+  if (!g.drawn){
+    base.style.opacity = '0';
+    g.timer = setTimeout(() => {                   // draw on once the two cards have glided together
+      base.style.opacity = '';
+      try{ A.animate(A.svg.createDrawable(base), {draw: ['0 0', '0 1'], duration: 700, ease: 'out(3)',
+        onComplete: () => { g.drawn = true; syncMotion(); }}); }
+      catch(e){ g.drawn = true; syncMotion(); }
+    }, 450);
+  }
+  return g;
+}
+function fillGap(g, p, now){
+  const l = p.link, last = +l.last || 0;
+  const html = `<span><b>${esc(titleOf(p.from) || 'Claude')}</b> → <b>${esc(titleOf(p.to) || 'Claude')}</b>` +
+    (l.summary ? ' · ' + esc(String(l.summary)) : '') + `</span><em>${when(last || now)}</em>`;
+  if (g.html !== html){ g.el.innerHTML = html; g.html = html; }
+  g.el.title = String(l.summary || '');
+  g.upper = p.upper; g.lower = p.lower; g.down = p.from === p.upper;   // the chase runs from sender to receiver
+  if (g.last !== null && last > g.last && !still()){ const rc = pcards.get(agentKey(p.to)); if (rc) ping(rc); }
+  g.last = last;
+}
+function retireGap(g){
+  g.leaving = true; g.el.classList.add('leaving'); g.el.classList.remove('open');
+  clearTimeout(g.timer); cancelAll(g.chase); g.run.style.opacity = '0';
+  const done = () => { g.grp.remove(); g.el.remove(); if (pgaps.get(g.key) === g) pgaps.delete(g.key); };
+  if (still()){ done(); return; }
+  try{ A.animate(A.svg.createDrawable(g.base), {draw: '1 1', duration: 450, ease: 'in(2)'}); }catch(e){}
+  setTimeout(done, 520);
+}
+function syncMotion(){                              // the chase runs while a pair is drawn, only where someone can see it
+  const on = shown();
+  if (on) scheduleLayout(0);
+  for (const g of pgaps.values()){
+    if (g.leaving) continue;
+    const live = g.drawn;
+    if (on && live && !still()){
+      if (!g.chase.length){
+        g.run.style.opacity = '1';
+        try{ g.chase.push(A.animate(A.svg.createDrawable(g.run), {draw: ['0 0', '0 1', '1 1'],
+          duration: 1900, loop: true, ease: 'inOutSine'})); }
+        catch(e){ g.run.setAttribute('stroke-dasharray', '26 12'); }
+      }
+      continue;
+    }
+    cancelAll(g.chase);
+    if (live && still()){ g.run.removeAttribute('stroke-dasharray'); g.run.removeAttribute('stroke-dashoffset'); g.run.style.opacity = '1'; }
+    else g.run.style.opacity = '0';
+  }
+}
+
+function render(agentsIn, linksIn){
+  const now = Date.now() / 1000;
+  const {order, pairs} = board(agentsIn, linksIn, now);
+  const before = new Map();
+  for (const [k, c] of pcards) if (!c.leaving) before.set(k, c.el.offsetTop);
+  const want = new Set(order.map(a => agentKey(a.name)));
+  for (const [k, c] of pcards){
+    if (want.has(k) || c.leaving) continue;
+    c.leaving = true; c.el.classList.add('leaving'); c.el.style.pointerEvents = 'none';
+    exit(c.el, () => { ro.unobserve(c.el); c.el.remove(); if (pcards.get(k) === c) pcards.delete(k); scheduleLayout(0); });
+  }
+  const paired = new Set(pairs.map(p => p.key));
+  for (const g of pgaps.values()) if (!g.leaving && !paired.has(g.key)) retireGap(g);
+  const upperOf = new Map(pairs.map(p => [p.upper, p]));
+  const seq = [], added = [];
+  for (const a of order){
+    const k = agentKey(a.name);
+    let c = pcards.get(k);
+    if (!c || c.leaving){ c = makeCard(k); pcards.set(k, c); added.push(c); }
+    fillCard(c, a, now);
+    seq.push(c.el);
+    const p = upperOf.get(a.name);
+    if (p){
+      let g = pgaps.get(p.key);
+      if (!g || g.leaving){ g = makeGap(p); pgaps.set(p.key, g); }
+      fillGap(g, p, now);
+      seq.push(g.el);
+    }
+  }
+  if (!order.length){
+    if (!emptyEl){ emptyEl = document.createElement('div'); emptyEl.className = 'railempty'; emptyEl.textContent = 'No agents working right now.'; }
+    seq.push(emptyEl);
+  } else if (emptyEl) emptyEl.remove();
+  let ref = svg.nextElementSibling;                  // put the DOM in order; leaving cards and closing gaps stay put
+  for (const el of seq){
+    while (ref && ref !== el && ref.classList.contains('leaving')) ref = ref.nextElementSibling;
+    if (ref === el) ref = ref.nextElementSibling;
+    else plansEl.insertBefore(el, ref);
+  }
+  if (!still()) for (const [k, top] of before){       // cards that moved glide from where they were
+    const c = pcards.get(k);
+    if (!c || c.leaving || !c.el.isConnected) continue;
+    const dy = top - c.el.offsetTop;
+    if (Math.abs(dy) > 1) c.el.animate([{transform: `translateY(${dy}px)`}, {transform: 'none'}],
+      {duration: 520, easing: 'cubic-bezier(.22,.9,.24,1)'});
+  }
+  added.forEach((c, i) => enter(c.el, i));
+  scheduleLayout(700);
+  syncMotion();
+}
+
+// clear the presence HUD: the panel starts under its last row (the HUD grows down from the header)
+const hud = document.getElementById('hud');
+const hudBottom = () => document.documentElement.style.setProperty('--hudb', Math.round(hud.getBoundingClientRect().bottom) + 'px');
+new ResizeObserver(hudBottom).observe(hud);
+hudBottom();
+
+new MutationObserver(syncMotion).observe(document.body, {attributes: true, attributeFilter: ['class']});
+new MutationObserver(syncMotion).observe(lb, {attributes: true, attributeFilter: ['class']});
+NARROW.addEventListener('change', syncMotion);
+RM.addEventListener('change', syncMotion);
+document.addEventListener('visibilitychange', syncMotion);
+
+window.tsPanel = {render};
+render(agents, links);
 </script>
 </body>
 </html>
