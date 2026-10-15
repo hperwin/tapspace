@@ -460,7 +460,8 @@ def _agent_rows():
                     "seen": info.get("seen", 0), "first": info.get("first", 0),
                     "where": info.get("where", ""), "last": last, "count": len(rows),
                     "last_master": said[-1] if said else 0,
-                    "title": _title(info)})
+                    "title": _title(info),
+                    "progress": info.get("progress")})
     rank = {"thinking": 0, "switching": 0, "starting": 0, "here": 1, "away": 2}
     out.sort(key=lambda r: -r["last"])
     out.sort(key=lambda r: rank[r["state"]])
@@ -635,6 +636,69 @@ def _served(t, ix):
     out = {k: v for k, v in t.items() if k != "session"}
     out["owner"], out["owner_how"] = _owner_of(t, ix)
     return out
+
+
+# ---- a master's run: its north star, its steps, where it is now (tap.py goal / step) ----
+_PLAIN = re.compile(r'^[^\x00-\x1f<>"–—]+$')    # one plain line: no markup, quotes or long dashes
+
+
+def _bad(msg):
+    raise ValueError(msg)
+
+
+def _plain(s, cap):
+    """s with its whitespace folded when that is one plain line of 1 to cap characters, else None."""
+    s = " ".join(str(s if s is not None else "").split())
+    return s if s and len(s) <= cap and _PLAIN.match(s) else None
+
+
+def _step_to(v, steps, cur):
+    """A step move -> the new 0-based current: next, done, a step's text (any case), or a step
+    number counted from 1 as the cards show it."""
+    w, n = str(v).strip(), len(steps)
+    if w.lower() == "next":
+        return min(cur + 1, n)
+    if w.lower() == "done":
+        return n
+    for i, s in enumerate(steps):
+        if s.casefold() == w.casefold():
+            return i
+    if w.isdigit() and 1 <= int(w) <= n:
+        return int(w) - 1
+    _bad(f"step: next, done, a step's name, or a number from 1 to {n}")
+
+
+def _progress_change(old, p):
+    """The progress after one POST /api/agents/progress body (pure). current is 0-based and equals
+    len(steps) when the run is done. New steps start over at the first one; moving to another step
+    clears the note unless the same call sets one. ValueError says what to fix."""
+    if p.get("clear"):
+        return None
+    new, was = dict(old or {}), (old or {}).get("current")
+    if "goal" in p:
+        new["goal"] = _plain(p["goal"], 120) or _bad(
+            "goal: one plain line up to 120 characters (no quotes, angle brackets or long dashes)")
+    if "steps" in p:
+        raw = p["steps"].split("|") if isinstance(p["steps"], str) else p["steps"]
+        steps = [_plain(s, 40) for s in (raw if isinstance(raw, list) else [])]
+        if not 1 <= len(steps) <= 12 or None in steps or len({s.casefold() for s in steps}) != len(steps):
+            _bad("steps: 1 to 12 different plain labels, up to 40 characters each")
+        new.update(steps=steps, current=0, note=None)
+    if not new.get("goal") or not new.get("steps"):
+        _bad('set a goal and steps first: tap.py goal --as NAME "goal" --steps "a|b|c"')
+    n = len(new["steps"])
+    if "current" in p:
+        c = p["current"]
+        new["current"] = c if type(c) is int and 0 <= c <= n else _bad(f"current: a number from 0 to {n}")
+    if "step" in p:
+        new["current"] = _step_to(p["step"], new["steps"], new["current"])
+    if new["current"] != was and "note" not in p:
+        new["note"] = None
+    if "note" in p:
+        note = " ".join(str(p["note"] or "").split())
+        new["note"] = (_plain(note, 80) or _bad("note: one plain line up to 80 characters")) if note else None
+    new["updated"] = time.time()
+    return {k: new.get(k) for k in ("goal", "steps", "current", "note", "updated")}
 
 
 def _projects():
@@ -1104,9 +1168,10 @@ class H(BaseHTTPRequestHandler):
             return
 
         if self.path in ("/api/chat", "/api/chat/reply", "/api/taps/say", "/api/chat/import",
-                         "/api/agents/new", "/api/chat/clear", "/api/devices"):
-            # these speak for the reviewer: same-origin JSON only, so no other
-            # page can drive them through the browser
+                         "/api/agents/new", "/api/chat/clear", "/api/devices",
+                         "/api/agents/progress"):
+            # these speak for the reviewer or write agent state: same-origin JSON only, so no
+            # other page can drive them through the browser
             origin = self.headers.get("Origin")
             if (self.headers.get("content-type") or "").split(";")[0] != "application/json" or \
                (origin and origin not in (f"http://127.0.0.1:{PORT}", f"http://localhost:{PORT}")):
@@ -1149,6 +1214,31 @@ class H(BaseHTTPRequestHandler):
                     self._json({"ok": True, "url": _chat_import(str(p.get("path") or ""))})
                 except Exception as e:
                     self._json({"error": str(e)}, 400)
+                return
+            if self.path == "/api/agents/progress":
+                # a master publishes its run: the north star, the steps, where it is now (local only)
+                if not self._local():
+                    self._json({"error": "only from this Mac"}, 403)
+                    return
+                name = str(p.get("name") or p.get("agent") or "").strip()
+                out = {}
+
+                def change(row):
+                    out["progress"] = _progress_change(row.get("progress"), p)
+                    if out["progress"] is None:
+                        row.pop("progress", None)
+                    else:
+                        row["progress"] = out["progress"]
+                try:
+                    row = _agent_edit(name, change)
+                except ValueError as e:
+                    self._json({"error": str(e)}, 400)
+                    return
+                if row is None:
+                    self._json({"error": "no agent by that name has joined"}, 404)
+                    return
+                _bump("agents")
+                self._json({"ok": True, "progress": out["progress"]})
                 return
             body = (p.get("body") or "").strip()
             chatting = self.path in ("/api/chat", "/api/chat/reply")
