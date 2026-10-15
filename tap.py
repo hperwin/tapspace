@@ -1,19 +1,31 @@
 #!/usr/bin/env python3
-"""tap — the agent's hand into TapSpace (see README.md and AGENTS.md).
+"""tap: the agent's hand into TapSpace (see README.md and AGENTS.md).
 
   tap.py post   --agent T2-cards --title "Combined stat card" --image shot.png
-                [--note "..."] [--campaign my-feature]        -> prints TICKET_ID
+                [--note "..."] [--campaign my-feature] [--owner NAME]
+                                                              -> prints TICKET_ID
   tap.py update TICKET --image shot2.png [--note "v2: ..."]   -> new version, back to waiting
   tap.py wait   TICKET [--timeout 900]   -> blocks until the reviewer decides on the CURRENT version
                                             exit 0 = approved, 3 = changes (message on stdout), 4 = timeout
   tap.py status TICKET                   -> prints ticket JSON now, never blocks
   tap.py up                              -> ensure the whole rig is running (idempotent);
                                             starts the server if the port is quiet, health-checks it
-  tap.py doctor                          -> one-look health: server, tickets, live activity, sessions
+  tap.py doctor                          -> one-look health: server, cards and their owners, goal
+                                            cards, notes, links, claimed sessions, live activity
   tap.py listen --as NAME [--timeout 3600]
                                          -> a master agent joins the space under NAME (its own Chat
                                             thread) and blocks until the reviewer writes to it; prints his
                                             unanswered messages. exit 0 = message, 4 = timeout
+  tap.py title --as NAME "Stat card redesign"
+                                         -> names the agent after its work (2 to 4 plain words; the
+                                            only name the reviewer sees)
+  tap.py goal --as NAME "the outcome, one plain line" --steps "Audit|Spec|Build|Review|PR open"
+              [--current N]              -> a master publishes its run's goal card (the Chat tab and
+                                            Glint show it); the goal or --steps alone changes just that
+  tap.py step --as NAME next|done|N|"step name" [--note "14 of 20 builders done"]
+                                         -> moves the goal card (N counts from 1, as the card shows it);
+                                            --note alone changes only the note
+  tap.py progress --as NAME              -> prints the goal card as stored (a relay car reads it here)
   Taps (the reviewer's GitHub agent issues; every agent can talk to all of them):
   tap.py taps                            -> list them: key, status, title, last message
   tap.py tap-read KEY                    -> the whole thread of one tap (KEY = owner/repo#n)
@@ -224,6 +236,31 @@ def _media(a):
     return {"video_b64": _b64(a.video), "video_ext": ext}
 
 
+def _to_step(to):
+    """A step as the card shows it (1 = first), a step's name, next or done -> the wire fields."""
+    to = to.strip()
+    return {"current": int(to) - 1} if to.isdigit() else {"step": to}
+
+
+def _progress(name, body):
+    """One change to NAME's goal card; prints the server's answer. Exit 0 on ok, 1 otherwise."""
+    r = _call("/api/agents/progress", {"name": name, **body})
+    print(json.dumps(r))
+    return 0 if r.get("ok") else 1
+
+
+def _claimed():
+    """How many Claude Code sessions the server has tied to how many agent NAMEs
+    (data/sessions.json), or None when this tap.py cannot read the server's data folder."""
+    try:
+        d = json.loads((DATA / "sessions.json").read_text())
+        d = d["sessions"] if isinstance(d.get("sessions"), dict) else d
+        names = [v["name"] for v in d.values() if isinstance(v, dict) and isinstance(v.get("name"), str)]
+    except Exception:
+        return None
+    return {"sessions": len(names), "agents": len(set(names))}
+
+
 def main():
     ap = argparse.ArgumentParser(prog="tap.py")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -267,6 +304,20 @@ def main():
 
     rl = sub.add_parser("relay")
     rl.add_argument("--as", dest="name", default=me, required=not me)
+
+    go = sub.add_parser("goal")
+    go.add_argument("--as", dest="name", default=me, required=not me)
+    go.add_argument("goal", nargs="?", help="the run's north star: the outcome the reviewer will see, one plain line")
+    go.add_argument("--steps", help='the run\'s steps in order, e.g. "Audit|Spec|Build|Review|PR open"')
+    go.add_argument("--current", help="where the run is now: a step number (1 = first), a step's name, or done")
+
+    st = sub.add_parser("step")
+    st.add_argument("--as", dest="name", default=me, required=not me)
+    st.add_argument("to", nargs="?", help="a step number (1 = first), a step's name, next, or done")
+    st.add_argument("--note", help='where inside the step, one short plain line ("" clears it)')
+
+    pg = sub.add_parser("progress")
+    pg.add_argument("--as", dest="name", default=me, required=not me)
 
     sub.add_parser("taps")
     tr = sub.add_parser("tap-read")
@@ -316,14 +367,26 @@ def main():
         try:
             st = _call("/api/state")
             act = _call("/api/activity")
+            ag = _call("/api/agents")
         except Exception as e:
             print(json.dumps({"server": "DOWN", "url": BASE, "error": str(e),
                               "fix": "tap.py up"}))
             return 1
+        rows, links = ag.get("agents") or [], ag.get("links") or []
         print(json.dumps({
             "server": "UP", "url": BASE,
             "live_cards": len(st["tickets"]),
             "waiting_on_you": sum(1 for t in st["tickets"] if t["status"] == "waiting"),
+            "cards_with_owner": sum(1 for t in st["tickets"] if t.get("owner")),
+            "agents": len(rows),
+            "goal_cards": sum(1 for r in rows if r.get("progress")),
+            "notes": sum(len(r.get("notes") or []) for r in rows),
+            "links": len(links),
+            "links_active": sum(1 for x in links if x.get("active")),
+            "claimed_sessions": _claimed(),
+            # the link scanner's own counters (null on a server without it); zero heard and claimed
+            # with masters live means Claude Code's transcript format changed
+            "link_scanner": act.get("links"),
             "activity": act["rows"],
             "claude_sessions": act["sessions"],
         }, indent=1))
@@ -395,6 +458,34 @@ def main():
         r = _call("/api/agents/relay", {"agent": a.name})
         print(json.dumps(r))
         return 0 if r.get("ok") else 1
+
+    if a.cmd == "goal":
+        body = {}
+        if a.goal is not None:
+            body["goal"] = a.goal
+        if a.steps is not None:
+            body["steps"] = [s.strip() for s in a.steps.split("|") if s.strip()]
+        if a.current is not None:
+            body.update(_to_step(a.current))
+        if not body:
+            sys.exit('give the goal and/or --steps: tap.py goal --as NAME "goal" --steps "a|b|c"')
+        return _progress(a.name, body)
+
+    if a.cmd == "step":
+        body = _to_step(a.to) if a.to else {}
+        if a.note is not None:
+            body["note"] = a.note
+        if not body:
+            sys.exit("give a step (a number, a step's name, next or done) and/or --note")
+        return _progress(a.name, body)
+
+    if a.cmd == "progress":
+        row = next((r for r in _call("/api/agents").get("agents") or [] if r.get("name") == a.name), None)
+        if row is None:
+            print(json.dumps({"error": "no agent by that name is in the space"}))
+            return 1
+        print(json.dumps(row.get("progress"), indent=1))
+        return 0
 
     if a.cmd == "tap-say":
         r = _call("/api/taps/say", {"key": a.key, "body": a.text, "via": a.name})
