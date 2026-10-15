@@ -840,10 +840,13 @@ class H(BaseHTTPRequestHandler):
             if not self._local():
                 self._json({"error": "pairing is only shown on this Mac"}, 403)
                 return
+            # open (or reuse) the phone route first, so this page is all Hayden needs
+            subprocess.run(["python3", str(ROOT / "tap.py"), "pair"], capture_output=True, timeout=45,
+                           env={**os.environ, "TAPSPACE_URL": f"http://127.0.0.1:{PORT}"})
             link = _pair_link()
-            body = (f"<p>In Glint, open You, then Pair with your Mac, and scan this.</p>{qr.svg(link)}"
+            body = (f"<p>In Glint, tap Scan code and point it here.</p>{qr.svg(link)}"
                     f"<p><code>{html.escape(link)}</code></p>" if link else
-                    "<p>No route to your phone yet. Run <code>python3 tap.py pair</code> on this Mac, "
+                    "<p>Couldn't open a route to your phone. Check that ngrok or Tailscale is set up, "
                     "then reload this page.</p>")
             self._bytes(("<!doctype html><meta name=viewport content='width=device-width'>"
                          "<title>Pair Glint</title><style>body{font:16px -apple-system,system-ui;"

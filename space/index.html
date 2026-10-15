@@ -395,6 +395,7 @@
   <aside id="rail">
     <div class="railtools">
       <button class="rbtn new" id="newsession" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg>New session</button>
+      <button class="rbtn clear" id="pairphone" type="button" title="Connect Glint on your phone">Pair phone</button>
     </div>
     <div class="railhead">Agents</div>
     <div id="agentlist"><div class="railempty">No agents in the space yet.</div></div>
@@ -1127,6 +1128,7 @@ $('#newsession').addEventListener('click', async () => {
 });
 
 // ---- Clear all (Visual): two taps archive every card on the space ----
+$('#pairphone').addEventListener('click', () => window.open('/pair', '_blank', 'noopener'));
 let clearArm = 0;
 clearall.addEventListener('click', async () => {
   if (Date.now() > clearArm){ clearArm = Date.now() + 3000; clearall.classList.add('arm'); clearall.textContent = 'Tap to confirm';
