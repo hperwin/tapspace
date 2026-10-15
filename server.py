@@ -406,6 +406,18 @@ def _agent_state(info, rows):
     return "here" if time.time() - info.get("listen", 0) < 30 else "away"
 
 
+def _title(info):
+    """What the person sees: the plain name the agent gave itself for the work
+    (tap.py title), else the project it was started in, else just Claude."""
+    t = (info.get("title") or "").strip()
+    if t:
+        return t
+    if info.get("spawned") and info.get("where"):
+        base = info["where"].rstrip("/").rsplit("/", 1)[-1]
+        return base[:1].upper() + base[1:] if base not in ("~", "") else "Claude"
+    return "Claude"
+
+
 def _agent_rows():
     out = []
     allrows = _chat_rows()
@@ -420,7 +432,8 @@ def _agent_rows():
         out.append({"name": name, "state": _agent_state(info, rows),
                     "seen": info.get("seen", 0), "first": info.get("first", 0),
                     "where": info.get("where", ""), "last": last, "count": len(rows),
-                    "last_master": said[-1] if said else 0})
+                    "last_master": said[-1] if said else 0,
+                    "title": _title(info)})
     rank = {"thinking": 0, "switching": 0, "starting": 0, "here": 1, "away": 2}
     out.sort(key=lambda r: -r["last"])
     out.sort(key=lambda r: rank[r["state"]])
@@ -433,7 +446,7 @@ def _agents_watch():
     last = None
     while True:
         try:
-            sig = [(r["name"], r["state"], r["where"]) for r in _agent_rows()]
+            sig = [(r["name"], r["state"], r["where"], r["title"]) for r in _agent_rows()]
             if sig != last:
                 last = sig
                 _bump("agents")
@@ -1021,6 +1034,20 @@ class H(BaseHTTPRequestHandler):
                     "via": via})
             _hot(key, 0.15)
             self._json({"ok": True, "url": url})
+            return
+
+        if self.path == "/api/agents/title":
+            # an agent names itself after the work (2 to 4 plain words); local only
+            name = (p.get("agent") or "").strip()
+            title = " ".join(str(p.get("title") or "").split())[:40]
+            if name not in _agents() or not title or not _NAME.match(title):
+                self._json({"error": "needs a joined agent and a short title"}, 400)
+                return
+            if not self._local():
+                self._json({"error": "only from this Mac"}, 403)
+                return
+            _agent_touch(name, title=title)
+            self._json({"ok": True, "title": title})
             return
 
         if self.path == "/api/agents/relay":

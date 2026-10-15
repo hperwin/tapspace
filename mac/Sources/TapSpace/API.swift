@@ -51,6 +51,8 @@ struct Agent: Decodable, Equatable, Identifiable {
     let last: Double
     let count: Int
     let last_master: Double?
+    /// what Hayden sees: the plain name the agent gave its work
+    let title: String
 
     var id: String { name }
     var key: String { "agent:" + name }
@@ -217,6 +219,7 @@ extension Agent {
         last = c.or(Keys("last"), 0)
         count = c.or(Keys("count"), 0)
         last_master = c.opt(Keys("last_master"))
+        title = c.or(Keys("title"), "Claude")
     }
 }
 

@@ -975,9 +975,9 @@ function syncList(box, items, keyOf, sigOf, html, emptyText){
 }
 
 function renderRail(){
-  syncList($('#agentlist'), agents, a => agentKey(a.name), a => a.state + '|' + a.where + '|' + a.count,
-    a => `<span class="orb ${a.state}"></span><span class="tx"><div class="nm">${esc(a.name)}</div>
-      <div class="sub">${MASTER[a.state]}${a.where ? ' · ' + esc(a.where) : ''}</div></span><span class="unread"></span>`,
+  syncList($('#agentlist'), agents, a => agentKey(a.name), a => a.state + '|' + a.title + '|' + a.count,
+    a => `<span class="orb ${a.state}"></span><span class="tx"><div class="nm">${esc(a.title || 'Claude')}</div>
+      <div class="sub">${MASTER[a.state]}</div></span><span class="unread"></span>`,
     'No agents in the space yet. Any agent joins with tap.py listen --as NAME.');
 
   syncList(taplist, taps.items, t => t.key, t => t.status + '|' + t.title + '|' + t.messages.length, t => {
@@ -1010,9 +1010,9 @@ function renderHead(d){
   let html, sig;
   if (d.agent){
     const a = d.agent;
-    sig = current + '|' + a.state + '|' + a.where;
-    html = `<span class="orb ${a.state}"></span><span class="tx"><div class="nm">${esc(a.name)}</div>
-      <div class="sub">Agent${a.where ? ' · ' + esc(a.where) : ''} · joined ${when(a.first || a.seen)}</div></span>
+    sig = current + '|' + a.state + '|' + a.title;
+    html = `<span class="orb ${a.state}"></span><span class="tx"><div class="nm">${esc(a.title || 'Claude')}</div>
+      <div class="sub">Started ${when(a.first || a.seen)}</div></span>
       <span class="chip ${a.state}"><i></i>${MASTER[a.state]}</span>`;
   } else {
     const t = d.tap;
@@ -1050,7 +1050,7 @@ function renderThread(){
     rendered = {key: '', sig: ''}; return;
   }
   renderHead(d);
-  ta.placeholder = d.agent ? 'Message ' + d.agent.name + '…' : 'Message this tap…';
+  ta.placeholder = d.agent ? 'Message ' + (d.agent.title || 'Claude') + '…' : 'Message this tap…';
   attachBtn.classList.toggle('hide', !d.agent);
   syncSend();
   const sig = current + '|' + d.msgs.map(m => m.id + (m.seen ? 's' : '') + (m.pending ? 'p' : '') + ((m.images || []).length)).join(',') + '|' + d.typing + '|' + d.switching;
@@ -1140,7 +1140,7 @@ async function startSession(folder){
   closeSheet();
   const r = await postJ('/api/agents/new', {folder});
   if (!r.ok){ toast(r.error || 'Could not start it'); return; }
-  toast('Starting ' + r.agent);
+  toast('Starting a new session');
   await pollAgents(); openThread(agentKey(r.agent));
 }
 $('#newsession').addEventListener('click', async () => {

@@ -43,7 +43,7 @@ struct RailView: View {
                 ForEach(Array(store.agents.enumerated()), id: \.element.key) { i, a in
                     RailRow(key: a.key, index: i, store: store, onFrame: { frames[a.key] = $0 }) {
                         OrbView(state: a.state).frame(width: 38, height: 38)
-                        RowText(title: a.name, sub: agentSub(a))
+                        RowText(title: a.title, sub: agentSub(a))
                     }
                 }
                 RailHead(title: "Your taps")
@@ -80,9 +80,7 @@ struct RailView: View {
     }
 
     private func agentSub(_ a: Agent) -> String {
-        let state = agentLabel[a.state, default: a.state]
-        guard let w = a.where, !w.isEmpty else { return state }
-        return state + " · " + w
+        agentLabel[a.state, default: a.state]
     }
 
     private func tapSub(_ t: Tap) -> String {
@@ -516,7 +514,7 @@ struct PaneView: View {
     }
 
     private func placeholder(_ agent: Agent?, _ tap: Tap?) -> String {
-        if let agent { return "Message \(agent.name)…" }
+        if let agent { return "Message \(agent.title)…" }
         return tap != nil ? "Message this tap…" : "Message…"
     }
 }
@@ -530,7 +528,7 @@ struct PaneHeader: View {
             if let agent {
                 OrbView(state: agent.state).frame(width: 38, height: 38)
                 VStack(alignment: .leading, spacing: 2) {
-                    HeaderTitle(text: agent.name)
+                    HeaderTitle(text: agent.title)
                     Text(agentSubtitle(agent))
                         .font(.system(size: 11.5))
                         .foregroundStyle(Color.dim)
@@ -561,7 +559,7 @@ struct PaneHeader: View {
     }
 
     private func agentSubtitle(_ a: Agent) -> String {
-        ["Agent", a.where ?? "", "joined " + when(a.first ?? a.seen)].filter { !$0.isEmpty }.joined(separator: " · ")
+        "Started " + when(a.first ?? a.seen)
     }
 }
 
@@ -852,7 +850,7 @@ struct Hello: View {
 
     var body: some View {
         let (big, small): (String, String) = if let agent {
-            ("Hey.", "A direct line to \(agent.name). Say anything.")
+            ("Hey.", "A direct line to \(agent.title). Say anything.")
         } else if tap != nil {
             ("Boarding.", "This tap hasn’t said anything yet. It posts its plan here when it takes off.")
         } else {

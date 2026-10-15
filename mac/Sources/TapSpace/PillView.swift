@@ -366,7 +366,7 @@ extension Store {
             let row = chats[a.name]?.last { $0.role == "master" }
             let n = row?.images.count ?? 0
             let last = row.map { $0.body.isEmpty && n > 0 ? (n == 1 ? "Sent an image" : "Sent \(n) images") : pillPlain($0.body) } ?? "replied"
-            out.append(PillItem(id: a.key, kind: .agent(a.key), who: a.name, text: last, status: a.state, number: 0))
+            out.append(PillItem(id: a.key, kind: .agent(a.key), who: a.title, text: last, status: a.state, number: 0))
         }
         return out
     }

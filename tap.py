@@ -213,6 +213,10 @@ def main():
     li.add_argument("--as", dest="name", default=me, required=not me)
     li.add_argument("--timeout", type=int, default=3600)
 
+    ti = sub.add_parser("title")
+    ti.add_argument("--as", dest="name", default=me, required=not me)
+    ti.add_argument("title")
+
     rl = sub.add_parser("relay")
     rl.add_argument("--as", dest="name", default=me, required=not me)
 
@@ -332,6 +336,11 @@ def main():
             base = {k: (len(t["messages"]), t["status"]) for k, t in now.items()}
         print(json.dumps({"timeout": True}))
         return 4
+
+    if a.cmd == "title":
+        r = _call("/api/agents/title", {"agent": a.name, "title": a.title})
+        print(json.dumps(r))
+        return 0 if r.get("ok") else 1
 
     if a.cmd == "relay":
         r = _call("/api/agents/relay", {"agent": a.name})
