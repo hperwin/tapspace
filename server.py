@@ -292,6 +292,13 @@ def _agents():
         return {}
 
 
+def _agents_write(a):
+    """agents.json, atomically. The caller holds _lock."""
+    tmp = AGENTS.with_suffix(".tmp")
+    tmp.write_text(json.dumps(a, indent=1))
+    tmp.replace(AGENTS)
+
+
 def _agent_touch(name, **extra):
     with _lock:
         a = _agents()
@@ -299,9 +306,24 @@ def _agent_touch(name, **extra):
         row.update(extra)
         row["seen"] = time.time()
         a[name] = row
-        tmp = AGENTS.with_suffix(".tmp")
-        tmp.write_text(json.dumps(a, indent=1))
-        tmp.replace(AGENTS)
+        _agents_write(a)
+
+
+def _agent_edit(name, change, seen=True):
+    """One joined agent's row, read, changed and written under ONE _lock hold, so two writers never
+    interleave. change(row) edits it in place and may raise ValueError, which writes nothing.
+    Returns the row, or None when no agent by that name has joined. seen=False for marks the
+    reviewer makes: seen is the agent's own activity and decides how long it stays on the rail."""
+    with _lock:
+        a = _agents()
+        row = a.get(name)
+        if row is None:
+            return None
+        change(row)
+        if seen:
+            row["seen"] = time.time()
+        _agents_write(a)
+        return row
 
 
 def _chat_rows(agent=None):
@@ -486,6 +508,133 @@ def _chat_clear():
         tmp.replace(AGENTS)
     _bump("chat", "agents")
     return len(rows), len(a) - len(keep)
+
+
+# ---- which master owns a card (agents report nothing) ----
+# tap.py sends the Claude session it runs in (X-Claude-Session, X-Claude-Pid), only when that
+# Claude process is its own ancestor, so a stale inherited id is never sent. listen, reply, title
+# and relay record session -> NAME here; a card posted from that session, or by a lane inside it,
+# belongs to that NAME. A relay car adds its own session under the same NAME, so cards from either
+# car keep one owner. Cards without a provable owner fall back at read time.
+CLAIMS = DATA / "sessions.json"     # {"sessions": {sid: {name, pid, pid_start, first, seen, how}},
+                                    #  "campaigns": {campaign: [NAME, ...]}}
+CLAIM_KEEP = 14 * 86400             # a session nobody spoke for in this long is forgotten
+
+
+def _claims():
+    try:
+        c = json.loads(CLAIMS.read_text())
+    except Exception:
+        c = {}
+    return {"sessions": c.get("sessions") or {}, "campaigns": c.get("campaigns") or {}}
+
+
+def _claims_write(c):
+    """sessions.json, atomically. The caller holds _lock."""
+    tmp = CLAIMS.with_suffix(".tmp")
+    tmp.write_text(json.dumps(c, indent=1))
+    tmp.replace(CLAIMS)
+
+
+def _proc_start(pid):
+    """When process pid started, or "" when there is none: a recorded pid counts only while the
+    same process still holds it (pids are reused)."""
+    try:
+        return subprocess.run(["ps", "-o", "lstart=", "-p", str(int(pid))], capture_output=True,
+                              text=True, timeout=5).stdout.strip()
+    except Exception:
+        return ""
+
+
+def _claim(who, name, how):
+    """This call's Claude session speaks as NAME; the newest claim wins per session. Listen polls
+    every 2 s, so nothing is written unless the claim is new, moved, or 10 minutes old."""
+    sid, pid = who.get("session"), who.get("pid") or 0
+    if not sid:
+        return
+    old = _claims()["sessions"].get(sid) or {}
+    now = time.time()
+    if old.get("name") == name and old.get("pid") == pid and now - old.get("seen", 0) < 600:
+        return
+    start = old.get("pid_start", "") if old.get("pid") == pid else (_proc_start(pid) if pid else "")
+    with _lock:
+        c = _claims()
+        row = c["sessions"].get(sid) or {"first": now}
+        row.update(name=name, pid=pid, pid_start=start, seen=now, how=how)
+        c["sessions"][sid] = row
+        c["sessions"] = {k: v for k, v in c["sessions"].items() if now - v.get("seen", 0) < CLAIM_KEEP}
+        _claims_write(c)
+
+
+def _match_agent(label, agents):
+    """The one agent whose NAME is label, or whose own title is label (any case); None when no
+    agent or several match."""
+    label = " ".join(str(label or "").split())
+    if not label:
+        return None
+    if label in agents:
+        return label
+    hits = [n for n, i in agents.items() if (i.get("title") or "").strip().casefold() == label.casefold()]
+    return hits[0] if len(hits) == 1 else None
+
+
+def _owner_index(agents=None):
+    """What owner resolution reads, once per request: the joined agents and the claims."""
+    return {"agents": _agents() if agents is None else agents, **_claims()}
+
+
+def _owner_at_write(p, who, ix):
+    """(NAME, how) for a card a tap.py call posts or iterates, from what that call proves: an
+    explicit owner (a NAME or one agent's title), else its Claude session, else its Claude process
+    (the same master after its session id changed). (None, None) otherwise. Runs ps: never under _lock."""
+    hit = _match_agent(p.get("owner"), ix["agents"])
+    if hit:
+        return hit, "explicit"
+    s = ix["sessions"].get(who.get("session") or "")
+    if s:
+        return s["name"], "session"
+    pid = who.get("pid")
+    mine = sorted((s for s in ix["sessions"].values() if pid and s.get("pid") == pid and s.get("pid_start")),
+                  key=lambda s: -s.get("seen", 0))
+    if mine and mine[0]["pid_start"] == _proc_start(pid):
+        return mine[0]["name"], "pid"
+    return None, None
+
+
+def _owner_of(t, ix):
+    """(NAME, how) a card is served with: the owner stored when it was posted, else the session it
+    was posted from (claimed later), else the one master its campaign is known for, else the one
+    agent whose title or NAME is its label. Reads only; (None, None) when nothing says."""
+    if t.get("owner"):
+        return t["owner"], t.get("owner_how")
+    s = ix["sessions"].get(t.get("session") or "")
+    if s:
+        return s["name"], "session"
+    names = ix["campaigns"].get(t.get("campaign") or "") or []
+    if len(names) == 1:
+        return names[0], "campaign"
+    hit = _match_agent(t.get("agent"), ix["agents"])
+    return (hit, "title") if hit else (None, None)
+
+
+def _learn_campaign(campaign, owner):
+    """A card its master provably owns teaches the campaign, so lanes posting from outside that
+    master's process still land with it. Two masters in one campaign teach nothing. The caller
+    holds _lock."""
+    if not campaign or not owner:
+        return
+    c = _claims()
+    names = c["campaigns"].setdefault(campaign, [])
+    if owner not in names:
+        names.append(owner)
+        _claims_write(c)
+
+
+def _served(t, ix):
+    """A ticket as clients get it: with its owner, without the internal session."""
+    out = {k: v for k, v in t.items() if k != "session"}
+    out["owner"], out["owner_how"] = _owner_of(t, ix)
+    return out
 
 
 def _projects():
@@ -792,6 +941,16 @@ class H(BaseHTTPRequestHandler):
         self._json({"error": "unauthorized"}, 401)
         return False
 
+    def _who(self):
+        """The Claude session behind a tap.py call: X-Claude-Session and X-Claude-Pid, which tap.py
+        sends only when that Claude process is its own ancestor. Trusted from this Mac only."""
+        if not self._local():
+            return {}
+        sid = (self.headers.get("X-Claude-Session") or "").strip()
+        pid = (self.headers.get("X-Claude-Pid") or "").strip()
+        return {"session": sid if re.fullmatch(r"[0-9A-Fa-f-]{8,64}", sid) else "",
+                "pid": int(pid) if re.fullmatch(r"[0-9]{1,7}", pid) else 0}
+
     def do_GET(self):
         if not self._allowed():
             return
@@ -861,6 +1020,7 @@ class H(BaseHTTPRequestHandler):
                 self._json({"error": "bad agent name"}, 400)
                 return
             _agent_touch(name, listen=time.time(), where=self._q("where")[:80])
+            _claim(self._who(), name, "listen")
             pend = _chat_pending(_chat_rows(name))
             for r in pend:
                 r["files"] = [str(DATA / u.lstrip("/")) for u in r.get("images", [])]
@@ -870,14 +1030,16 @@ class H(BaseHTTPRequestHandler):
             self._json({k: TAPS[k] for k in ("me", "items", "fetched", "error")})
             return
         if path == "/api/state":
+            ix = _owner_index()
             with _lock:
                 state = _load()
-            live = [t for t in state["tickets"] if not t.get("archived")]
+            live = [_served(t, ix) for t in state["tickets"] if not t.get("archived")]
             self._json({"tickets": live, "now": time.time(),
                         "rig": _rig((SPACE / "index.html").read_bytes())})
             return
         if path.startswith("/api/ticket/"):
             tid = path.rsplit("/", 1)[1]
+            ix = _owner_index()
             with _lock:
                 t = _find(_load(), tid)
             if t and not t.get("archived"):
@@ -886,7 +1048,7 @@ class H(BaseHTTPRequestHandler):
                            t["title"], "waiting")
                 else:
                     _touch(t.get("campaign"), t["agent"], "checking in", t["title"])
-            self._json(t or {"error": "not found"}, 200 if t else 404)
+            self._json(_served(t, ix) if t else {"error": "not found"}, 200 if t else 404)
             return
         if path.startswith("/shots/") or path.startswith("/chat-media/"):
             f = (DATA / path.lstrip("/")).resolve()
@@ -1019,6 +1181,7 @@ class H(BaseHTTPRequestHandler):
                             "message": body, "images": images})
                 else:
                     _agent_touch(name, listen=time.time())
+                    _claim(self._who(), name, "reply")
                     row = _chat_add(name, "master", body, images)
                     _push(_title(_agents().get(name, {})), body, key="agent:" + name)
                 self._json({"ok": True, "message": row})
@@ -1064,6 +1227,7 @@ class H(BaseHTTPRequestHandler):
                 self._json({"error": "only from this Mac"}, 403)
                 return
             _agent_touch(name, title=title)
+            _claim(self._who(), name, "title")
             self._json({"ok": True, "title": title})
             return
 
@@ -1073,6 +1237,7 @@ class H(BaseHTTPRequestHandler):
                 self._json({"error": "no agent by that name has joined"}, 404)
                 return
             _agent_touch(name, switching=time.time())
+            _claim(self._who(), name, "relay")
             self._json({"ok": True})
             return
 
@@ -1097,6 +1262,8 @@ class H(BaseHTTPRequestHandler):
             shot_dir = SHOTS / tid
             shot_dir.mkdir(parents=True, exist_ok=True)
             (shot_dir / f"1.{ext}").write_bytes(base64.b64decode(p[b64key]))
+            who = self._who()
+            owner, how = _owner_at_write(p, who, _owner_index())     # before _lock: it may run ps
             with _lock:
                 state = _load()
                 state["tickets"].append({
@@ -1110,8 +1277,12 @@ class H(BaseHTTPRequestHandler):
                                   "media": kind, "ext": ext}],
                     "status": "waiting",
                     "decisions": [],
+                    "owner": owner,
+                    "owner_how": how,
+                    "session": who.get("session") or None,
                 })
                 _save(state)
+                _learn_campaign(p.get("campaign", ""), owner)
             _touch(p.get("campaign"), p["agent"], "posted", p["title"])
             _push("New visual", p["title"], kind="needs_you", id=tid)
             self._json({"ok": True, "id": tid, "version": 1})
@@ -1124,6 +1295,8 @@ class H(BaseHTTPRequestHandler):
                 self._json({"error": "missing image_b64 or video_b64 (video_ext mp4|mov)"}, 400)
                 return
             kind, ext, b64key = media
+            who = self._who()
+            owner, how = _owner_at_write(p, who, _owner_index())
             with _lock:
                 state = _load()
                 t = _find(state, tid)
@@ -1137,7 +1310,12 @@ class H(BaseHTTPRequestHandler):
                 t["versions"].append({"v": v, "note": p.get("note", ""), "ts": time.time(),
                                       "media": kind, "ext": ext})
                 t["status"] = "waiting"
+                if owner and (how == "explicit" or not t.get("owner")):
+                    t["owner"], t["owner_how"] = owner, how      # the lane iterating proves it; explicit corrects
+                if who.get("session") and not t.get("session"):
+                    t["session"] = who["session"]
                 _save(state)
+                _learn_campaign(t.get("campaign", ""), owner)
             _touch(t.get("campaign"), t["agent"], "iterating",
                    p.get("note", "") or t["title"])
             _push("New visual", t["title"], kind="needs_you", id=tid)
@@ -1150,6 +1328,7 @@ class H(BaseHTTPRequestHandler):
             if action not in ("approve", "change"):
                 self._json({"error": "action must be approve|change"}, 400)
                 return
+            ix = _owner_index()
             with _lock:
                 state = _load()
                 t = _find(state, tid)
@@ -1164,6 +1343,10 @@ class H(BaseHTTPRequestHandler):
                 }
                 t["decisions"].append(decision)
                 t["status"] = "approved" if action == "approve" else "changes"
+                if not t.get("owner"):
+                    # the note goes to the master the card resolves to now; pinned so the rail,
+                    # the INBOX relay and every client agree on it from here on
+                    t["owner"], t["owner_how"] = _owner_of(t, ix)
                 _purge_ticket_videos(t, up_to=t["version"])
                 _save(state)
             _touch(t.get("campaign"), t["agent"],
@@ -1173,6 +1356,7 @@ class H(BaseHTTPRequestHandler):
                 "kind": "tapspace-decision",
                 "ticket": tid,
                 "agent": t["agent"],
+                "owner": t.get("owner"),
                 "title": t["title"],
                 "campaign": t.get("campaign", ""),
                 "version": decision["version"],
