@@ -403,6 +403,34 @@ final class Store {
         }
     }
 
+    /// New session: start a master agent in `folder` and open its thread.
+    func startSession(_ folder: String) async -> Bool {
+        do {
+            let name = try await API.newAgent(folder: folder)
+            show("Starting " + name)
+            await agentsPoller.now()
+            open("agent:" + name)
+            return true
+        } catch {
+            show(error.localizedDescription)
+            return false
+        }
+    }
+
+    /// Clear all: the server archives every thread and every agent that is not live.
+    func clearAll() async {
+        do {
+            let r = try await API.clearChat()
+            chats = [:]
+            pending.removeAll { $0.key.hasPrefix("agent:") }
+            show("Cleared \(r.messages) messages. Saved in the archive.")
+            await agentsPoller.now()
+            await chatPoller.now()
+        } catch {
+            show(error.localizedDescription)
+        }
+    }
+
     /// --demo only: a bubble that is never sent anywhere.
     func demoBubble(_ body: String, to key: String) {
         let p = PendingMessage(id: "p:" + UUID().uuidString, key: key, body: body, ts: Date().timeIntervalSince1970, demo: true)

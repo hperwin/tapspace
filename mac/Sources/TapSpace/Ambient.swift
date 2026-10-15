@@ -212,7 +212,7 @@ struct BreathingDot: NSViewRepresentable {
 // MARK: - Agent orb: glossy blue sphere
 
 struct OrbView: NSViewRepresentable {
-    var state: String   // thinking | here | away | switching
+    var state: String   // thinking | here | away | switching | starting
 
     final class Coordinator {
         var state = ""
@@ -299,7 +299,7 @@ struct OrbView: NSViewRepresentable {
             g.repeatCount = .infinity
             g.timingFunction = CAMediaTimingFunction(name: .easeOut)
             c.ripple.add(g, forKey: "ripple")
-        case "switching":
+        case "switching", "starting":
             c.body.add(loop("transform.scale", from: 1.0, to: 0.86, duration: 0.7, autoreverses: true), forKey: "swap")
             c.glow.add(loop("shadowOpacity", from: 0.2, to: 0.7, duration: 0.7, autoreverses: true), forKey: "swap")
         case "here":

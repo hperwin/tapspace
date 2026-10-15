@@ -3,7 +3,7 @@ import Observation
 import SwiftUI
 
 private let statusLabel = ["needs-you": "Needs you", "flying": "Flying", "boarding": "Boarding", "landed": "Landed"]
-private let agentLabel = ["thinking": "Thinking", "here": "Here", "away": "Away", "switching": "Switching car"]
+private let agentLabel = ["thinking": "Thinking", "here": "Here", "away": "Away", "switching": "Switching car", "starting": "Starting"]
 
 struct ChatView: View {
     let store: Store
@@ -33,6 +33,7 @@ struct RailView: View {
     var body: some View {
         ScrollView(.vertical) {
             VStack(alignment: .leading, spacing: 8) {
+                RailTools(store: store)
                 RailHead(title: "Agents")
                 if store.agents.isEmpty {
                     RailEmpty(text: store.agentsLoaded
@@ -93,6 +94,147 @@ struct RailView: View {
     private func place(animated: Bool) {
         guard let r = frames[store.thread], r.height > 0 else { track.hide(); return }
         track.move(to: r, animated: animated)
+    }
+}
+
+/// New session (a master agent for a project) and a two-step Clear all.
+struct RailTools: View {
+    let store: Store
+    @State private var picking = false
+    @State private var armed = false
+    @State private var disarm: Task<Void, Never>?
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Button { picking = true } label: {
+                Label("New session", systemImage: "plus")
+                    .frame(maxWidth: .infinity)
+                    .modifier(RailButton(fg: .white, bg: .ink))
+            }
+            Button(action: clear) {
+                Text(armed ? "Tap to confirm" : "Clear all")
+                    .contentTransition(.interpolate)
+                    .modifier(RailButton(fg: armed ? .tapBlue : .ink, bg: armed ? Color.tapBlue.opacity(0.12) : Color.black.opacity(0.05)))
+            }
+        }
+        .buttonStyle(ChatPress(scale: 0.96))
+        .animation(.smooth(duration: 0.25), value: armed)
+        .padding(.horizontal, 4)
+        .padding(.top, 4)
+        .sheet(isPresented: $picking) { NewSessionSheet(store: store) }
+    }
+
+    private func clear() {
+        disarm?.cancel()
+        guard armed else {
+            armed = true
+            disarm = Task { @MainActor in
+                try? await Task.sleep(for: .seconds(3))
+                if !Task.isCancelled { armed = false }
+            }
+            return
+        }
+        armed = false
+        Task { await store.clearAll() }
+    }
+}
+
+struct RailButton: ViewModifier {
+    let fg: Color
+    let bg: Color
+    func body(content: Content) -> some View {
+        content
+            .font(.system(size: 12.5, weight: .semibold))
+            .foregroundStyle(fg)
+            .lineLimit(1)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(bg))
+            .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+}
+
+/// Pick a project (GET /api/projects) or type a folder; Start spawns the agent.
+struct NewSessionSheet: View {
+    let store: Store
+    @Environment(\.dismiss) private var dismiss
+    @State private var projects: [Project]?
+    @State private var path = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("New session")
+                .font(.system(size: 17, weight: .semibold))
+                .tracking(-0.2)
+                .padding(EdgeInsets(top: 18, leading: 20, bottom: 4, trailing: 20))
+            Text("Starts a new master agent in a project. It joins this chat in a few seconds.")
+                .font(.system(size: 12.5))
+                .foregroundStyle(Color.faint)
+                .padding(EdgeInsets(top: 0, leading: 20, bottom: 10, trailing: 20))
+            ScrollView {
+                VStack(spacing: 0) {
+                    if projects == nil { RailEmpty(text: "Loading projects…") }
+                    ForEach(projects ?? []) { p in
+                        ProjectRow(project: p) { start(p.path) }
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.bottom, 10)
+            }
+            .frame(maxHeight: 420)
+            Rectangle().fill(Color.hairline).frame(height: 1)
+            HStack(spacing: 8) {
+                TextField("Or a folder path, like ~/Developer/glint", text: $path)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 13.5))
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.black.opacity(0.045)))
+                    .onSubmit(startTyped)
+                Button(action: startTyped) {
+                    Text("Start").modifier(RailButton(fg: .white, bg: .ink))
+                }
+                .buttonStyle(ChatPress(scale: 0.96))
+                .keyboardShortcut(.defaultAction)
+            }
+            .padding(EdgeInsets(top: 10, leading: 14, bottom: 14, trailing: 14))
+        }
+        .frame(width: 440)
+        .background(Color.white)
+        .foregroundStyle(Color.ink)
+        .task { projects = (try? await API.projects()) ?? [] }
+    }
+
+    private func startTyped() {
+        let v = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !v.isEmpty { start(v) }
+    }
+
+    private func start(_ folder: String) {
+        dismiss()
+        Task { _ = await store.startSession(folder) }
+    }
+}
+
+struct ProjectRow: View {
+    let project: Project
+    let action: () -> Void
+    @State private var hover = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                Text(project.name).font(.system(size: 14, weight: .semibold))
+                Spacer(minLength: 8)
+                Text(project.short).font(.system(size: 12)).foregroundStyle(Color.faint).lineLimit(1).truncationMode(.middle)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 11)
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.black.opacity(hover ? 0.04 : 0)))
+            .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+        .buttonStyle(ChatPress(scale: 0.98))
+        .onHover { h in withAnimation(.easeOut(duration: 0.2)) { hover = h } }
     }
 }
 
@@ -466,7 +608,7 @@ struct StatusChip: View {
 
     var body: some View {
         let (fg, bg, breathe): (NSColor, Color, Double) = switch state {
-        case "thinking", "needs-you", "switching": (Palette.blue, Color.tapBlue.opacity(0.1), 1.0)
+        case "thinking", "needs-you", "switching", "starting": (Palette.blue, Color.tapBlue.opacity(0.1), 1.0)
         case "flying": (Palette.ink, Color.black.opacity(0.045), 1.2)
         case "landed": (Palette.green, Color.up.opacity(0.1), 0)
         case "here": (Palette.green, Color.black.opacity(0.045), 2.4)
@@ -642,8 +784,8 @@ struct MessageList: View {
                     // fade in the bubble Hayden just sent (the same update flips typing
                     // on), washing out its flight out of the composer.
                     // Session relay: the thread stays put while the next car takes over.
-                    if agent?.state == "switching" {
-                        SwitchingCar().transition(.scale(scale: 0.8).combined(with: .opacity))
+                    if let s = agent?.state, s == "switching" || s == "starting" {
+                        SwitchingCar(label: agentLabel[s, default: s]).transition(.scale(scale: 0.8).combined(with: .opacity))
                     }
                     ZStack(alignment: .leading) {
                         if typing {
@@ -1047,6 +1189,7 @@ struct ExpPos: ViewModifier {
 
 
 struct SwitchingCar: View {
+    var label = "Switching car"
     @State private var spin = false
     var body: some View {
         HStack(spacing: 8) {
@@ -1055,7 +1198,7 @@ struct SwitchingCar: View {
                 .frame(width: 12, height: 12)
                 .rotationEffect(.degrees(spin ? 360 : 0))
                 .animation(.linear(duration: 0.8).repeatForever(autoreverses: false), value: spin)
-            Text("SWITCHING CAR")
+            Text(label.uppercased())
                 .font(.system(size: 11.5, weight: .semibold)).tracking(0.7)
                 .foregroundStyle(Color.tapBlue)
         }

@@ -68,6 +68,16 @@ struct ChatMessage: Decodable, Equatable, Identifiable {
     var images: [String] = []
 }
 
+/// A folder a New session can start in (GET /api/projects).
+struct Project: Decodable, Equatable, Identifiable {
+    let path: String
+    let name: String
+    let short: String
+    var id: String { path }
+}
+
+private struct ProjectsResponse: Decodable { let projects: Lossy<Project> }
+
 private struct ChatResponse: Decodable { let messages: Lossy<ChatMessage> }
 private struct ChatPostResponse: Decodable { let message: ChatMessage? }
 
@@ -379,6 +389,7 @@ enum API {
     }
     static func taps() async throws -> TapsResponse { try await get(TapsResponse.self, "/api/taps") }
     static func activity() async throws -> ActivityResponse { try await get(ActivityResponse.self, "/api/activity") }
+    static func projects() async throws -> [Project] { try await get(ProjectsResponse.self, "/api/projects").projects.items }
 
     // Typed writes
     /// POST /api/chat: Hayden says something to an agent. Returns the stored row.
@@ -386,6 +397,17 @@ enum API {
     static func say(_ body: String, toAgent name: String) async throws -> ChatMessage? {
         let data = try await postData("/api/chat", ["agent": name, "body": body])
         return (try? JSONDecoder().decode(ChatPostResponse.self, from: data))?.message
+    }
+
+    /// POST /api/agents/new: start a master agent in a folder. Returns its name.
+    static func newAgent(folder: String) async throws -> String {
+        try await post("/api/agents/new", ["folder": folder])["agent"] as? String ?? ""
+    }
+
+    /// POST /api/chat/clear: archive every thread and every agent that is not live.
+    static func clearChat() async throws -> (messages: Int, agents: Int) {
+        let r = try await post("/api/chat/clear", [:])
+        return (r["archived_messages"] as? Int ?? 0, r["archived_agents"] as? Int ?? 0)
     }
 }
 

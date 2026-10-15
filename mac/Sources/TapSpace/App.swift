@@ -80,7 +80,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         if flags.fps { startFPSLog() }
         Harness.run(flags: flags, app: self)
-        NSApp.activate()
+        // The session drive runs behind whatever Hayden is using.
+        if ProcessInfo.processInfo.environment["TAPSPACE_CHAT_SESSION"] == nil { NSApp.activate() }
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {

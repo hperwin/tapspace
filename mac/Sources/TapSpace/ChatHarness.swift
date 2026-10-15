@@ -10,6 +10,8 @@ import AppKit
 ///   TAPSPACE_CHAT_TEXT=<text>          text to type with them
 ///   TAPSPACE_CHAT_TAP=owner/repo#n     a tap thread for the "taps take text" leg
 ///   TAPSPACE_CHAT_RAIL=1               instead: only step the rail selection (for --fps)
+///   TAPSPACE_CHAT_SESSION=<dir>        instead: Clear all, then (with TAPSPACE_CHAT_FOLDER)
+///                                      New session in that folder; one PNG per step
 ///
 /// It attaches, types, sends with Return's code path, and renders the real
 /// window at 2x every ~50 ms through the flight, then the landed bubble, the
@@ -72,7 +74,7 @@ enum ChatHarness {
 
     static func startIfAsked(store: Store) {
         let env = ProcessInfo.processInfo.environment
-        let asked = env["TAPSPACE_CHAT_RAIL"] != nil || env["TAPSPACE_CHAT_DRIVE"] != nil
+        let asked = env["TAPSPACE_CHAT_RAIL"] != nil || env["TAPSPACE_CHAT_DRIVE"] != nil || env["TAPSPACE_CHAT_SESSION"] != nil
         if asked, !started, let why = refusal() {
             started = true
             Harness.log("CHATDRIVE refused: \(why). Point TAPSPACE_URL at a scratch server.")
@@ -105,6 +107,31 @@ enum ChatHarness {
                     store.open(keys[(i + 1) % keys.count])
                     Harness.log("CHATRAIL step=\(n) \(store.thread)")
                 }
+                NSApp.terminate(nil)
+            }
+            return
+        }
+        if let out = env["TAPSPACE_CHAT_SESSION"], !started {
+            started = true
+            let dir = URL(fileURLWithPath: out)
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            Task { @MainActor in
+                await Harness.wait(15) { store.agentsLoaded }
+                store.tab = .chat
+                try? await Task.sleep(for: .seconds(1.5))
+                Harness.log("CHATSESSION before agents=\(store.agents.map { "\($0.name)=\($0.state)" })")
+                shot(dir, "s0-before")
+                await store.clearAll()
+                Harness.log("CHATSESSION cleared toast=\(store.toast?.text ?? "") agents=\(store.agents.count) chats=\(store.chats.values.map(\.count))")
+                try? await Task.sleep(for: .seconds(1))
+                shot(dir, "s1-cleared")
+                if let folder = env["TAPSPACE_CHAT_FOLDER"] {
+                    let ok = await store.startSession(folder)
+                    Harness.log("CHATSESSION new ok=\(ok) thread=\(store.thread) state=\(store.agent(store.thread)?.state ?? "-") toast=\(store.toast?.text ?? "")")
+                    try? await Task.sleep(for: .seconds(1.5))
+                    shot(dir, "s2-starting")
+                }
+                Harness.log("CHATSESSION done \(dir.path)")
                 NSApp.terminate(nil)
             }
             return
