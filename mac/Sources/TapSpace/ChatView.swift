@@ -7,16 +7,32 @@ private let agentLabel = ["thinking": "Thinking", "here": "Here", "away": "Away"
 
 struct ChatView: View {
     let store: Store
+    /// Room for the masters' progress column beside the thread.
+    @State private var wide = true
+
+    static let panelWidth: CGFloat = 288
 
     var body: some View {
         HStack(alignment: .top, spacing: 22) {
             RailView(store: store)
                 .frame(width: 300)
             PaneView(store: store)
+            if wide {
+                ChatProgressPanel()
+                    .frame(width: Self.panelWidth)
+                    .frame(maxHeight: .infinity, alignment: .top)
+            }
         }
         .padding(.horizontal, 40)
-        .frame(maxWidth: 1240)
+        .frame(maxWidth: wide ? 1600 : 1240)
         .frame(maxWidth: .infinity)
+        // The window's width, not the capped one. The column shows from 1190 pt
+        // and leaves below 1160 (no flicker on a live resize near the edge), and
+        // never animates: a springing width would relayout the thread every frame.
+        .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { w in
+            let next = wide ? w >= 1160 : w >= 1190
+            if next != wide { wide = next }
+        }
         .overlay { ChatLightboxView(lb: ChatMedia.shared.lightbox) }
         .coordinateSpace(.named("chat"))
     }
@@ -31,6 +47,8 @@ struct RailView: View {
     @State private var frames: [String: CGRect] = [:]
 
     var body: some View {
+        let details = Dictionary(store.agents.map { ($0.key, RailDetail.of($0, store: store)) },
+                                 uniquingKeysWith: { first, _ in first })
         ScrollView(.vertical) {
             VStack(alignment: .leading, spacing: 8) {
                 RailTools(store: store)
@@ -41,9 +59,14 @@ struct RailView: View {
                               : "Looking for agents…")
                 }
                 ForEach(Array(store.agents.enumerated()), id: \.element.key) { i, a in
-                    RailRow(key: a.key, index: i, store: store, onFrame: { frames[a.key] = $0 }) {
-                        OrbView(state: a.state).frame(width: 38, height: 38)
-                        RowText(title: a.title, sub: agentSub(a))
+                    // The lines under a master are siblings of its row, never inside it:
+                    // the row's frame is what the liquid selection follows.
+                    VStack(alignment: .leading, spacing: 0) {
+                        RailRow(key: a.key, index: i, store: store, onFrame: { frames[a.key] = $0 }) {
+                            OrbView(state: a.state).frame(width: 38, height: 38)
+                            RowText(title: a.title, sub: agentSub(a))
+                        }
+                        RailAgentDetail(detail: details[a.key] ?? RailDetail()) { store.open(a.key) }
                     }
                 }
                 RailHead(title: "Your taps")
@@ -62,8 +85,10 @@ struct RailView: View {
             .padding(.bottom, 20)
             .coordinateSpace(.named("rail"))
             .background(alignment: .topLeading) { ChatRailLiquid(track: track) }
-            // Agents re-sort by state (thinking first): rows glide, the body follows.
-            .animation(.spring(response: 0.5, dampingFraction: 0.82), value: store.agents.map(\.key))
+            // Agents re-sort by state (thinking first) and gain or shed the lines
+            // under them: rows glide, the body follows.
+            .animation(.spring(response: 0.5, dampingFraction: 0.82),
+                       value: store.agents.map { $0.key + "|" + (details[$0.key]?.sig ?? "") })
         }
         .scrollIndicators(.never)
         .onChange(of: frames) { place(animated: true) }
@@ -200,7 +225,8 @@ struct RailRow<Content: View>: View {
         Button { store.open(key) } label: {
             HStack(spacing: 12) {
                 content
-                UnreadDot(on: store.isUnread(key))
+                // Blue dot: a reply he has not read, or card notes this master has not answered.
+                UnreadDot(on: store.isUnread(key) || store.hasNotes(key))
             }
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -739,9 +765,12 @@ extension Store {
     /// The chat tab is up on this thread (window focus aside): reading counts.
     var isViewingCandidate: Bool { tab == .chat && windowKey }
 
+    /// An explicit open (rail row, note row, progress card): its replies and its
+    /// card notes are read. Notes are read only here and when one lands on screen.
     func open(_ key: String) {
         thread = key
         markRead(key)
+        readNotes(key)
     }
 }
 

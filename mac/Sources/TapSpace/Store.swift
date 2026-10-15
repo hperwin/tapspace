@@ -36,6 +36,8 @@ final class Store {
     private(set) var ticketsLoaded = false
     var agents: [Agent] = []
     private(set) var agentsLoaded = false
+    /// Masters messaging each other (from the agents poll; [] on older servers).
+    private(set) var links: [AgentLink] = []
     private(set) var chats: [String: [ChatMessage]] = [:]
     private(set) var taps = TapsResponse()
     private(set) var activity: [ActivityRow] = []
@@ -46,6 +48,9 @@ final class Store {
     /// Ticket versions Hayden decided here, ahead of the next poll.
     private(set) var decided: Set<String> = []
     private(set) var reads: [String: Double] = [:]
+    /// Card notes read here ahead of the server's mark, by agent NAME: the
+    /// newest note ts read (optimistic, so rows leave on open, not a poll later).
+    private(set) var notesCut: [String: Double] = [:]
     /// The main window is on screen (not hidden, minimized or fully covered).
     private(set) var windowVisible = true
     var windowKey = false
@@ -194,11 +199,21 @@ final class Store {
     }
 
     func pollAgents() async {
-        guard let a = try? await API.agents() else { return }
+        guard let b = try? await API.board() else { return }
+        // The open thread's newest unread note before this poll (none on the first
+        // load: notes already waiting at launch did not land while he looked).
+        let key = thread
+        let had = agentsLoaded ? newestNote(key) : nil
         var changed = false
         if !agentsLoaded { agentsLoaded = true; changed = true }
-        if a != agents { agents = a; changed = true }
+        if b.agents != agents { agents = b.agents; changed = true }
+        // Links feed the rail and the progress column, not the pill: no onChange.
+        if b.links != links { links = b.links }
         afterThreadsLoaded()
+        // A note that lands while its master's thread is on screen is read at once.
+        // Rows already listed wait for an explicit open: switching to Chat or the
+        // window coming forward never clears notes he has not seen.
+        if let had, thread == key, isViewing(key), newestNote(key) > had { readNotes(key) }
         if changed { onChange?(); fetchFreshReplies() }
     }
 
@@ -320,6 +335,51 @@ final class Store {
         lastTheirs(key) > readAt(key) && !isViewing(key)
     }
 
+    // MARK: Masters: progress, card notes, links (served on /api/agents)
+
+    /// The master's north star and steps, nil until it publishes them.
+    func progress(for key: String) -> AgentProgress? { agent(key)?.progress }
+
+    /// Change notes Hayden sent on this master's cards that it has not answered
+    /// with a new version and he has not read (server mark or a local open),
+    /// newest first. [] for taps and unknown keys.
+    func notes(for key: String) -> [AgentNote] { agent(key).map { visibleNotes($0) } ?? [] }
+    func notes(for agent: Agent) -> [AgentNote] { visibleNotes(agent) }
+    func hasNotes(_ key: String) -> Bool { !notes(for: key).isEmpty }
+
+    private func visibleNotes(_ a: Agent) -> [AgentNote] {
+        let cut = max(a.notesRead ?? 0, notesCut[a.name] ?? 0)
+        return a.notes.filter { $0.ts > cut }.sorted { $0.ts > $1.ts }
+    }
+
+    private func newestNote(_ key: String) -> Double { notes(for: key).first?.ts ?? 0 }
+
+    /// Reads a master's card notes: on an explicit open (`open(_:)`), or when one
+    /// lands while its thread is on screen. The rows leave now and the server's
+    /// mark follows, so the web page and the phone agree. Posts only while
+    /// something is unread, so a repeat open costs nothing.
+    func readNotes(_ key: String) {
+        guard let a = agent(key), let newest = visibleNotes(a).first?.ts else { return }
+        notesCut[a.name] = newest
+        let name = a.name
+        Task { @MainActor [weak self] in
+            // Refused under --snapshot/--demo, or by an older server: the local cut stands.
+            guard (try? await API.markAgentRead(name)) != nil else { return }
+            self?.agentsPoller.kick()
+        }
+    }
+
+    /// Live links (the server's `active`) between this master and another master
+    /// on the rail, newest first. [] while the server is unreachable.
+    func talking(_ key: String) -> [AgentLink] {
+        guard connection == .live, let a = agent(key) else { return [] }
+        return links.filter { $0.active && $0.touches(a.name) && agentTitle($0.other(a.name)) != nil }
+            .sorted { $0.last > $1.last }
+    }
+
+    /// The title Hayden sees for an agent NAME (nil when it is not on the rail).
+    func agentTitle(_ name: String) -> String? { agents.first { $0.name == name }?.title }
+
     // MARK: Counts
 
     var waitingCards: [Ticket] {
@@ -344,6 +404,8 @@ final class Store {
         do {
             try await API.post("/api/decide", ["id": t.id, "action": approve ? "approve" : "change", "message": message])
             statePoller.kick()
+            // A change note shows under its master on the next agents poll: now, not in up to 2 s.
+            agentsPoller.kick()
             return true
         } catch {
             if !had { decided.remove(key) }

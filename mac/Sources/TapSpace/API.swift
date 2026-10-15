@@ -25,6 +25,9 @@ struct Ticket: Decodable, Equatable, Identifiable {
     let version: Int
     let versions: [TicketVersion]
     var status: String
+    /// The master agent (NAME) that owns this card, when the server knows it.
+    /// A hidden key: views show that agent's title, never this.
+    var owner: String? = nil
 
     func entry(_ v: Int) -> TicketVersion? { versions.first { $0.v == v } }
     var current: TicketVersion? { entry(version) }
@@ -53,12 +56,75 @@ struct Agent: Decodable, Equatable, Identifiable {
     let last_master: Double?
     /// what Hayden sees: the plain name the agent gave its work
     let title: String
+    /// The north star and steps this master published (tap.py goal/step); nil until it sets one.
+    var progress: AgentProgress? = nil
+    /// Change notes Hayden sent on this master's cards that it has not answered
+    /// with a new version yet, newer than the server read mark. Newest first.
+    var notes: [AgentNote] = []
+    /// The server's read mark for those notes (epoch), nil when never read.
+    var notesRead: Double? = nil
 
     var id: String { name }
     var key: String { "agent:" + name }
 }
 
-private struct AgentsResponse: Decodable { let agents: Lossy<Agent> }
+/// A master's published plan: one goal and its steps.
+struct AgentProgress: Decodable, Equatable {
+    var goal = ""
+    var steps: [String] = []
+    /// 0-based; == steps.count means every step is done.
+    var current = 0
+    var note: String? = nil
+    var updated: Double = 0
+
+    var isDone: Bool { !steps.isEmpty && current >= steps.count }
+    /// The step it is on now (nil when done or out of range).
+    var currentText: String? { steps.indices.contains(current) ? steps[current] : nil }
+}
+
+/// One change note Hayden sent on a card this master owns.
+struct AgentNote: Decodable, Equatable, Identifiable {
+    let ticket: String
+    let version: Int
+    /// the card's title
+    let title: String
+    /// Hayden's note, as he wrote it
+    let note: String
+    /// when he sent it (server epoch)
+    let ts: Double
+    /// that version's image path (/shots/...), "" for a video or none: show the title
+    let thumb: String
+
+    var id: String { "\(ticket)#\(version)" }
+}
+
+/// Two masters messaging each other (server-detected). `a < b`; names are hidden keys.
+struct AgentLink: Decodable, Equatable, Identifiable {
+    let a: String
+    let b: String
+    /// the latest message between them (epoch)
+    let last: Double
+    let count: Int
+    /// plain words from the latest message (no paths, ids or numbers)
+    let summary: String
+    /// the latest message is under 10 minutes old
+    let active: Bool
+    /// who sent the latest message (a or b)
+    let from: String
+
+    var id: String { a + "|" + b }
+    /// who received the latest message
+    var to: String { from == a ? b : a }
+    func touches(_ name: String) -> Bool { a == name || b == name }
+    func other(_ name: String) -> String { a == name ? b : a }
+}
+
+/// GET /api/agents: the rail's rows plus who is talking to whom
+/// (`links` is absent on older servers and decodes as []).
+struct AgentsBoard: Decodable, Equatable {
+    var agents: [Agent] = []
+    var links: [AgentLink] = []
+}
 
 struct ChatMessage: Decodable, Equatable, Identifiable {
     let id: Int
@@ -195,6 +261,7 @@ extension Ticket {
         version = try c.decode(Int.self, forKey: Keys("version"))
         versions = c.lossy(Keys("versions"))
         status = c.or(Keys("status"), "waiting")
+        owner = c.opt(Keys("owner"))
     }
 }
 
@@ -210,6 +277,53 @@ extension Agent {
         count = c.or(Keys("count"), 0)
         last_master = c.opt(Keys("last_master"))
         title = c.or(Keys("title"), "Claude")
+        progress = c.opt(Keys("progress"))
+        notes = c.lossy(Keys("notes"))
+        notesRead = c.opt(Keys("notes_read"))
+    }
+}
+
+extension AgentProgress {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        goal = c.or(Keys("goal"), "")
+        steps = c.lossy(Keys("steps"))
+        current = c.or(Keys("current"), 0)
+        note = c.opt(Keys("note"))
+        updated = c.or(Keys("updated"), 0)
+    }
+}
+
+extension AgentNote {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        ticket = try c.decode(String.self, forKey: Keys("ticket"))
+        version = c.or(Keys("version"), 0)
+        title = c.or(Keys("title"), "")
+        note = c.or(Keys("note"), "")
+        ts = c.or(Keys("ts"), 0)
+        thumb = c.or(Keys("thumb"), "")
+    }
+}
+
+extension AgentLink {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        a = try c.decode(String.self, forKey: Keys("a"))
+        b = try c.decode(String.self, forKey: Keys("b"))
+        last = c.or(Keys("last"), 0)
+        count = c.or(Keys("count"), 0)
+        summary = c.or(Keys("summary"), "")
+        active = c.or(Keys("active"), false)
+        from = c.or(Keys("from"), a)
+    }
+}
+
+extension AgentsBoard {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        agents = try c.decode(Lossy<Agent>.self, forKey: Keys("agents")).items
+        links = c.lossy(Keys("links"))
     }
 }
 
@@ -379,7 +493,8 @@ enum API {
 
     // Typed reads
     static func state() async throws -> [Ticket] { try await get(StateResponse.self, "/api/state").tickets.items }
-    static func agents() async throws -> [Agent] { try await get(AgentsResponse.self, "/api/agents").agents.items }
+    static func board() async throws -> AgentsBoard { try await get(AgentsBoard.self, "/api/agents") }
+    static func agents() async throws -> [Agent] { try await board().agents }
     static func chat(_ agent: String) async throws -> [ChatMessage] {
         try await get(ChatResponse.self, "/api/chat", ["agent": agent]).messages.items
     }
@@ -403,6 +518,13 @@ enum API {
     /// POST /api/archive {all}: every card leaves the space (kept in the archive).
     static func archiveAll() async throws {
         try await post("/api/archive", ["all": true])
+    }
+
+    /// POST /api/agents/read {name}: Hayden opened this master's thread, so its
+    /// card notes are read on every surface (web, Mac, phone). Speaks for him:
+    /// refused under --snapshot/--demo.
+    static func markAgentRead(_ name: String) async throws {
+        try await post("/api/agents/read", ["name": name])
     }
 }
 
