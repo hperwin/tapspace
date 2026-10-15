@@ -274,7 +274,7 @@ mac/Scripts/verify.sh 4748                  # all of it: seed, build, snapshots,
 mac/Scripts/seed.sh --stop <data dir>       # stop a scratch server seed.sh started
 ```
 
-The icon is drawn in code by `mac/Scripts/make-icon.swift` (install.sh rebuilds `TapSpace.icns` when it changes).
+The icon is `mac/Resources/TapSpace.icon` (Icon Composer format: a white tile with one blue dot); install.sh compiles it with `actool` into the app's `Assets.car` and `TapSpace.icns`.
 
 ## License
 

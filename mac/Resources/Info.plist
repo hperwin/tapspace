@@ -10,6 +10,8 @@
     <string>TapSpace</string>
     <key>CFBundleIconFile</key>
     <string>TapSpace</string>
+    <key>CFBundleIconName</key>
+    <string>TapSpace</string>
     <key>CFBundleIdentifier</key>
     <string>com.hayden.tapspace</string>
     <key>CFBundleInfoDictionaryVersion</key>

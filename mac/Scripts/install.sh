@@ -14,21 +14,17 @@ BUNDLE_ID=com.hayden.tapspace
 DEST="/Applications/$NAME.app"
 SCRATCH="${SCRATCH:-.build}"
 
-# 1. Icon: rendered from Scripts/make-icon.swift at every size (vector, so the
-#    small sizes stay crisp), then packed by iconutil. Only when it changed.
-ICNS=Resources/$NAME.icns
-if [[ ! -f "$ICNS" || Scripts/make-icon.swift -nt "$ICNS" ]]; then
-    echo "==> Rendering the icon"
-    ICONTMP="$(mktemp -d)"
-    SET="$ICONTMP/$NAME.iconset"
-    mkdir -p "$SET"
-    for pt in 16 32 128 256 512; do
-        swift Scripts/make-icon.swift "$SET/icon_${pt}x${pt}.png" "$pt" >/dev/null
-        swift Scripts/make-icon.swift "$SET/icon_${pt}x${pt}@2x.png" "$((pt * 2))" >/dev/null
-    done
-    iconutil -c icns "$SET" -o "$ICNS"
-    rm -rf "${ICONTMP:?}"
-fi
+# 1. Icon: Resources/TapSpace.icon (Icon Composer format: a white fill, white in
+#    dark mode too, and one flat blue dot) compiled by actool into Assets.car plus
+#    a TapSpace.icns made from it. macOS 26 sets a plain .icns inside a dark
+#    plate, so the app names the Assets.car icon (CFBundleIconName).
+echo "==> Compiling the icon"
+ICON="$SCRATCH/icon"
+rm -rf "${ICON:?}"
+mkdir -p "$ICON"
+xcrun actool "Resources/$NAME.icon" --compile "$ICON" --output-partial-info-plist "$ICON/partial.plist" \
+    --app-icon "$NAME" --include-all-app-icons --enable-on-demand-resources NO \
+    --target-device mac --platform macosx --minimum-deployment-target 26.0 >/dev/null
 
 # 2. Release build.
 echo "==> Building (release)"
@@ -41,7 +37,7 @@ rm -rf "${APP:?}"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/$NAME"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
-cp "$ICNS" "$APP/Contents/Resources/$NAME.icns"
+cp "$ICON/Assets.car" "$ICON/$NAME.icns" "$APP/Contents/Resources/"
 printf 'APPL????' > "$APP/Contents/PkgInfo"
 codesign --force --deep --sign - "$APP"
 codesign --verify --strict "$APP"
