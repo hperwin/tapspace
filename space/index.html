@@ -781,13 +781,16 @@ setInterval(tick, 1500);
 const $ = s => document.querySelector(s);
 const tabs = $('#tabs'), pill = tabs.querySelector('.pill');
 function store(k, v){ try{ if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); }catch(e){ return null; } }
-function setTab(name, instant){
-  document.body.classList.toggle("chatmode", name === "chat");
-  tabs.querySelectorAll('.tab').forEach(b => b.classList.toggle('on', b.dataset.tab === name));
-  const on = tabs.querySelector('.tab.on');
+function placePill(instant){
+  const on = tabs.querySelector('.tab.on'); if (!on) return;
   if (instant) pill.style.transition = 'none';
   pill.style.left = on.offsetLeft + 'px'; pill.style.width = on.offsetWidth + 'px';
   if (instant) requestAnimationFrame(() => pill.style.transition = '');
+}
+function setTab(name, instant){
+  document.body.classList.toggle("chatmode", name === "chat");
+  tabs.querySelectorAll('.tab').forEach(b => b.classList.toggle('on', b.dataset.tab === name));
+  placePill(instant);
   store('tapspace.tab', name);
   if (location.hash !== '#' + name) history.replaceState(null, '', '#' + name);
   if (name === 'chat'){ markRead(current); scrollEnd(true); }
@@ -1161,7 +1164,7 @@ setInterval(() => {
   const b = $('#badge-visual'); b.textContent = n; b.classList.toggle('show', n > 0);
 }, 1500);
 window.addEventListener('focus', () => { if (document.body.classList.contains("chatmode")) { markRead(current); renderRail(); } });
-window.addEventListener('resize', () => setTab(document.body.classList.contains("chatmode") ? 'chat' : 'visual', true));
+window.addEventListener('resize', () => placePill(true));   // not setTab: that re-ran the read and the jump to the newest message
 
 const start = location.hash === '#chat' || location.hash === '#visual' ? location.hash.slice(1) : (store('tapspace.tab') || 'visual');
 requestAnimationFrame(() => setTab(start, true));
