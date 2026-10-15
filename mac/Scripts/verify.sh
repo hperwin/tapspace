@@ -28,8 +28,10 @@ grep -E "error|warning: .*Harness|Build complete" "$OUT/build.log" || true
 [[ $BUILT -eq 0 ]] || { echo "build failed: $OUT/build.log" >&2; exit 1; }
 BIN="$(swift build --scratch-path "$SCRATCH" --show-bin-path)/TapSpace"
 
+# Armed before the seed, so a seed that fails after its server came up still stops that server.
+# `|| true`: under set -e a refused stop (a folder seed.sh did not mark) would replace the exit code.
+trap 'Scripts/seed.sh --stop "$DATA" >/dev/null 2>&1 || true' EXIT
 Scripts/seed.sh "$PORT" "$DATA"
-trap 'Scripts/seed.sh --stop "$DATA" >/dev/null' EXIT
 
 echo "==> Waiting for the scratch server to read the taps from GitHub"
 for _ in $(seq 1 60); do
