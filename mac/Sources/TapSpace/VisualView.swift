@@ -843,7 +843,7 @@ struct CardBottom: View {
                 HStack(spacing: 8) {
                     BreathingDot(color: Palette.faint, period: 2)
                         .frame(width: 6, height: 6)
-                    Text("with \(card.ticket.agent), working on your notes")
+                    Text("with \(card.ticket.owner.flatMap { model.store.agentTitle($0) } ?? card.ticket.agent) · working on your notes")
                         .font(.system(size: 12))
                         .foregroundStyle(Color.dim)
                         .lineLimit(1)
