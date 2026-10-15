@@ -10,8 +10,7 @@ import AppKit
 ///   TAPSPACE_CHAT_TEXT=<text>          text to type with them
 ///   TAPSPACE_CHAT_TAP=owner/repo#n     a tap thread for the "taps take text" leg
 ///   TAPSPACE_CHAT_RAIL=1               instead: only step the rail selection (for --fps)
-///   TAPSPACE_CHAT_SESSION=<dir>        instead: Clear all, then (with TAPSPACE_CHAT_FOLDER)
-///                                      New session in that folder; one PNG per step
+///   TAPSPACE_CHAT_SESSION=<dir>        instead: New session; one PNG per step
 ///
 /// It attaches, types, sends with Return's code path, and renders the real
 /// window at 2x every ~50 ms through the flight, then the landed bubble, the
@@ -121,16 +120,10 @@ enum ChatHarness {
                 try? await Task.sleep(for: .seconds(1.5))
                 Harness.log("CHATSESSION before agents=\(store.agents.map { "\($0.name)=\($0.state)" })")
                 shot(dir, "s0-before")
-                await store.clearAll()
-                Harness.log("CHATSESSION cleared toast=\(store.toast?.text ?? "") agents=\(store.agents.count) chats=\(store.chats.values.map(\.count))")
-                try? await Task.sleep(for: .seconds(1))
-                shot(dir, "s1-cleared")
-                if let folder = env["TAPSPACE_CHAT_FOLDER"] {
-                    let ok = await store.startSession(folder)
-                    Harness.log("CHATSESSION new ok=\(ok) thread=\(store.thread) state=\(store.agent(store.thread)?.state ?? "-") toast=\(store.toast?.text ?? "")")
-                    try? await Task.sleep(for: .seconds(1.5))
-                    shot(dir, "s2-starting")
-                }
+                let ok = await store.startSession()
+                Harness.log("CHATSESSION new ok=\(ok) thread=\(store.thread) state=\(store.agent(store.thread)?.state ?? "-") toast=\(store.toast?.text ?? "")")
+                try? await Task.sleep(for: .seconds(1.5))
+                shot(dir, "s1-starting")
                 Harness.log("CHATSESSION done \(dir.path)")
                 NSApp.terminate(nil)
             }

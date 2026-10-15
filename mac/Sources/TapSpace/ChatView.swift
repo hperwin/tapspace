@@ -95,45 +95,30 @@ struct RailView: View {
     }
 }
 
-/// New session (a master agent for a project) and a two-step Clear all.
+/// New session: a master agent that starts in the home folder and picks its
+/// project itself once Hayden says what to work on.
 struct RailTools: View {
     let store: Store
-    @State private var picking = false
-    @State private var armed = false
-    @State private var disarm: Task<Void, Never>?
+    @State private var starting = false
 
     var body: some View {
-        HStack(spacing: 8) {
-            Button { picking = true } label: {
-                Label("New session", systemImage: "plus")
-                    .frame(maxWidth: .infinity)
-                    .modifier(RailButton(fg: .white, bg: .ink))
-            }
-            Button(action: clear) {
-                Text(armed ? "Tap to confirm" : "Clear all")
-                    .contentTransition(.interpolate)
-                    .modifier(RailButton(fg: armed ? .tapBlue : .ink, bg: armed ? Color.tapBlue.opacity(0.12) : Color.black.opacity(0.05)))
-            }
+        Button(action: start) {
+            Label("New session", systemImage: "plus")
+                .frame(maxWidth: .infinity)
+                .modifier(RailButton(fg: .white, bg: .ink))
         }
         .buttonStyle(ChatPress(scale: 0.96))
-        .animation(.smooth(duration: 0.25), value: armed)
+        .disabled(starting)
         .padding(.horizontal, 4)
         .padding(.top, 4)
-        .sheet(isPresented: $picking) { NewSessionSheet(store: store) }
     }
 
-    private func clear() {
-        disarm?.cancel()
-        guard armed else {
-            armed = true
-            disarm = Task { @MainActor in
-                try? await Task.sleep(for: .seconds(3))
-                if !Task.isCancelled { armed = false }
-            }
-            return
+    private func start() {
+        starting = true
+        Task {
+            _ = await store.startSession()
+            starting = false
         }
-        armed = false
-        Task { await store.clearAll() }
     }
 }
 
@@ -149,90 +134,6 @@ struct RailButton: ViewModifier {
             .padding(.vertical, 10)
             .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(bg))
             .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-    }
-}
-
-/// Pick a project (GET /api/projects) or type a folder; Start spawns the agent.
-struct NewSessionSheet: View {
-    let store: Store
-    @Environment(\.dismiss) private var dismiss
-    @State private var projects: [Project]?
-    @State private var path = ""
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text("New session")
-                .font(.system(size: 17, weight: .semibold))
-                .tracking(-0.2)
-                .padding(EdgeInsets(top: 18, leading: 20, bottom: 4, trailing: 20))
-            Text("Starts a new master agent in a project. It joins this chat in a few seconds.")
-                .font(.system(size: 12.5))
-                .foregroundStyle(Color.faint)
-                .padding(EdgeInsets(top: 0, leading: 20, bottom: 10, trailing: 20))
-            ScrollView {
-                VStack(spacing: 0) {
-                    if projects == nil { RailEmpty(text: "Loading projects…") }
-                    ForEach(projects ?? []) { p in
-                        ProjectRow(project: p) { start(p.path) }
-                    }
-                }
-                .padding(.horizontal, 10)
-                .padding(.bottom, 10)
-            }
-            .frame(maxHeight: 420)
-            Rectangle().fill(Color.hairline).frame(height: 1)
-            HStack(spacing: 8) {
-                TextField("Or a folder path, like ~/Developer/glint", text: $path)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 13.5))
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 10)
-                    .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.black.opacity(0.045)))
-                    .onSubmit(startTyped)
-                Button(action: startTyped) {
-                    Text("Start").modifier(RailButton(fg: .white, bg: .ink))
-                }
-                .buttonStyle(ChatPress(scale: 0.96))
-                .keyboardShortcut(.defaultAction)
-            }
-            .padding(EdgeInsets(top: 10, leading: 14, bottom: 14, trailing: 14))
-        }
-        .frame(width: 440)
-        .background(Color.white)
-        .foregroundStyle(Color.ink)
-        .task { projects = (try? await API.projects()) ?? [] }
-    }
-
-    private func startTyped() {
-        let v = path.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !v.isEmpty { start(v) }
-    }
-
-    private func start(_ folder: String) {
-        dismiss()
-        Task { _ = await store.startSession(folder) }
-    }
-}
-
-struct ProjectRow: View {
-    let project: Project
-    let action: () -> Void
-    @State private var hover = false
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 10) {
-                Text(project.name).font(.system(size: 14, weight: .semibold))
-                Spacer(minLength: 8)
-                Text(project.short).font(.system(size: 12)).foregroundStyle(Color.faint).lineLimit(1).truncationMode(.middle)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 11)
-            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.black.opacity(hover ? 0.04 : 0)))
-            .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        }
-        .buttonStyle(ChatPress(scale: 0.98))
-        .onHover { h in withAnimation(.easeOut(duration: 0.2)) { hover = h } }
     }
 }
 

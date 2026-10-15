@@ -30,7 +30,7 @@ struct RootView: View {
                 ShellEntranceVeil(ready: ready)
             }
             .blur(radius: 14 * clamp01(lb))
-            TopBar(store: store)
+            TopBar(store: store, visual: visual)
             ShellEntranceMark(ready: ready, down: store.connection == .down)
             if let box = visual.lightbox {
                 LightboxView(lb: box, model: visual)
@@ -87,6 +87,7 @@ struct ShellTabVeil: View {
 
 struct TopBar: View {
     let store: Store
+    let visual: VisualModel
     var chrome = ShellChrome.shared
 
     var body: some View {
@@ -107,6 +108,9 @@ struct TopBar: View {
                     .padding(.leading, chrome.lightsMaxX + 22)
                     .padding(.top, pixel(mid - 8))
                     .allowsHitTesting(false)
+                ClearSpaceButton(store: store, visual: visual)
+                    .padding(.leading, 16)
+                    .padding(.top, pixel(mid - ClearSpaceButton.height / 2))
                 Spacer()
                 PresenceHUD(store: store, fold: clamp01(store.tabProgress.value))
                     .padding(.trailing, 26)
@@ -116,6 +120,46 @@ struct TopBar: View {
                 .padding(.top, pixel(mid - TabSwitcher.height / 2))
         }
         .frame(maxWidth: .infinity, alignment: .top)
+    }
+}
+
+/// Clear all on the Visual tab, beside the wordmark while cards are up: the
+/// first tap arms it, a second within 3 s archives every card.
+struct ClearSpaceButton: View {
+    static let height: CGFloat = 32
+    let store: Store
+    let visual: VisualModel
+    @State private var armed = false
+    @State private var disarm: Task<Void, Never>?
+
+    var body: some View {
+        let count = visual.cards.filter { !$0.collapsing }.count
+        let shown = count > 0 && store.tab == .visual
+        Button { clear(count) } label: {
+            Text(armed ? "Tap to confirm" : "Clear all")
+                .contentTransition(.interpolate)
+                .modifier(RailButton(fg: armed ? .tapBlue : .ink, bg: armed ? Color.tapBlue.opacity(0.12) : Color.black.opacity(0.05)))
+                .frame(height: Self.height)
+        }
+        .buttonStyle(ChatPress(scale: 0.96))
+        .animation(.smooth(duration: 0.25), value: armed)
+        .opacity(shown ? 1 : 0)
+        .animation(.easeOut(duration: 0.25), value: shown)
+        .allowsHitTesting(shown)
+    }
+
+    private func clear(_ count: Int) {
+        disarm?.cancel()
+        guard armed else {
+            armed = true
+            disarm = Task { @MainActor in
+                try? await Task.sleep(for: .seconds(3))
+                if !Task.isCancelled { armed = false }
+            }
+            return
+        }
+        armed = false
+        Task { await store.clearVisual(count) }
     }
 }
 

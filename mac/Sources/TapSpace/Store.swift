@@ -403,10 +403,10 @@ final class Store {
         }
     }
 
-    /// New session: start a master agent in `folder` and open its thread.
-    func startSession(_ folder: String) async -> Bool {
+    /// New session: start a master agent (it picks its project itself) and open its thread.
+    func startSession() async -> Bool {
         do {
-            let name = try await API.newAgent(folder: folder)
+            let name = try await API.newAgent()
             show("Starting " + name)
             await agentsPoller.now()
             open("agent:" + name)
@@ -417,15 +417,12 @@ final class Store {
         }
     }
 
-    /// Clear all: the server archives every thread and every agent that is not live.
-    func clearAll() async {
+    /// Clear all (Visual): every card on the space moves to the archive.
+    func clearVisual(_ cards: Int) async {
         do {
-            let r = try await API.clearChat()
-            chats = [:]
-            pending.removeAll { $0.key.hasPrefix("agent:") }
-            show("Cleared \(r.messages) messages. Saved in the archive.")
-            await agentsPoller.now()
-            await chatPoller.now()
+            try await API.archiveAll()
+            show("Cleared \(cards) card\(cards == 1 ? "" : "s"). Saved in the archive.")
+            await statePoller.now()
         } catch {
             show(error.localizedDescription)
         }
