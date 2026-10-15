@@ -10,6 +10,24 @@
   tap.py up                              -> ensure the whole rig is running (idempotent);
                                             starts the server if the port is quiet, health-checks it
   tap.py doctor                          -> one-look health: server, tickets, live activity, sessions
+  tap.py listen --as NAME [--timeout 3600]
+                                         -> a master agent joins the space under NAME (its own Chat
+                                            thread) and blocks until the reviewer writes to it; prints his
+                                            unanswered messages. exit 0 = message, 4 = timeout
+  Taps (the reviewer's GitHub agent issues; every agent can talk to all of them):
+  tap.py taps                            -> list them: key, status, title, last message
+  tap.py tap-read KEY                    -> the whole thread of one tap (KEY = owner/repo#n)
+  tap.py tap-say --as NAME KEY "text"    -> message a tap as the reviewer (signed "Sent by NAME")
+  tap.py tap-watch [--timeout 3600]      -> blocks until any tap posts something new or changes status
+  tap.py relay --as NAME                 -> this session is handing off to its next car: the thread
+                                            shows "Switching car" until the new car listens --as NAME
+  tap.py reply --as NAME "text" [--image a.png ...]
+                                         -> that agent answers the reviewer in its thread (images optional;
+                                            images the reviewer attaches print as absolute file paths)
+  Any number of agents can be in the space at once; NAME defaults to $TAPSPACE_AGENT.
+  tap.py pair [--off]                    -> opens the phone's route to this Mac (Tailscale Serve when
+                                            logged in, else an ngrok tunnel) and prints the Glint
+                                            pairing link and QR code; --off closes the ngrok tunnel
 
 Server default http://127.0.0.1:4747 (override: TAPSPACE_URL).
 Screenshots must be REAL renders of the running surface — never generated images.
@@ -18,11 +36,19 @@ import argparse
 import base64
 import json
 import os
+import pathlib
+import shutil
+import subprocess
 import sys
 import time
+import urllib.error
+import urllib.parse
 import urllib.request
 
 BASE = os.environ.get("TAPSPACE_URL", "http://127.0.0.1:4747")
+DATA = pathlib.Path(os.environ.get("TAPSPACE_DATA") or pathlib.Path(__file__).resolve().parent / "data")
+TAILSCALE = shutil.which("tailscale") or "/Applications/Tailscale.app/Contents/MacOS/Tailscale"
+NGROK = shutil.which("ngrok") or "/opt/homebrew/bin/ngrok"
 
 
 def _call(path, payload=None):
@@ -32,8 +58,104 @@ def _call(path, payload=None):
         req = urllib.request.Request(
             BASE + path, data=json.dumps(payload).encode(),
             headers={"content-type": "application/json"})
-    with urllib.request.urlopen(req, timeout=30) as r:
-        return json.loads(r.read().decode())
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return json.loads(r.read().decode())
+    except urllib.error.HTTPError as e:
+        try:
+            return json.loads(e.read().decode())
+        except Exception:
+            return {"error": f"HTTP {e.code}"}
+
+
+def _ngrok_pid(cur):
+    """The pid of the ngrok tunnel recorded in data/remote.json, if it is still that process."""
+    pid = cur.get("pid") if cur.get("kind") == "ngrok" else None
+    if not pid:
+        return None
+    ps = subprocess.run(["ps", "-p", str(pid), "-o", "comm="], capture_output=True, text=True)
+    return pid if "ngrok" in ps.stdout else None
+
+
+def _pair(off):
+    """The phone's route to this Mac, then the glint://pair link as text and as a QR code.
+    Tailscale Serve (private HTTPS) when this Mac is logged in to Tailscale, else ngrok
+    (public URL; the server's token guards every request that comes through it)."""
+    import qr
+    remote = DATA / "remote.json"
+    try:
+        cur = json.loads(remote.read_text())
+    except Exception:
+        cur = {}
+    pid = _ngrok_pid(cur)
+    if off:
+        if pid:
+            os.kill(pid, 15)
+        remote.unlink(missing_ok=True)
+        print("Route closed." if pid else "No ngrok tunnel was open.")
+        return 0
+    try:
+        if not _call("/api/health").get("ok"):
+            raise RuntimeError
+    except Exception:
+        print(f"TapSpace at {BASE} is not running this version; start it with: python3 tap.py up")
+        return 1
+    port = urllib.parse.urlsplit(BASE).port or 4747
+    url = ""
+    try:
+        st = json.loads(subprocess.run([TAILSCALE, "status", "--json"], capture_output=True,
+                                       text=True, timeout=15).stdout)
+        if st.get("BackendState") == "Running":
+            subprocess.run([TAILSCALE, "serve", "--bg", str(port)], capture_output=True,
+                           timeout=30, check=True)
+            url = "https://" + st["Self"]["DNSName"].rstrip(".")
+    except Exception:
+        pass
+    if url:
+        if pid:
+            os.kill(pid, 15)            # the private route replaces the public one
+        cur = {"kind": "tailscale", "url": url, "port": port}
+    elif pid and cur.get("port") == port:
+        url = cur["url"]
+    else:
+        log = DATA / "ngrok.log"
+        log.write_text("")
+        cmd = [NGROK, "http", str(port), "--log", str(log), "--log-format", "json"]
+        if os.environ.get("TAPSPACE_NGROK_DOMAIN"):     # a reserved domain keeps the link stable
+            cmd += ["--url", "https://" + os.environ["TAPSPACE_NGROK_DOMAIN"]]
+        pid = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                               start_new_session=True).pid
+        for _ in range(75):
+            time.sleep(0.2)
+            for line in log.read_text().splitlines():
+                try:
+                    j = json.loads(line)
+                except Exception:
+                    continue
+                if j.get("msg") == "started tunnel" and j.get("url", "").startswith("https://"):
+                    url = j["url"]
+                elif j.get("lvl") in ("eror", "crit"):
+                    print("ngrok failed: " + str(j.get("err") or j.get("msg")))
+                    return 1
+            if url:
+                break
+        if not url:
+            print(f"ngrok did not open a tunnel within 15 s; see {log}")
+            return 1
+        cur = {"kind": "ngrok", "url": url, "pid": pid, "port": port}
+    remote.write_text(json.dumps(cur, indent=1))
+    link = "glint://pair?" + urllib.parse.urlencode(
+        {"url": url, "token": (DATA / "token").read_text().strip()})
+    print(qr.terminal(link))
+    print(f"\nScan this in Glint (You, then Pair with your Mac), or paste the link:\n{link}\n")
+    if cur["kind"] == "tailscale":
+        print(f"Route: Tailscale Serve, private to your tailnet ({url}).")
+    else:
+        print(f"Route: ngrok, a public URL ({url}); the token guards every request.\n"
+              "For a private route, open Tailscale on this Mac and on your phone, log in, and run "
+              "tap.py pair again: it switches to Tailscale Serve and closes ngrok.\n"
+              "Close the tunnel any time with: tap.py pair --off")
+    return 0
 
 
 def _b64(path):
@@ -82,9 +204,41 @@ def main():
     s.add_argument("ticket")
 
     sub.add_parser("up")
+    pr = sub.add_parser("pair")
+    pr.add_argument("--off", action="store_true", help="close the ngrok tunnel")
     sub.add_parser("doctor")
 
+    me = os.environ.get("TAPSPACE_AGENT", "")
+    li = sub.add_parser("listen")
+    li.add_argument("--as", dest="name", default=me, required=not me)
+    li.add_argument("--timeout", type=int, default=3600)
+
+    ti = sub.add_parser("title")
+    ti.add_argument("--as", dest="name", default=me, required=not me)
+    ti.add_argument("title")
+
+    rl = sub.add_parser("relay")
+    rl.add_argument("--as", dest="name", default=me, required=not me)
+
+    sub.add_parser("taps")
+    tr = sub.add_parser("tap-read")
+    tr.add_argument("key")
+    ts = sub.add_parser("tap-say")
+    ts.add_argument("--as", dest="name", default=me, required=not me)
+    ts.add_argument("key")
+    ts.add_argument("text")
+    tw = sub.add_parser("tap-watch")
+    tw.add_argument("--timeout", type=int, default=3600)
+
+    rp = sub.add_parser("reply")
+    rp.add_argument("--as", dest="name", default=me, required=not me)
+    rp.add_argument("text", nargs="?", default="")
+    rp.add_argument("--image", action="append", default=[], help="attach an image (repeatable)")
+
     a = ap.parse_args()
+
+    if a.cmd == "pair":
+        return _pair(a.off)
 
     if a.cmd == "up":
         try:
@@ -137,6 +291,91 @@ def main():
         r = _call("/api/update", {"id": a.ticket, "note": a.note, **_media(a)})
         print(json.dumps(r))
         return 0
+
+    if a.cmd in ("taps", "tap-read", "tap-watch"):
+        def snap():
+            return {t["key"]: t for t in _call("/api/taps")["items"]}
+        if a.cmd == "taps":
+            for t in snap().values():
+                last = [m for m in t["messages"] if m["who"] == "tap"]
+                tail = (last[-1]["body"].splitlines() or [""])[0][:90] if last else ""
+                print(f"{t['key']}  [{t['status']}{', replying' if t.get('replying') else ''}]  {t['title']}")
+                if tail:
+                    print(f"    last: {tail}")
+            return 0
+        if a.cmd == "tap-read":
+            _call("/api/taps/refresh", {"key": a.key})
+            t = snap().get(a.key)
+            if not t:
+                print(json.dumps({"error": "no such tap of yours"})); return 1
+            print(f"{t['key']}  [{t['status']}]  {t['title']}\n{t['url']}")
+            for g in t["goals"]:
+                print(f"  [{'x' if g['done'] else ' '}] {g['text']}")
+            for m in t["messages"]:
+                who = "tap" if m["who"] == "tap" else ("you" + (f" (via {m['via']})" if m.get("via") else ""))
+                print(f"\n--- {who} · {m['ts']}{' · seen' if m.get('seen') else ''}\n{m['body']}")
+            return 0
+        base = {k: (len(t["messages"]), t["status"]) for k, t in snap().items()}
+        deadline = time.time() + a.timeout
+        while time.time() < deadline:
+            time.sleep(5)
+            try:
+                now = snap()
+            except Exception:
+                continue
+            news = [t for k, t in now.items()
+                    if k not in base or (len(t["messages"]), t["status"]) != base[k]]
+            news = [t for t in news if t["messages"] and t["messages"][-1]["who"] == "tap"
+                    or (t["key"] in base and t["status"] != base[t["key"]][1])]
+            if news:
+                for t in news:
+                    print(f"== {t['key']} [{t['status']}] {t['title']}")
+                    if t["messages"]:
+                        print(t["messages"][-1]["body"])
+                return 0
+            base = {k: (len(t["messages"]), t["status"]) for k, t in now.items()}
+        print(json.dumps({"timeout": True}))
+        return 4
+
+    if a.cmd == "title":
+        r = _call("/api/agents/title", {"agent": a.name, "title": a.title})
+        print(json.dumps(r))
+        return 0 if r.get("ok") else 1
+
+    if a.cmd == "relay":
+        r = _call("/api/agents/relay", {"agent": a.name})
+        print(json.dumps(r))
+        return 0 if r.get("ok") else 1
+
+    if a.cmd == "tap-say":
+        r = _call("/api/taps/say", {"key": a.key, "body": a.text, "via": a.name})
+        print(json.dumps(r))
+        return 0 if r.get("ok") else 1
+
+    if a.cmd == "listen":
+        deadline = time.time() + a.timeout
+        while time.time() < deadline:
+            try:
+                q = urllib.parse.urlencode({"agent": a.name, "where": os.getcwd().replace(os.path.expanduser("~"), "~")})
+                pending = _call("/api/chat/listen?" + q)["pending"]
+            except Exception:
+                time.sleep(3)
+                continue
+            if pending:
+                for m in pending:
+                    print(f"[{m['id']}] {m['body']}")
+                    for f in m.get("files", []):
+                        print(f"    image: {f}")
+                return 0
+            time.sleep(2)
+        print(json.dumps({"timeout": True}))
+        return 4
+
+    if a.cmd == "reply":
+        imgs = [{"b64": _b64(f), "ext": f.rsplit(".", 1)[-1].lower()} for f in a.image]
+        r = _call("/api/chat/reply", {"agent": a.name, "body": a.text, "images": imgs})
+        print(json.dumps(r))
+        return 0 if r.get("ok") else 1
 
     if a.cmd == "status":
         print(json.dumps(_call("/api/ticket/" + a.ticket), indent=1))

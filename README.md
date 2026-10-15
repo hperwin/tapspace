@@ -144,6 +144,75 @@ The short version. The full contract, with capture recipes and the exact duties 
 4. **Give your orchestrator the inbox.** One `tail -n 0 -f data/INBOX.jsonl` is the whole event bus. When a line arrives, relay the action and message verbatim to the owning agent (the event names it), and append it to that agent's brief file so the decision survives restarts. In Claude Code this maps to a Monitor on the tail plus SendMessage to the agent; in any other framework it's the same tail plus however you message a worker.
 5. **Solo agent? Skip the orchestrator.** A single agent can post and then `tap.py wait` when the decision truly blocks its next edit, or check `tap.py status` between tasks.
 
+## The Chat tab: many agents, and your taps
+
+The space has two tabs. **Visual** is the review board above. **Chat** is a
+workspace where any number of agents can be connected at once:
+
+- **Agents.** Each agent joins under its own name and gets its own thread.
+  It listens with `tap.py listen --as "NAME"` (run it in the background; it
+  exits with your unanswered messages as soon as you write) and answers with
+  `tap.py reply --as "NAME" "text"`. Set `TAPSPACE_AGENT` to skip `--as`.
+  Attach images with the paperclip, by pasting, or by dragging them onto the
+  chat; they preview above the message box and show as a grid in the bubble.
+  The listening agent gets their file paths, and can send images back with
+  `tap.py reply --as "NAME" "text" --image shot.png`.
+  A long-running agent that hands off to a fresh session keeps ONE thread:
+  the old session runs `tap.py relay --as "NAME"`, the thread shows
+  *Switching car*, and the new session listens under the same NAME. Messages
+  you send meanwhile wait for it.
+  An agent shows *Here* while it is listening, *Thinking* while your message
+  waits for its reply, and *Away* otherwise.
+- **Taps.** GitHub issues you authored with the tap label
+  (`TAPSPACE_TAP_LABEL`, default `nava`), read through your `gh` login. Each
+  tap shows its goals, its comments, and whether your messages were seen
+  (an 👀 reaction). Writing to a tap posts an issue comment as you. Taps
+  are scoped by issue author, so other people's taps never appear.
+
+Every agent can talk to all of your taps too: `tap.py taps`, `tap.py tap-read KEY`,
+`tap.py tap-say --as NAME KEY "text"` (posted as you, signed "Sent by NAME"), and
+`tap.py tap-watch` (blocks until any tap says something new). The server checks
+each open tap every 3 seconds with GitHub conditional requests (a 304 costs no
+rate limit), so replies show up within seconds without webhooks.
+
+Endpoints: `GET /api/agents`, `GET /api/chat?agent=NAME`,
+`GET /api/chat/listen?agent=NAME`, `POST /api/chat {agent, body, images?}`,
+`POST /api/chat/reply {agent, body, images?}` (images: `[{b64, ext}]`), `GET /api/taps`,
+`POST /api/taps/say {key: "owner/repo#n", body}`, `POST /api/taps/refresh`.
+The endpoints that speak for you accept same-origin JSON only.
+`GET /api/chat?agent=NAME&after=ID` returns only the rows after that id.
+
+## Your phone (Glint)
+
+The Glint iPhone app is a remote for the same space: the same agents, threads,
+taps and cards as this page and the Mac app.
+
+1. **Pair.** On the Mac, run `python3 tap.py pair`. It opens a route from your
+   phone to this Mac and prints a `glint://pair?url=...&token=...` link plus a QR
+   code (also at `http://127.0.0.1:4747/pair`, which only this Mac can open). In
+   Glint, open You, then Pair with your Mac, and scan it.
+   - **Tailscale Serve** (private HTTPS, preferred) when this Mac is logged in to
+     Tailscale. Log in on the Mac and on your phone, run `tap.py pair` again, and
+     it switches over and closes ngrok.
+   - **ngrok** otherwise: a public URL, reused while the tunnel runs (set
+     `TAPSPACE_NGROK_DOMAIN` for a reserved domain). `tap.py pair --off` closes it.
+2. **Token.** The server makes `data/token` on first start (mode 600). A request
+   counts as local only when it comes from loopback with no proxy header
+   (`X-Forwarded-*`, `Forwarded`, `X-Real-IP`, `Tailscale-User-Login`, `Ngrok-*`).
+   Every other request needs `Authorization: Bearer <token>` or gets 401; local
+   callers need nothing. `/api/chat/import` and `/pair` answer local callers only.
+3. **Live updates.** `GET /api/wait?since=<cursor>&timeout=25` (30 max) returns
+   `{cursor, changed: ["agents", "chat", "taps", "cards"]}` the moment any of
+   them changes, at once when you are behind, and an empty `changed` on timeout.
+   Start with `since=0`.
+4. **Push.** `POST /api/devices {token, env: "sandbox"|"production"}` stores the
+   phone in `data/devices.json`. Agent replies, tap comments and new or updated
+   cards then send a notification, once an APNs key exists:
+   `~/.config/glint/apns/AuthKey_<KEYID>.p8` plus `key.json`
+   `{"key_id": "<KEYID>", "team_id": "289D9TAJCH", "topic": "com.tappinai.glint"}`.
+   `GET /api/health` returns `{ok, version, push, time}`; `push` says whether the
+   key is in place. Sends are logged to `data/push.log`.
+
 ## The presence HUD
 
 Top right of the page. Fully automatic; agents report nothing. Rows are derived from the server's own request stream (`posted`, `iterating`, `waiting on your tap`), fade after about 2 minutes of quiet, and vanish after 5. A blocked `tap.py wait` doubles as a 3-second heartbeat.
@@ -167,11 +236,45 @@ Keep recordings short (5 to 20 seconds, under ~60MB; the CLI enforces the cap). 
 
 ## Security
 
-The server binds to `127.0.0.1` only and has no auth. It is built for one human and their agents on one machine. Do not expose it beyond localhost.
+The server binds to `127.0.0.1` only. Callers on this Mac need no auth; everything else, which includes every request through a tunnel, needs the bearer token in `data/token` (see "Your phone"). Reach it from elsewhere only through `tap.py pair`, never by changing the bind address.
 
 ## Requirements
 
 Python 3.8+. No packages. Any modern browser.
+
+## Mac app
+
+`mac/` is a native macOS app for the same server: the Visual and Chat tabs, plus a liquid pill in the menu bar (just right of the notch) that counts what is waiting on you and spreads into a list when you hover it. SwiftPM only, macOS 26.
+
+Install (release build, bundled as `TapSpace.app` with its icon, ad-hoc signed, copied to `/Applications`, then opened):
+
+```bash
+mac/Scripts/install.sh                                      # opens on http://127.0.0.1:4747
+NO_OPEN=1 mac/Scripts/install.sh                            # install only
+TAPSPACE_URL=http://127.0.0.1:4748 mac/Scripts/install.sh   # open it on another server
+```
+
+The app reads `TAPSPACE_URL` (default `http://127.0.0.1:4747`) and starts the server with `tap.py up` if it is down.
+
+Flags, for verification:
+
+| Flag | What it does |
+|---|---|
+| `--snapshot <dir>` | Renders every scene from the real views to 2x PNGs (Visual, a card in notes mode, lightbox, an agent thread, a thinking agent, a tap thread, the pill collapsed, bulging and expanded), writes `scenes.json`, and exits. |
+| `--demo` | A scripted 10 s loop (tabs, notes, rail selection, a bubble flying in, the pill spreading and retracting) that repeats until you quit. Never sends anything. |
+| `--fps` | Logs display-link frames per second each second, and whether each surface is moving, still or paused. |
+| `--tab visual\|chat`, `--thread agent:NAME\|owner/repo#n` | Open on a tab or thread. |
+
+Never test decisions or chat against the live server. The scripts work on a scratch one:
+
+```bash
+mac/Scripts/seed.sh 4748                    # scratch server on :4748 seeded with real screenshots and two agents
+mac/Scripts/fps.sh http://127.0.0.1:4748 30 # --demo --fps for 30 s, then a frame-rate summary and crash check
+mac/Scripts/verify.sh 4748                  # all of it: seed, build, snapshots, fps, stop the server
+mac/Scripts/seed.sh --stop <data dir>       # stop a scratch server seed.sh started
+```
+
+The icon is `mac/Resources/TapSpace.icon` (Icon Composer format: a white tile with one blue dot); install.sh compiles it with `actool` into the app's `Assets.car` and `TapSpace.icns`.
 
 ## License
 
