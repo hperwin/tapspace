@@ -1,10 +1,12 @@
 #!/bin/bash
-# Builds TapSpace (release), bundles TapSpace.app with its Info.plist and icon,
-# ad-hoc signs it, installs it to /Applications/TapSpace.app and opens it.
+# Builds TapSpace (release), bundles TapSpace.app with its Info.plist and icon, ad-hoc signs it and
+# installs it to /Applications/TapSpace.app. It never quits, relaunches or brings forward a running
+# TapSpace: that copy keeps its build until it is next opened, and then opens the new one.
 #
-#   Scripts/install.sh              build, install, open
-#   NO_OPEN=1 Scripts/install.sh    build and install only
-#   TAPSPACE_URL=http://127.0.0.1:4748 Scripts/install.sh   open it on another server
+#   Scripts/install.sh                  build and install
+#   BUNDLE_ONLY=1 Scripts/install.sh    build and sign .build/TapSpace.app only; /Applications untouched
+#   OPEN=1 Scripts/install.sh           also open it behind the front app, when no copy is running
+#   OPEN=1 TAPSPACE_URL=http://127.0.0.1:4748 Scripts/install.sh   ... on another server
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
@@ -41,25 +43,29 @@ cp "$ICON/Assets.car" "$ICON/$NAME.icns" "$APP/Contents/Resources/"
 printf 'APPL????' > "$APP/Contents/PkgInfo"
 codesign --force --deep --sign - "$APP"
 codesign --verify --strict "$APP"
-
-# 4. Quit the running copy politely, then install.
-if pgrep -x "$NAME" >/dev/null; then
-    echo "==> Quitting the running $NAME"
-    osascript -e "tell application id \"$BUNDLE_ID\" to quit" >/dev/null 2>&1 || true
-    for _ in $(seq 1 50); do pgrep -x "$NAME" >/dev/null || break; sleep 0.1; done
+if [[ "${BUNDLE_ONLY:-0}" == "1" ]]; then
+    echo "Bundled: $PWD/$APP (not installed)"
+    exit 0
 fi
+
+# 4. Install beside a running copy. rsync writes each file next to the old one and renames it into
+#    place (never --inplace), so a running TapSpace keeps the executable it already mapped.
+RUNNING="$(pgrep -f "$DEST/Contents/MacOS/$NAME" || true)"
 echo "==> Installing $DEST"
 mkdir -p "$DEST"
 rsync -a --delete "$APP/" "$DEST/"
 touch "$DEST"
 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$DEST" >/dev/null 2>&1 || true
 
-# 5. Open it (on TAPSPACE_URL when set, else the default http://127.0.0.1:4747).
-if [[ "${NO_OPEN:-0}" != "1" ]]; then
+# 5. Open only when asked and nothing is running: behind the front app (open -g), and the app does
+#    not activate itself either (TAPSPACE_BACKGROUND=1).
+if [[ -n "$RUNNING" ]]; then
+    echo "TapSpace is running (PID $(echo $RUNNING)): it keeps its build until it is next opened."
+elif [[ "${OPEN:-0}" == "1" ]]; then
     if [[ -n "${TAPSPACE_URL:-}" ]]; then
-        open --env "TAPSPACE_URL=$TAPSPACE_URL" "$DEST"
+        open -g --env TAPSPACE_BACKGROUND=1 --env "TAPSPACE_URL=$TAPSPACE_URL" "$DEST"
     else
-        open "$DEST"
+        open -g --env TAPSPACE_BACKGROUND=1 "$DEST"
     fi
 fi
 echo "Installed: $DEST ($BUNDLE_ID)"
