@@ -93,8 +93,8 @@ final class HarnessSnapshot {
             ?? agents.first { $0.state != "thinking" && $0.count > 0 } ?? agents.first
         let thinking = agents.first { $0.state == "thinking" && $0.key != talking?.key && !$0.notes.isEmpty }
             ?? agents.first { $0.state == "thinking" && $0.key != talking?.key }
-        // The thread before the tab: switching to Chat reads the open thread, and a
-        // thread restored from an earlier run must not lose its notes unseen.
+        // The thread before the tab: switching to Chat marks the open thread read, so
+        // a thread restored from an earlier run is replaced before that happens.
         if let talking { store.thread = talking.key }
         // Key, as when Hayden looks at it (an offscreen launch is never made key).
         store.windowKey = true
