@@ -260,22 +260,27 @@
   .rbtn.danger{background:#ff3b30;color:#fff}
   .rbtn:disabled{opacity:.6;cursor:default}
 
-  .orb{width:38px;height:38px;border-radius:50%;flex:none;position:relative;
-    background:rgb(var(--hl))}
+  .orb{width:var(--s,38px);height:var(--s,38px);border-radius:50%;flex:none;position:relative;
+    background:rgb(var(--hl));color:#fff}
   .orb::after{content:"";position:absolute;inset:-4px;border-radius:50%;border:1.5px solid rgba(var(--hl),.35);
     opacity:0;transform:scale(.85)}
   .orb.thinking::after{animation:ripple 1.6s ease-out infinite}
   .orb.thinking{animation:orbpulse 1.6s ease-in-out infinite}
   @keyframes ripple{0%{opacity:.9;transform:scale(.85)}100%{opacity:0;transform:scale(1.35)}}
   @keyframes orbpulse{0%,100%{transform:scale(1)}50%{transform:scale(1.06)}}
-  .orb.away{background:#d1d1d6}
+  /* a master's face (Glint's FaceArt on its 88-unit grid): the tone and mark are its look, the expression its state */
+  .orb.t1{background:var(--ink)}
+  .orb.t2{background:rgba(var(--hl),.12);color:rgb(var(--hl))}
+  .orb .fa{position:absolute;inset:0;width:100%;height:100%;fill:currentColor}
+  .orb .fa .ln{fill:none;stroke:currentColor;stroke-width:2.5;stroke-linecap:round;stroke-linejoin:round}
+  .orb.away{background:#d1d1d6;color:#fff}
 
-  .tapav{width:38px;height:38px;border-radius:50%;flex:none;position:relative;display:flex;align-items:center;justify-content:center;
+  .tapav{width:var(--s,38px);height:var(--s,38px);border-radius:50%;flex:none;position:relative;display:flex;align-items:center;justify-content:center;
     background:#f4f4f6}
-  .tapav svg{position:absolute;inset:0;width:38px;height:38px;overflow:visible}
+  .tapav svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
   .tapav .trk{fill:none;stroke:rgba(0,0,0,.06);stroke-width:2.2}
   .tapav .arc{fill:none;stroke:var(--ink);stroke-width:2.2;stroke-linecap:round}
-  .tapav .num{font-size:9.5px;font-weight:700;color:var(--dim);font-variant-numeric:tabular-nums;letter-spacing:.02em}
+  .tapav .num{font-size:calc(var(--s,38px)*.4);font-weight:700;color:var(--dim);font-variant-numeric:tabular-nums;letter-spacing:.02em}
   .tapav.flying .arc{stroke-dasharray:30 80;transform-origin:19px 19px}
   .tapav.working .arc{animation:spin 1.6s linear infinite}
   .tapav.boarding .arc{stroke:var(--faint);stroke-dasharray:3 6;transform-origin:19px 19px}
@@ -297,6 +302,9 @@
   .tapav.p-landed .num,.tapav.p-done .num{color:var(--green)}
   .tapav.p-closed .arc{stroke:var(--faint)}
   .thread .tx.dim{opacity:.55}
+  /* a project's face: its letter on a squircle (Glint's AvatarArt .squircle, radius 32%) */
+  .projav{width:var(--s,38px);height:var(--s,38px);border-radius:32%;flex:none;display:flex;align-items:center;
+    justify-content:center;background:rgb(var(--hl));color:#fff;font-size:calc(var(--s,38px)*.45);font-weight:800;line-height:1}
   @keyframes spin{to{transform:rotate(360deg)}}
 
   .chip{display:inline-flex;align-items:center;gap:6px;font-size:10.5px;font-weight:600;letter-spacing:.06em;
@@ -1099,11 +1107,53 @@ function tapWord(t){
 const isHolding = t => hasPhase(t) ? t.phase === 'holding' : t.status === 'needs-you';
 const tms = ts => typeof ts === 'number' ? ts * 1000 : Date.parse(ts);
 function tapName(t){ return t.title.replace(/^\[[^\]]*\]\s*/, ''); }
-function tapAvatar(t){
+function tapAvatar(t, st = ''){
   const check = hasPhase(t) ? t.phase === 'done' : t.status === 'landed';
-  return `<span class="tapav ${tapCls(t)}${t.replying ? ' working' : ''}"><svg viewBox="0 0 38 38"><circle class="trk" cx="19" cy="19" r="17"/>
+  return `<span class="tapav ${tapCls(t)}${t.replying ? ' working' : ''}"${st}><svg viewBox="0 0 38 38"><circle class="trk" cx="19" cy="19" r="17"/>
     <circle class="arc" cx="19" cy="19" r="17"/></svg>
-    <span class="num">${check ? '✓' : ''}</span></span>`;
+    <span class="num">${check ? '✓' : esc(String(t.initial || initialOf(t.repo)))}</span></span>`;
+}
+
+// ---- pure: faces (no DOM, no page globals; tests/test_faces_web.py runs this block in node) ----
+/* faces (Glint's FaceArt, on its 88-unit grid): a master's look is the server's `look` (0 is the lead), one tone
+   (accent, ink, tint) and one mark, the same table on Glint and the Mac app; its expression is its state */
+const FACE_LOOKS = [[0,0],[0,1],[1,2],[2,3],[0,2],[1,3],[2,4],[0,3],[1,4],[2,5],[0,4],[1,5],[2,1],[0,5],[1,1],[2,2],[1,0],[2,0]];
+const FACE_EXPR = {here: 'happy', thinking: 'focused', starting: 'wow', switching: 'wow'};   // anything else sleeps
+const FACE_EYES = {
+  happy: 'M25 37a4 4 0 1 0 8 0a4 4 0 1 0 -8 0M55 37a4 4 0 1 0 8 0a4 4 0 1 0 -8 0',
+  focused: 'M25 37a4 4 0 1 0 8 0a4 4 0 1 0 -8 0M55 37a4 4 0 1 0 8 0a4 4 0 1 0 -8 0',
+  wow: 'M23 37a5 5 0 1 0 10 0a5 5 0 1 0 -10 0M55 37a5 5 0 1 0 10 0a5 5 0 1 0 -10 0',
+  sleepy: 'M24.5 35.5H31.5a1.5 1.5 0 0 1 0 3H24.5a1.5 1.5 0 0 1 0 -3ZM56.5 35.5H63.5a1.5 1.5 0 0 1 0 3H56.5a1.5 1.5 0 0 1 0 -3Z'};
+const FACE_MOUTH = {happy: 'M32 53Q44 67 56 53', focused: 'M35.6 56H52.4', wow: 'M39 57a5 5 0 1 0 10 0a5 5 0 1 0 -10 0', sleepy: 'M40.4 53.5H47.6'};
+const FACE_MARK = [   // [stroked, filled]: plain, glasses, antenna, bowtie, cheeks, brows
+  ['', ''],
+  ['M20 37a9 9 0 1 0 18 0a9 9 0 1 0 -18 0M50 37a9 9 0 1 0 18 0a9 9 0 1 0 -18 0M37.5 34Q44 30.5 50.5 34', ''],
+  ['M44 25V17', 'M39.5 13a4.5 4.5 0 1 0 9 0a4.5 4.5 0 1 0 -9 0'],
+  ['M36.5 70L44 73.5L36.5 77ZM51.5 70L44 73.5L51.5 77Z', 'M36.5 70L44 73.5L36.5 77ZM51.5 70L44 73.5L51.5 77Z'],
+  ['', 'M15 51a4 2.6 0 1 0 8 0a4 2.6 0 1 0 -8 0M65 51a4 2.6 0 1 0 8 0a4 2.6 0 1 0 -8 0'],
+  ['M24 25H34M54 25H64', '']];
+const faceLook = n => FACE_LOOKS[Number.isInteger(n) && n >= 0 && n < FACE_LOOKS.length ? n : 0];   // no look served: the lead's
+function faceArt(look, state){
+  const x = FACE_EXPR[state] || 'sleepy', [ln, dot] = FACE_MARK[faceLook(look)[1]];
+  return `<svg class="fa" viewBox="0 0 88 88" aria-hidden="true"><path d="${FACE_EYES[x]}"/><path class="ln" d="${FACE_MOUTH[x]}"/>` +
+    (ln ? `<path class="ln" d="${ln}"/>` : '') + (dot ? `<path d="${dot}"/>` : '') + '</svg>';
+}
+const orbCls = a => `orb t${faceLook(a.look)[0]} ${a.state || 'away'}`;
+function masterFace(a, st = ''){ return `<span class="${orbCls(a)}"${st}>${faceArt(a.look, a.state)}</span>`; }
+// a repo's or project's letter, the server's _initial rule: the first letter or digit after the last '/', upper case
+function initialOf(name){
+  const m = String(name || '').split('/').pop().match(/[\p{L}\p{N}]/u);
+  return m ? m[0].toUpperCase() : '?';
+}
+// ---- end pure: faces ----
+// One face for any key (contract R7): a master (agent:NAME), a tap (owner/repo#n) or a project (project:name). `hint`
+// is what a card snapshot knows of a key this page no longer holds: {look, state, phase, initial}.
+function face(key, size, hint){
+  const st = size ? ` style="--s:${size}px"` : '', h = hint || {};
+  if (isAgent(key)) return masterFace(agents.find(a => agentKey(a.name) === key) || {look: h.look, state: h.state || 'away'}, st);
+  if (key.startsWith('project:')) return `<span class="projav"${st}>${esc(String(h.initial || initialOf(key.slice(8))))}</span>`;
+  return tapAvatar(taps.items.find(t => t.key === key) ||
+    {key, repo: key.split('#')[0], initial: h.initial, status: '', phase: h.phase || 'done'}, st);
 }
 
 /* unread = the other side said something after you last looked at that thread */
@@ -1203,9 +1253,9 @@ function syncAgents(){
     const [b, talk, notes] = g.children;
     g.classList.toggle('lead', a === lead);
     g.classList.toggle('child', !!lead && a !== lead && a.parent === lead.name);
-    const sig = a.state + '|' + a.title + '|' + a.count;
+    const sig = a.state + '|' + a.title + '|' + a.count + '|' + a.look;
     if (b.dataset.sig !== sig){ b.dataset.sig = sig;
-      b.innerHTML = `<span class="orb ${a.state}"></span><span class="tx"><div class="nm">${esc(a.title || 'Claude')}</div>
+      b.innerHTML = `${masterFace(a)}<span class="tx"><div class="nm">${esc(a.title || 'Claude')}</div>
         <div class="sub">${MASTER[a.state] || ''}</div></span><span class="unread"></span>`; }
     b.classList.toggle('on', current === key);
     const shown = visibleNotes(a);
@@ -1273,13 +1323,16 @@ function threadData(){
   return {msgs, typing: !!t.replying, tap: t};
 }
 
+/* O3 (contract section 7): the lead's live activity line in its thread head lands here (wave 2). Returns HTML; until
+   then, when the master started. */
+function headSub(a){ return 'Started ' + when(a.first || a.seen); }
 function renderHead(d){
   let html, sig;
   if (d.agent){
     const a = d.agent;
-    sig = current + '|' + a.state + '|' + a.title;
-    html = `<span class="orb ${a.state}"></span><span class="tx"><div class="nm">${esc(a.title || 'Claude')}</div>
-      <div class="sub">Started ${when(a.first || a.seen)}</div></span>
+    sig = current + '|' + a.state + '|' + a.title + '|' + a.look;
+    html = `${masterFace(a)}<span class="tx"><div class="nm">${esc(a.title || 'Claude')}</div>
+      <div class="sub">${headSub(a)}</div></span>
       <span class="chip ${a.state}"><i></i>${MASTER[a.state]}</span>`;
   } else {
     const t = d.tap;
@@ -1293,6 +1346,7 @@ function renderHead(d){
     head.dataset.sig = sig; head.dataset.key = current; head.innerHTML = html;
     if (swap){ head.classList.remove('swap'); void head.offsetWidth; head.classList.add('swap'); }
   }
+  if (d.agent){ const sub = head.querySelector('.tx .sub'), h = headSub(d.agent); if (sub) setPart(sub, h, h); }   // its age moves on
   const goals = d.tap ? d.tap.goals : [];
   const gsig = current + JSON.stringify(goals);
   if (goalsEl.dataset.sig !== gsig){
@@ -1874,7 +1928,7 @@ function makeCard(key){
   const q = s => el.querySelector(s);
   ro.observe(el);
   return {key, el, orb: q('.orb'), nm: q('.nm'), ago: q('.ago'), dot: q('.unread'), star: q('.star'),
-          track: q('.track'), line: q('.stepline'), tsig: null, lsig: null, cur: null, pingT: 0};
+          track: q('.track'), line: q('.stepline'), tsig: null, lsig: null, cur: null, pingT: 0, fsig: null};
 }
 function drawTrack(t, m){
   if (!m || !m.n){ t.className = 'track'; t.textContent = ''; t.title = ''; return; }
@@ -1894,8 +1948,10 @@ function drawTrack(t, m){
 }
 function fillCard(c, a, now){
   const m = planOf(a), sl = stepLine(m);
-  const cls = 'orb ' + (a.state || '') + (c.orb.classList.contains('ping') ? ' ping' : '');
+  const cls = orbCls(a) + (c.orb.classList.contains('ping') ? ' ping' : '');
   if (c.orb.className !== cls) c.orb.className = cls;      // away shows on the face only; the card keeps full ink
+  const fsig = a.look + '|' + a.state;
+  if (c.fsig !== fsig){ c.orb.innerHTML = faceArt(a.look, a.state); c.fsig = fsig; }
   setText(c.nm, a.title || 'Claude');
   setText(c.ago, when(Math.max(m ? m.updated : 0, +a.last_master || 0) || +a.seen || now));
   const unread = isUnread(c.key);                   // an unread reply; change notes keep the rail's dot and rows
