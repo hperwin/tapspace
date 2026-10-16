@@ -387,7 +387,6 @@
     width:100%;display:flex;gap:10px;align-items:flex-start;padding:14px;border-radius:18px;background:var(--card);
     box-shadow:0 1px 2px rgba(0,0,0,.05),0 6px 18px rgba(0,0,0,.07);transition:transform .2s ease,opacity .3s ease}
   .plan:active{transform:scale(.98)}
-  .plan.away{opacity:.55}
   .plan .orb{width:26px;height:26px}
   .plan .pcol{display:block;flex:1;min-width:0}
   .plan .ptop{display:flex;align-items:center;gap:8px;height:26px}
@@ -395,7 +394,7 @@
   .plan .ago{flex:none;font-size:10.5px;color:var(--faint);font-variant-numeric:tabular-nums}
   .plan .star{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;
     margin-top:2px;font-size:12.5px;line-height:1.4;color:var(--ink)}
-  .plan .star.none{color:var(--faint)}
+  .plan .star.none{color:var(--dim)}
   .plan .track{display:flex;align-items:center;gap:3px;height:8px;margin-top:10px}
   .plan .track:empty{display:none}
   .plan .track i{flex:1;min-width:2px;height:4px;border-radius:2px;background:rgba(0,0,0,.08);
@@ -1673,8 +1672,7 @@ function drawTrack(t, m){
 function fillCard(c, a, now){
   const m = planOf(a), sl = stepLine(m);
   const cls = 'orb ' + (a.state || '') + (c.orb.classList.contains('ping') ? ' ping' : '');
-  if (c.orb.className !== cls) c.orb.className = cls;
-  c.el.classList.toggle('away', a.state === 'away');
+  if (c.orb.className !== cls) c.orb.className = cls;      // away shows on the face only; the card keeps full ink
   setText(c.nm, a.title || 'Claude');
   setText(c.ago, when(Math.max(m ? m.updated : 0, +a.last_master || 0) || +a.seen || now));
   const unread = isUnread(c.key);                   // an unread reply; change notes keep the rail's dot and rows
