@@ -1064,9 +1064,10 @@ def _card_ask(a):
 def _card(raw, sender, n_images, agents, taps):
     """An update card as a master sends it -> the checked card: v, line, face, visual?, items [{ref, note?}],
     images (one {label?} per attached image), ask?, action? (the one action a card may carry: tap_accept, the
-    reviewer's Accept of one tap). face and refs come back as face keys (_ref); face defaults to the one item,
-    else the sender. agents: agents.json; taps: TAPS items, or None while they load (pure except that its 503
-    names TAPS["error"]). ValueError says what to fix."""
+    reviewer's Accept of one tap). face and refs come back as face keys (_ref). face is the card's one subject:
+    given, else the one item, else None (several items or none), never the sender, whose thread it already is.
+    agents: agents.json; taps: TAPS items, or None while they load (pure except that its 503 names
+    TAPS["error"]). ValueError says what to fix."""
     if not isinstance(raw, dict):
         _bad("card: an object with a line")
     line = _plain(raw.get("line"), 120) or _bad(
@@ -1085,7 +1086,7 @@ def _card(raw, sender, n_images, agents, taps):
             x["note"] = _plain(it["note"], 80) or _bad("item note: one plain line up to 80 characters")
         out_items.append(x)
     face = _ref(raw["face"], agents, taps, "face") if " ".join(str(raw.get("face") or "").split()) else \
-        out_items[0]["ref"] if len(out_items) == 1 else "agent:" + sender
+        out_items[0]["ref"] if len(out_items) == 1 else None
     card = {"v": 1, "line": line, "face": face}
     if raw.get("visual") is not None:
         card["visual"] = _card_visual(raw["visual"])
@@ -1162,13 +1163,14 @@ def _was(old, now):
 def _card_fill(card, sources, served, agents, taps, thread):
     """The card as stored (pure): faces (a snapshot of every face it names, so a master that left or a tap that
     aged out still draws), each item as it stands now plus was (that item in the latest earlier card of this
-    thread that showed it), visual.from (the last card's progress when it had the same face), and each image's
-    label (given, else its proof's alt text, else Image N) and source. sources: each posted image item's proof
-    ref ({key, i}) or None; served: _agent_rows(); agents: agents.json; taps: TAPS items; thread: this
-    agent's chat rows."""
+    thread that showed it), visual.from (the last card's progress when it had the same face, or none like this
+    one), and each image's label (given, else its proof's alt text, else Image N) and source. sources: each
+    posted image item's proof ref ({key, i}) or None; served: _agent_rows(); agents: agents.json; taps: TAPS
+    items; thread: this agent's chat rows."""
     rows = {r["name"]: r for r in served}
     earlier = [r["card"] for r in thread if r.get("role") == "master" and isinstance(r.get("card"), dict)]
-    keys = [card["face"]] + [it["ref"] for it in card["items"]] + ([card["action"]["tap"]] if card.get("action") else [])
+    keys = ([card["face"]] if card["face"] else []) + [it["ref"] for it in card["items"]] + \
+        ([card["action"]["tap"]] if card.get("action") else [])
     out = {"v": 1, "line": card["line"], "face": card["face"],
            "faces": {k: _face(k, rows, agents, taps) for k in keys}}
     vis, last = card.get("visual"), earlier[-1] if earlier else {}

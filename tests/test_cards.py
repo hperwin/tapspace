@@ -258,11 +258,18 @@ class CardRuleTests(unittest.TestCase):
                     "text": True}})
 
     def test_face_defaults(self):
+        # the face is the card's one subject (A2): given, else the one item, else none; never the sender
         self.assertEqual(self.card({"line": "L", "items": [{"ref": TAP["key"]}]})["face"], TAP["key"])
-        self.assertEqual(self.card({"line": "L"})["face"], "agent:Muddi")
-        self.assertEqual(self.card({"line": "L"}, sender="Claude · t · 1")["face"], "agent:Claude · t · 1")
+        self.assertEqual(self.card({"line": "L", "items": [{"ref": "Chat update cards"}]})["face"], "agent:Claude · t · 1")
+        self.assertIsNone(self.card({"line": "L"})["face"])
+        self.assertIsNone(self.card({"line": "L"}, sender="Claude · t · 1")["face"])
+        self.assertIsNone(self.card({"line": "L", "face": "  "})["face"])
+        self.assertIsNone(self.card({"line": "L", "face": None})["face"])
         two = {"line": "L", "items": [{"ref": TAP["key"]}, {"ref": "Muddi"}]}
-        self.assertEqual(self.card(two, sender="Claude · t · 1")["face"], "agent:Claude · t · 1")
+        self.assertIsNone(self.card(two)["face"])
+        self.assertIsNone(self.card(two, sender="Claude · t · 1")["face"])
+        self.assertIsNone(self.card({"line": "L", "action": {"kind": "tap_accept", "tap": TAP["key"]}})["face"])
+        self.assertEqual(self.card({**two, "face": "project:tapspace"})["face"], "project:tapspace")
         self.assertEqual(self.card({"line": "L", "face": "agent:Muddi"})["face"], "agent:Muddi")
         self.assertEqual(self.card({"line": "L", "face": "MUDDI"}, sender="Claude · t · 1")["face"], "agent:Muddi")
         self.assertEqual(self.card({"line": "L", "face": "chat UPDATE cards"})["face"], "agent:Claude · t · 1")
@@ -500,22 +507,35 @@ class CardFillTests(unittest.TestCase):
 
     def test_visual_from(self):
         prog = lambda d, t: {"kind": "progress", "done": d, "total": t}
+        muddi = lambda v: {"line": "L", "face": "Muddi", "visual": v}
         last = self.earlier([], visual=prog(4, 5))
-        self.assertEqual(self.fill({"line": "L", "visual": prog(2, 3)}, thread=[last])["visual"],
+        self.assertEqual(self.fill(muddi(prog(2, 3)), thread=[last])["visual"],
                          {"kind": "progress", "done": 2, "total": 3, "from": 3})        # clamped to the new total
-        self.assertEqual(self.fill({"line": "L", "visual": prog(4, 5)}, thread=[self.earlier([], visual=prog(1, 5))])
-                         ["visual"]["from"], 1)
+        self.assertEqual(self.fill(muddi(prog(4, 5)), thread=[self.earlier([], visual=prog(1, 5))])["visual"]["from"], 1)
         other_face = self.earlier([], face="agent:Claude · t · 1", visual=prog(1, 5))
-        self.assertNotIn("from", self.fill({"line": "L", "visual": prog(2, 5)}, thread=[other_face])["visual"])
+        self.assertNotIn("from", self.fill(muddi(prog(2, 5)), thread=[other_face])["visual"])
         word = self.earlier([], visual={"kind": "word", "text": "Landed"}, cid=2)
-        self.assertNotIn("from", self.fill({"line": "L", "visual": prog(2, 5)}, thread=[last, word])["visual"])
-        self.assertNotIn("from", self.fill({"line": "L", "visual": prog(2, 5)})["visual"])
+        self.assertNotIn("from", self.fill(muddi(prog(2, 5)), thread=[last, word])["visual"])
+        self.assertNotIn("from", self.fill(muddi(prog(2, 5)))["visual"])
+        # cards with no face (several items or none) follow each other, never a card that had one
+        faceless = self.earlier([], face=None, visual=prog(1, 5))
+        self.assertEqual(self.fill({"line": "L", "visual": prog(3, 5)}, thread=[faceless])["visual"]["from"], 1)
+        self.assertNotIn("from", self.fill({"line": "L", "visual": prog(3, 5)}, thread=[last])["visual"])
+        self.assertNotIn("from", self.fill(muddi(prog(3, 5)), thread=[faceless])["visual"])
 
     def test_the_accept_names_its_tap_in_faces(self):
         c = self.fill({"line": "Ready to accept", "action": {"kind": "tap_accept", "tap": "fixture-app#7"}})
         self.assertEqual(c["action"], {"kind": "tap_accept", "tap": TAP["key"]})
-        self.assertEqual(c["faces"][TAP["key"]], {"kind": "tap", "title": TAP_TITLE, "initial": "F", "phase": "landed"})
+        self.assertEqual(c["faces"], {TAP["key"]: {"kind": "tap", "title": TAP_TITLE, "initial": "F", "phase": "landed"}})
+        self.assertIsNone(c["face"])
         self.assertEqual(c["items"], [])
+
+    def test_a_card_with_no_subject_names_only_its_items(self):
+        c = self.fill({"line": "L", "items": [{"ref": TAP["key"]}, {"ref": "Claude · t · 1"}, {"ref": "project:tapspace"}]})
+        self.assertIsNone(c["face"])
+        self.assertEqual(set(c["faces"]), {TAP["key"], "agent:Claude · t · 1", "project:tapspace"})   # not the sender
+        self.assertEqual(self.fill({"line": "L"})["faces"], {})
+        self.assertEqual(set(self.fill({"line": "L", "items": [{"ref": TAP["key"]}]})["faces"]), {TAP["key"]})
 
 
 class CardApiTests(Taps):
@@ -537,6 +557,19 @@ class CardApiTests(Taps):
         self.assertEqual(m["card"]["images"], [{"label": "Grid"}])
         self.assertEqual(thread(a), before + [m])                   # served verbatim; nothing earlier changed
         self.assertEqual(self.pushes, [((row(a)["title"], line), {"key": "agent:" + a})])
+
+    def test_the_face_is_the_subject_never_the_sender(self):
+        a, b = name("subject"), name("other")
+        join(a)
+        join(b)
+        many = sent(a, {"line": "Three moved", "items": [{"ref": TAP["key"]}, {"ref": b}, {"ref": "project:tapspace"}]})
+        self.assertIsNone(many["card"]["face"])
+        self.assertEqual(set(many["card"]["faces"]), {TAP["key"], "agent:" + b, "project:tapspace"})
+        one = sent(a, {"line": "Lineup landed", "items": [{"ref": "fixture-app#7"}]})
+        self.assertEqual((one["card"]["face"], set(one["card"]["faces"])), (TAP["key"], {TAP["key"]}))
+        own = sent(a, {"line": "About me", "face": a})                       # a given face still leads
+        self.assertEqual(own["card"]["face"], "agent:" + a)
+        self.assertEqual(thread(a), [many, one, own])                       # no face is stored and served as null
 
     def test_a_sent_body_is_kept_on_one_line(self):
         a = name("body")
@@ -572,7 +605,7 @@ class CardApiTests(Taps):
         code, r = send(a, {"line": "Say \"hi\""})
         self.assertEqual(code, 400)
         self.assertIn("line: one plain line", r["error"])
-        S.CARD_MAX = 100
+        S.CARD_MAX = 50
         code, r = send(a, {"line": "L"}, images=[B64])
         self.assertEqual(code, 400)
         self.assertIn("over", r["error"])
