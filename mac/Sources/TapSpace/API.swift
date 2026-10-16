@@ -63,9 +63,14 @@ struct Agent: Decodable, Equatable, Identifiable {
     var notes: [AgentNote] = []
     /// The server's read mark for those notes (epoch), nil when never read.
     var notesRead: Double? = nil
+    /// "lead" on Muddi's row (the master over all masters); nil on every other row.
+    var role: String? = nil
+    /// NAME of the lead this master reports to (server-derived). A hidden key: never shown.
+    var parent: String? = nil
 
     var id: String { name }
     var key: String { "agent:" + name }
+    var isLead: Bool { role == "lead" }
 }
 
 /// A master's published plan: one goal and its steps.
@@ -154,6 +159,22 @@ struct TapMessage: Decodable, Equatable {
     var date: Double { parseISO(ts) }
 }
 
+/// What a holding tap asks Hayden: the newest non-hperwin comment that mentions him. Plain text.
+struct TapAsk: Decodable, Equatable {
+    let text: String
+    let url: String
+    let at: String
+
+    /// 0 when `at` is missing or unparseable.
+    var date: Double { parseISO(at) }
+}
+
+/// One proof image from the issue body, served by TapSpace's proxy, never by GitHub.
+struct TapProof: Decodable, Equatable {
+    let url: String
+    let alt: String
+}
+
 struct Tap: Decodable, Equatable, Identifiable {
     let key: String
     let repo: String
@@ -168,6 +189,15 @@ struct Tap: Decodable, Equatable, Identifiable {
     let last: String
     /// the pilot is working on a reply right now
     let replying: Bool?
+    /// proposed | enroute | holding | landed | done | closed; nil from a server older than Muddi.
+    var phase: String? = nil
+    /// The one word the server says to show (phase_word); nil from an older server.
+    var phaseWord: String? = nil
+    /// Set only while holding (null otherwise).
+    var ask: TapAsk? = nil
+    /// The fly label is on: a proposed tap waiting to fly.
+    var flyRequested = false
+    var proof: [TapProof] = []
 
     var id: String { key }
     /// "[tap] Fix the thing" -> "Fix the thing"
@@ -280,6 +310,8 @@ extension Agent {
         progress = c.opt(Keys("progress"))
         notes = c.lossy(Keys("notes"))
         notesRead = c.opt(Keys("notes_read"))
+        role = c.opt(Keys("role"))
+        parent = (c.opt(Keys("parent")) as String?).flatMap { $0.isEmpty ? nil : $0 }
     }
 }
 
@@ -350,6 +382,23 @@ extension TapMessage {
     }
 }
 
+extension TapAsk {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        text = c.or(Keys("text"), "")
+        url = c.or(Keys("url"), "")
+        at = c.or(Keys("at"), "")
+    }
+}
+
+extension TapProof {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        url = try c.decode(String.self, forKey: Keys("url"))
+        alt = c.or(Keys("alt"), "")
+    }
+}
+
 extension Tap {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: Keys.self)
@@ -365,6 +414,11 @@ extension Tap {
         closed = c.opt(Keys("closed"))
         last = c.or(Keys("last"), created)
         replying = c.opt(Keys("replying"))
+        phase = (c.opt(Keys("phase")) as String?).flatMap { $0.isEmpty ? nil : $0 }
+        phaseWord = (c.opt(Keys("phase_word")) as String?).flatMap { $0.isEmpty ? nil : $0 }
+        ask = c.opt(Keys("ask"))
+        flyRequested = c.or(Keys("fly_requested"), false)
+        proof = c.lossy(Keys("proof"))
     }
 }
 
@@ -442,8 +496,16 @@ enum API {
 
     static func url(_ path: String, _ q: [String: String] = [:]) -> URL {
         var c = URLComponents(url: base, resolvingAgainstBaseURL: false)!
-        c.path = path
-        if !q.isEmpty { c.queryItems = q.sorted { $0.key < $1.key }.map { URLQueryItem(name: $0.key, value: $0.value) } }
+        // A served path may carry its own query (a tap's proof image: /api/taps/proof?key=...&i=0).
+        let parts = path.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false)
+        c.path = String(parts[0])
+        var items: [URLQueryItem] = []
+        if parts.count > 1 {
+            let raw = String(parts[1]).replacingOccurrences(of: "#", with: "%23")
+            items = URLComponents(string: "?" + raw)?.queryItems ?? []
+        }
+        items += q.sorted { $0.key < $1.key }.map { URLQueryItem(name: $0.key, value: $0.value) }
+        if !items.isEmpty { c.queryItems = items }
         return c.url!
     }
 
@@ -525,6 +587,18 @@ enum API {
     /// refused under --snapshot/--demo.
     static func markAgentRead(_ name: String) async throws {
         try await post("/api/agents/read", ["name": name])
+    }
+
+    /// POST /api/taps/fly {key}: Hayden clears a proposed tap to fly (the server adds the fly label as him).
+    /// Speaks for Hayden: refused under --snapshot/--demo.
+    static func flyTap(_ key: String) async throws {
+        try await post("/api/taps/fly", ["key": key])
+    }
+
+    /// POST /api/taps/accept {key}: Hayden's sign-off on a landed tap (the server closes it as completed).
+    /// Speaks for Hayden: refused under --snapshot/--demo. Only his click calls it, never an agent.
+    static func acceptTap(_ key: String) async throws {
+        try await post("/api/taps/accept", ["key": key])
     }
 }
 
