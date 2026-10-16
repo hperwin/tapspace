@@ -2,7 +2,6 @@ import AppKit
 import Observation
 import SwiftUI
 
-private let statusLabel = ["needs-you": "Needs you", "flying": "Flying", "boarding": "Boarding", "landed": "Landed"]
 private let agentLabel = ["thinking": "Thinking", "here": "Here", "away": "Away", "switching": "Switching car", "starting": "Starting"]
 
 struct ChatView: View {
@@ -110,7 +109,7 @@ struct RailView: View {
     }
 
     private func tapSub(_ t: Tap) -> String {
-        var s = statusLabel[t.status, default: t.status] + " · " + t.repoName
+        var s = t.phaseLabel + " · " + t.repoName
         if let last = t.messages.last(where: { $0.who == "tap" }) { s += " · " + when(last.date) }
         return s
     }
@@ -483,7 +482,7 @@ struct PaneHeader: View {
                     .foregroundStyle(Color.dim)
                 }
                 Spacer(minLength: 8)
-                StatusChip(state: tap.status, label: statusLabel[tap.status, default: tap.status])
+                StatusChip(state: tap.status, label: tap.phaseLabel)
             }
         }
         .foregroundStyle(Color.ink)
