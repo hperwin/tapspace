@@ -7,10 +7,10 @@ sender's verified claude pid and the same msg_id. A thread tails the transcripts
 (data/sessions.json from tap.py's session stamp, plus a one-time boot scan of each session's own
 `tap.py listen --as NAME`), joins the two halves on msg_id, maps both sessions to TapSpace NAMEs
 and keeps one small record per message in data/links.jsonl. Message bodies are never kept: only the
-sender's own summary (or the first words of its first line), with paths, links, hex ids and
-#numbers removed.
+sender's own summary (or the first words of its first line), with paths, files, links, hex ids,
+keys and #numbers removed and agent NAMEs shown as their titles.
 
-server.py:  links.start(DATA, _bump)   once, in __main__ (daemon thread, one pass every 5 s)
+server.py:  links.start(DATA, _bump, titles)   once, in __main__ (daemon thread, one pass every 5 s)
             links.rows(names)          the top-level "links" array of GET /api/agents
             links.stats()              counters for /api/activity and tap.py doctor
 """
@@ -34,11 +34,19 @@ FIRST_WORDS = 8
 
 _SOCK = re.compile(r"^uds:\S*/(\d+)\.sock$")
 _LISTEN = re.compile(r"""(?:^|[\s;&|(])\S*python3?\s+\S*tap\.py\s+listen\s+--as[\s=]+(?:"([^"\\]+)"|'([^'\\]+)'|([^\s"';&|\\]{2,}))""")
-_SCRUB = re.compile(
-    r"(?:\b(?:sha|commit|at|in|to|on|onto|from)\s+)?"           # "at", "sha" ... before what goes
-    r"(?:(?:https?://|~/|/Users/|/tmp/|/private/)\S*"            # links and paths
-    r"|\b(?=[0-9a-f-]*\d)[0-9a-f]{6,}(?:-[0-9a-f]+)*\b"          # hex ids and uuids ("decade" stays)
-    r"|#\d+)")                                                   # issue and PR numbers
+_CODE = re.compile(                                              # one word of a summary that no agent UI shows
+    r"^(?!\d+/\d+$).*[/\\]"                                      # paths, scheme:// links (a count like 14/20 stays)
+    r"|^(?=.{4})[\w@+-][\w.@+-]*\.[a-z][a-z0-9]{0,9}(?::\d+)*$"  # files, with an optional :line ("e.g" stays)
+    r"|(?<![0-9a-z])(?=[0-9a-f]*\d)[0-9a-f]{8,}(?![0-9a-z])"     # hex ids of 8 or more, uuids ("decade" stays)
+    r"|^(?=[0-9a-f]*\d)(?=\d*[a-f])[0-9a-f]{6,7}$"               # short commit shas
+    r"|#\d"                                                      # issue and PR numbers
+    r"|^sk-|^(?=.*\d)(?=.*[a-z])[\w+=-]{20,}$",                  # keys: sk-..., long base64-ish tokens
+    re.I)
+_WORD = re.compile(r"""^(["'(\[{<]*)(.*?)([)\]}>"',;:.!?\u2026]*)$""")
+_BEFORE = {"at", "in", "to", "on", "onto", "from", "and", "or", "of", "for", "with", "into", "via", "under",
+           "sha", "commit"}                                      # goes with the word after it
+_LABEL = {"session", "ticket", "id", "key", "file", "path", "pid", "branch", "worktree", "token"}  # ... at a clause end
+_CLAUDE = r"\bClaude(?:\s*\u00b7\s*[\w-]+)+"                     # a NAME no agent title is known for
 _PREAMBLE = re.compile(r"^\s*(?:[#>*+-]+\s*)*(?:from\b[^:\n]{0,80}:\s*)?", re.I)
 _SID = re.compile(r"^[0-9a-fA-F-]{8,64}$")
 _NEEDLES = (b'"SendMessage"', b'"msg_id"', b'"verifiedPeerPid"', b"tap.py listen")
@@ -51,39 +59,67 @@ def _epoch(iso):
         return None
 
 
+def _scrub(s):
+    """s without the words in _CODE. A word that goes takes along the one before it when that is
+    "at", "in", "and"... (or "session", "key"... when it ended a clause); its , ; : . ! ? stay."""
+    out = []
+    words = s.split()
+    for i, w in enumerate(words):
+        lead, core, trail = _WORD.match(w).groups()
+        if not core or not _CODE.search(core):
+            out.append(w)
+            continue
+        trail = re.sub(r"[^,;:.!?]|\.{2,}", "", trail)
+        end = bool(trail) or i == len(words) - 1
+        if out and (out[-1].lower() in _BEFORE or end and out[-1].lower() in _LABEL):
+            out.pop()
+        if trail and out and out[-1][-1] not in ",;:.!?":
+            out[-1] += trail
+    return " ".join(out)
+
+
 def _plain(text):
-    s = str(text or "").replace("\u2014", ", ").replace("`", "").replace("**", "")
-    s = " ".join(_SCRUB.sub("", s).split())
+    s = _scrub(str(text or "").replace("\u2014", ", ").replace("`", "").replace("**", ""))
     s = re.sub(r"\s+([,;:.!?])", r"\1", s)
     return re.sub(r"[,;:](?=[,;:]|$)", "", s).strip(" -:;,.")
+
+
+def _named(s, titles):
+    """Every agent NAME in s ("Claude \u00b7 home \u00b7 e3cc") as that agent's title; one with no known title as Claude."""
+    titles = titles or {}
+    known = [re.escape(n) for n in sorted(titles, key=len, reverse=True) if n]
+    pat = (f"(?:{'|'.join(known)})(?![\\w-])|" if known else "") + _CLAUDE
+    return re.sub(pat, lambda m: titles.get(m.group(0)) or "Claude", s)
 
 
 def _cut(s):
     return s if len(s) <= SUMMARY_MAX else s[:SUMMARY_MAX - 3].rsplit(" ", 1)[0].rstrip(" ,;:.") + "..."
 
 
-def _clip(summary):
-    """The sender's own SendMessage summary as every agent UI may show it: no paths, links,
-    hex ids, #numbers or em dashes; at most SUMMARY_MAX characters."""
-    return _cut(_plain(summary))
+def _clip(summary, titles=None):
+    """The sender's own SendMessage summary as every agent UI may show it: no paths, files, links,
+    hex ids, keys, #numbers or em dashes, agents by title (titles: {NAME: title}); at most
+    SUMMARY_MAX characters."""
+    return _cut(_named(_plain(summary), titles))
 
 
-def _first_words(body):
+def _first_words(body, titles=None):
     """For a send without a summary: the first words of the message's first non-empty line
     (a leading "From ...:" preamble dropped), cleaned like a summary. Nothing else of the body."""
     if not isinstance(body, str):
         return ""
     for line in body.splitlines():
-        words = _plain(_PREAMBLE.sub("", line, count=1)).split()
+        words = _named(_plain(_PREAMBLE.sub("", line, count=1)), titles).split()
         if words:
             more = len(words) > FIRST_WORDS
             return _cut(" ".join(words[:FIRST_WORDS]).rstrip(" ,;:.") + ("..." if more else ""))
     return ""
 
 
-def _events(o, pend):
+def _events(o, pend, titles=dict):
     """Pure: one parsed transcript line -> events. `pend` carries a SendMessage call id to its
-    (to, text, ts) until the result line in the same transcript brings the msg_id.
+    (to, text, ts) until the result line in the same transcript brings the msg_id. titles() gives
+    {NAME: title} for the text, read only when a SendMessage is in the line.
       ("name", NAME)                       this session listens under NAME
       ("sent", msg_id, to_ref, ts, text)   this session sent msg_id; to_ref ("pid", n) | ("name", s)
       ("got", msg_id, pid, ts)             this session received msg_id from claude process pid
@@ -101,8 +137,9 @@ def _events(o, pend):
             if b.get("name") == "SendMessage":
                 ts = _epoch(o.get("timestamp"))
                 if ts is not None and b.get("id"):
+                    names = titles()
                     pend[b["id"]] = (str(i.get("to") or ""),
-                                     _clip(i.get("summary")) or _first_words(i.get("message")), ts)
+                                     _clip(i.get("summary"), names) or _first_words(i.get("message"), names), ts)
             elif b.get("name") == "Bash":
                 m = None
                 for m in _LISTEN.finditer(str(i.get("command") or "")):
@@ -131,13 +168,14 @@ def _events(o, pend):
 class Links:
     """The scanner. Every method but rows() and stats() runs on its one thread."""
 
-    def __init__(self, data_dir, bump=None, claude_dir=None, clock=time.time):
+    def __init__(self, data_dir, bump=None, claude_dir=None, clock=time.time, titles=None):
         data = pathlib.Path(data_dir)
         self.file = data / "links.jsonl"
         self.claims = data / "sessions.json"
         self.claude = pathlib.Path(claude_dir or CLAUDE_DIR)
         self.bump = bump or (lambda *kinds: None)
         self.clock = clock
+        self.titles = titles or dict    # () -> {NAME: title}: a NAME in a summary shows as its title
         self._lock = threading.Lock()   # guards self.links (read by HTTP threads); never server._lock
         self.links = {}                 # msg_id -> {"msg", "ts", "from": NAME, "to": NAME, "summary"}
         self.pending = {}               # msg_id -> {"from": sid|None, "to": sid|None, "ts", "text"}
@@ -223,7 +261,7 @@ class Links:
             if not any(n in raw for n in _NEEDLES):     # about 2 percent of lines get parsed
                 continue
             try:
-                evs = _events(json.loads(raw), pend)
+                evs = _events(json.loads(raw), pend, self._titles)
             except Exception:
                 self.counts["errors"] += 1
                 continue
@@ -232,6 +270,13 @@ class Links:
         for k in list(pend)[:-PENDING_MAX]:             # results that never came: keep the newest
             pend.pop(k, None)
         return 1
+
+    def _titles(self):
+        try:
+            return dict(self.titles())
+        except Exception:
+            self.counts["errors"] += 1
+            return {}
 
     def _take(self, sid, ev):
         if ev[0] == "name":
@@ -395,11 +440,11 @@ class Links:
 _ONE = None
 
 
-def start(data_dir, bump=None):
+def start(data_dir, bump=None, titles=None):
     """Starts the one scanner of this process (idempotent) and returns it."""
     global _ONE
     if _ONE is None:
-        _ONE = Links(data_dir, bump)
+        _ONE = Links(data_dir, bump, titles=titles)
         _ONE.start()
     return _ONE
 

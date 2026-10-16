@@ -364,7 +364,7 @@ class Text(Rig):
         self.assertEqual(c("Rail done \u2014 panel next"), "Rail done, panel next")
         self.assertEqual(c("A decade of facade work"), "A decade of facade work")
         self.assertEqual(c("Session e8f091d4-ad6f-481a-b8dc-0f9fb206ebda is up"), "Session is up")
-        self.assertEqual(c("See https://github.com/hperwin/tapspace/pull/2 then `tap.py up`"), "See then tap.py up")
+        self.assertEqual(c("See https://github.com/hperwin/tapspace/pull/2 then `tap.py up`"), "See then up")
         long = c("word " * 40)
         self.assertLessEqual(len(long), 80)
         self.assertTrue(long.endswith("..."))
@@ -373,10 +373,48 @@ class Text(Rig):
     def test_first_words_when_a_send_has_no_summary(self):
         f = links._first_words
         self.assertEqual(f("**From the Glint master:** Rail is live at ~/Developer/tapspace, PR #12 open and the panel is next\nmore"),
-                         "Rail is live PR open and the panel...")
+                         "Rail is live, PR open and the panel...")
         self.assertEqual(f("\n\n# Status\nall green"), "Status")
         self.assertEqual(f("Short note"), "Short note")
         self.assertEqual(f({"type": "shutdown_request"}), "")
+        self.assertEqual(f("Hey there, please ask Claude · beta · 3c4d to look at the rail now", {NB: "Beta work"}),
+                         "Hey there, please ask Beta work to look...")
+
+    def test_codes_never_show(self):
+        """Every case R4 F4 found passing through, then the neighbours of each rule."""
+        c = links._clip
+        self.assertEqual(c("Fixed server.py:1415 and Glint/Interface/Chat/ThreadPill.swift"), "Fixed")
+        self.assertEqual(c("Read /opt/homebrew/bin/tmux logs"), "Read logs")
+        self.assertEqual(c("Ticket 3F7DE0B7AF approved, session 5903E6DD-1AA4-4531-AD5D-E85C9AE9230F"),
+                         "Ticket approved")
+        self.assertEqual(c("Ask Claude · home · e3cc to rebase", {"Claude · home · e3cc": "Home screen"}),
+                         "Ask Home screen to rebase")
+        self.assertEqual(c("Use key sk-ant-api03-AbCd... to call it"), "Use key to call it")
+        self.assertEqual(c("Deploy to gs://snappstats-stg-videos/..."), "Deploy")
+        self.assertEqual(c("Worktree ../tapspace-wt-integrate is clean"), "Worktree is clean")
+        self.assertEqual(c("Open C:\\Users\\x\\notes.txt now"), "Open now")
+        self.assertEqual(c("Fix in links.py, then push"), "Fix, then push")
+        self.assertEqual(c("Rebased onto 026A6BD, tests green"), "Rebased, tests green")
+        self.assertEqual(c("Ticket 5284886400 approved"), "Ticket approved")
+        self.assertEqual(c("Push with ghp_A1b2C3d4E5f6G7h8I9j0K1l2 now"), "Push now")
+        self.assertEqual(c("Ping Claude · zz · 9999 about it"), "Ping Claude about it")
+        self.assertEqual(c("Ping Claude · main about it", {"Claude · main": "Glint app"}), "Ping Glint app about it")
+        self.assertEqual(c("Claude · mainline is up", {"Claude · main": "Glint app"}), "Claude is up")
+        for kept in ("Done 14/20 builders, e.g. the rail", "Is the expert feed live yet?",
+                     "Tell action-slip car flag is beta-only", "Progress cards are in; can the phone read them now?",
+                     "Claude is on it", "Build 3 of 5 at 2:15 PM"):
+            self.assertEqual(c(kept), kept)
+
+    def test_names_in_a_send_show_as_titles(self):
+        self.scan = links.Links(self.data, claude_dir=self.claude, clock=lambda: self.now,
+                                titles=lambda: {NA: "Alpha work", NB: "Beta work"})
+        self.two_masters()
+        self.write(A, send(T0, "toolu_1", "beta-3c", summary="Claude · alpha · 1a2b is done, over to you"),
+                   result(T0, "toolu_1", "m1"))
+        self.write(B, got_busy(T0, "m1", PA))
+        self.scan.tick()
+        self.assertEqual(self.scan.rows({NA, NB})[0]["summary"], "Alpha work is done, over to you")
+        self.assertEqual([r["summary"] for r in self.file_rows()], ["Alpha work is done, over to you"])
 
     def test_bodies_are_never_kept(self):
         self.two_masters()

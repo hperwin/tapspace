@@ -1547,6 +1547,6 @@ if __name__ == "__main__":
     threading.Thread(target=_scan_sessions, daemon=True).start()
     threading.Thread(target=_taps_loop, daemon=True).start()
     threading.Thread(target=_watch_loop, daemon=True).start()
-    links.start(DATA, _bump)
+    links.start(DATA, _bump, titles=lambda: {n: _title(i) for n, i in _agents().items()})
     print(f"TapSpace serving on http://127.0.0.1:{PORT}")
     ThreadingHTTPServer(("127.0.0.1", PORT), H).serve_forever()
