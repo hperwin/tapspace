@@ -181,7 +181,7 @@ struct ChatProgressPanel: View {
                         store.open(a.key)
                     }
                     .modifier(ChatNod(step: plan?.current, pinged: pings[a.name] ?? 0, still: still))
-                    ChatProgressGap(link: r.linkBelow, upper: a.name, titles: titles, motion: pulse)
+                    ChatProgressGap(link: r.linkBelow, upper: a.name, titles: titles, motion: pulse, now: now)
                 }
                 .modifier(RailArrival(index: i))
                 .transition(.asymmetric(insertion: .identity, removal: .opacity))
