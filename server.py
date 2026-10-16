@@ -1250,6 +1250,125 @@ def _ask(iss, me):
     return None
 
 
+# ---- proof: the images a pilot put in the issue body, through this server ----
+# GitHub serves them only to a signed-in viewer (user-attachments) or by a short-lived signed url from the
+# issue's body_html, so no client can load them directly. Clients get /api/taps/proof?key=&i=&v= urls; the
+# server fetches each image once and keeps its bytes under data/proof/, named by the attachment id.
+PROOF = DATA / "proof"
+_PROOF_SRC = {}              # tap key -> ([(src, index among all body images)], how many images): never served
+_PROOF_HTML = {}             # tap key -> (fetched at, [(src, data-canonical-src)]) of its body_html
+_PROOF_LOCKS = {}            # tap key -> Lock, so a row of thumbnails makes one body_html call
+_PROOF_TYPES = {"image/png": ".png", "image/jpeg": ".jpg", "image/gif": ".gif", "image/webp": ".webp"}
+_PROOF_HOSTS = {"private-user-images.githubusercontent.com", "user-images.githubusercontent.com",
+                "camo.githubusercontent.com", "raw.githubusercontent.com"}
+_PROOF_MAX = 25_000_000
+_ASSET = re.compile(r"user-attachments/(?:assets|files)/([0-9A-Fa-f-]{36})")
+_IMG = re.compile(r"!\[([^\]]*)\]\(\s*<?([^)\s>]+)>?(?:\s+(?:\"[^\"]*\"|'[^']*'))?\s*\)|<img\b[^>]*>", re.I)
+_ATTR = re.compile(r"([\w-]+)\s*=\s*(?:\"([^\"]*)\"|'([^']*)'|([^\s>]+))")
+
+
+def _attrs(tag):
+    return {a.group(1).lower(): html.unescape(next(g for g in a.groups()[1:] if g is not None))
+            for a in _ATTR.finditer(tag)}
+
+
+def _github_image(url):
+    """Only GitHub's own image hosts, or an attachment on github.com itself: never an open proxy."""
+    from urllib.parse import urlsplit
+    p = urlsplit(url)
+    return p.scheme == "https" and (p.hostname in _PROOF_HOSTS or
+                                    (p.hostname == "github.com" and p.path.startswith("/user-attachments/")))
+
+
+def _proof(key, body):
+    """[{url, alt}] for the GitHub images in the body (markdown or <img>, outside comments and fences),
+    in order. v is a short hash of the image address, so a client cache never shows a replaced one."""
+    found = []
+    for m in _IMG.finditer("\n".join(_unfenced(re.sub(r"<!--[\s\S]*?-->", "", body or "")))):
+        if m.group(0).startswith("!"):
+            found.append((m.group(1), m.group(2)))
+        else:
+            a = _attrs(m.group(0))
+            found.append((a.get("alt", ""), a.get("src", "")))
+    keep = [(n, alt, src) for n, (alt, src) in enumerate(found) if _github_image(src)]
+    _PROOF_SRC[key] = ([(src, n) for n, _, src in keep], len(found))
+    return [{"url": f"/api/taps/proof?key={quote(key, safe='')}&i={i}&v={hashlib.sha1(src.encode()).hexdigest()[:8]}",
+             "alt": _undash(" ".join(alt.split()))} for i, (_, alt, src) in enumerate(keep)]
+
+
+def _proof_hit(cid):
+    for f in PROOF.glob(cid + ".*"):
+        if f.suffix in _PROOF_TYPES.values() and f.is_file():
+            return f.read_bytes(), _CTYPES[f.suffix]
+    return None
+
+
+def _proof_signed(key, src, n, total, fresh=False):
+    """The address GitHub serves image n of the body from right now: the matching <img> of body_html,
+    read once per key and reused inside the signed urls' five minutes."""
+    repo, num = key.split("#")
+    got = _PROOF_HTML.get(key)
+    if fresh or not got or time.time() - got[0] > 240:
+        raw = _gh("api", f"repos/{repo}/issues/{num}", "-H", "Accept: application/vnd.github.full+json",
+                  "--jq", ".body_html")
+        got = _PROOF_HTML[key] = (time.time(), [(a.get("src", ""), a.get("data-canonical-src", ""))
+                                                for a in map(_attrs, re.findall(r"<img\b[^>]*>", raw, re.I))])
+    tags, asset = got[1], _ASSET.search(src)
+    pick = next((s for s, _ in tags if asset and asset.group(1).lower() in s.lower()), None) or \
+        next((s for s, c in tags if c == src), None) or next((s for s, _ in tags if s == src), None) or \
+        (tags[n][0] if len(tags) == total else None)
+    if not pick:
+        raise RuntimeError("image not found in the issue")
+    return pick
+
+
+def _proof_fetch(url):
+    """(bytes, content type) of one GitHub image. The gh token goes only to github.com itself, as a
+    header never forwarded on a redirect; a signed url needs none."""
+    import urllib.request
+    from urllib.parse import urlsplit
+    if not _github_image(url):
+        raise RuntimeError("not a GitHub image")
+    req = urllib.request.Request(url, headers={"User-Agent": "TapSpace"})
+    if urlsplit(url).hostname == "github.com":
+        if not _TOKEN["v"]:
+            _TOKEN["v"] = _gh("auth", "token").strip()
+        req.add_unredirected_header("Authorization", "Bearer " + _TOKEN["v"])
+    with urllib.request.urlopen(req, timeout=20) as r:
+        ctype, raw = r.headers.get_content_type(), r.read(_PROOF_MAX + 1)
+    if len(raw) > _PROOF_MAX:
+        raise RuntimeError("image over 25 MB")
+    if ctype not in _PROOF_TYPES:
+        raise RuntimeError("not an image")
+    return raw, ctype
+
+
+def _proof_image(key, i):
+    """(bytes, content type, src) of proof image i of one of the taps served now: from data/proof/,
+    else fetched once and kept. LookupError when there is no such image, else any failure raises."""
+    if not any(t["key"] == key for t in TAPS["items"]):
+        raise LookupError("no such tap")
+    srcs, total = _PROOF_SRC.get(key) or ([], 0)
+    if not 0 <= i < len(srcs):
+        raise LookupError("no such image")
+    src, n = srcs[i]
+    asset = _ASSET.search(src)
+    cid = asset.group(1).lower() if asset else hashlib.sha1(src.encode()).hexdigest()[:24]
+    with _PROOF_LOCKS.setdefault(key, threading.Lock()):
+        hit = _proof_hit(cid)
+        if hit:
+            return hit + (src,)
+        try:
+            raw, ctype = _proof_fetch(_proof_signed(key, src, n, total))
+        except Exception:
+            raw, ctype = _proof_fetch(_proof_signed(key, src, n, total, fresh=True))   # a signed url ran out
+        PROOF.mkdir(parents=True, exist_ok=True)
+        tmp = PROOF / f".tmp-{cid}-{uuid.uuid4().hex[:8]}"
+        tmp.write_bytes(raw)
+        tmp.replace(PROOF / (cid + _PROOF_TYPES[ctype]))
+        return raw, ctype, src
+
+
 def _issue(repo, number):
     return json.loads(_gh("issue", "view", str(number), "--repo", repo, "--json",
                           "author,title,body,labels,state,comments,url,createdAt,closedAt,stateReason"))
@@ -1294,7 +1413,8 @@ def _tap(repo, number, iss):
             "last": msgs[-1]["ts"] if msgs else iss["createdAt"],
             "phase": phase, "phase_word": PHASE_WORD[phase],
             "ask": _ask(iss, me) if phase == "holding" else None,
-            "fly_requested": _has(labels, TAP_FLY)}
+            "fly_requested": _has(labels, TAP_FLY),
+            "proof": _proof(key, iss["body"])}
 
 
 _ORDER = {"needs-you": 0, "flying": 1, "boarding": 2, "landed": 3}
@@ -1571,6 +1691,29 @@ class H(BaseHTTPRequestHandler):
             return
         if path == "/api/taps":
             self._json({k: TAPS[k] for k in ("me", "items", "fetched", "error")})
+            return
+        if path == "/api/taps/proof":
+            # one proof image of one of your taps, as its proof[].url names it (local or bearer, like /api/taps)
+            key, i = self._q("key"), self._q("i")
+            if not re.match(r"^[\w.-]+/[\w.-]+#\d+$", key) or not re.fullmatch(r"[0-9]{1,4}", i):
+                self._json({"error": "bad proof address"}, 400)
+                return
+            try:
+                raw, ctype, src = _proof_image(key, int(i))
+            except LookupError as e:
+                self._json({"error": str(e)}, 404)
+                return
+            except Exception as e:
+                self._json({"error": str(e)[:240]}, 502)
+                return
+            self.send_response(200)
+            self.send_header("content-type", ctype)
+            self.send_header("content-length", str(len(raw)))
+            self.send_header("x-content-type-options", "nosniff")
+            self.send_header("cache-control", "private, max-age=31536000, immutable"
+                             if self._q("v") == hashlib.sha1(src.encode()).hexdigest()[:8] else "no-store")
+            self.end_headers()
+            self.wfile.write(raw)
             return
         if path == "/api/state":
             ix = _owner_index()
