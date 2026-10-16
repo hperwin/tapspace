@@ -338,6 +338,27 @@
   .goal.done{color:var(--ink);background:rgba(48,161,78,.07)}
   .goal.done b{border-color:var(--green);background:var(--green)}
   .goal.done b::after{content:"";width:6px;height:3px;border:solid #fff;border-width:0 0 1.6px 1.6px;transform:rotate(-45deg) translate(1px,-1px)}
+  /* a tap's action card, pinned above its messages: the question to answer, the proof and Accept, or Fly */
+  #tapact{padding:12px 20px;border-bottom:1px solid var(--line)}
+  #tapact:empty{display:none}
+  .actcard{border-radius:14px;padding:12px 14px;font-size:12.5px;line-height:1.45;color:var(--dim);background:rgba(0,0,0,.03)}
+  .actcard.enter{animation:railin .45s cubic-bezier(.22,.9,.24,1) both}
+  .actcard.holding{background:rgba(var(--hl),.07)}
+  .actcard.holding.answered{background:rgba(0,0,0,.03)}
+  .actlabel{display:flex;align-items:baseline;gap:6px;font-size:10.5px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--dim)}
+  .actcard.holding .actlabel{color:rgb(var(--hl))}
+  .actcard.holding.answered .actlabel{color:var(--dim)}
+  .actcard.landed .actlabel{color:var(--green)}
+  .actlabel em{font-style:normal;font-weight:500;letter-spacing:.02em;text-transform:none;color:var(--faint)}
+  .acttext{margin-top:5px}
+  .acttext.ask{color:var(--ink);white-space:pre-line;overflow-wrap:anywhere;max-height:calc(1.45em * 6);overflow-y:auto}
+  .actcard.answered .acttext.ask{color:var(--dim)}
+  .proof{display:flex;gap:8px;margin-top:8px;overflow-x:auto;scrollbar-width:none}
+  .proof img{flex:none;width:76px;height:76px;border-radius:10px;object-fit:cover;object-position:top;background:#f2f2f4;cursor:zoom-in}
+  .actrow{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:8px}
+  #tapact .rbtn{padding:7px 11px;font-size:12px}
+  #tapact .stopask{margin:10px 0 0}
+  .rbtn.go{background:var(--ink);color:#fff}
 
   #msgs{flex:1;overflow-y:auto;padding:22px 22px 10px;display:flex;flex-direction:column;gap:12px;scroll-behavior:smooth}
   .msg{max-width:min(620px,82%);display:flex;flex-direction:column;gap:4px}
@@ -467,7 +488,7 @@
   @media (max-width:1360px){ #chatview{padding:0 28px;gap:18px;grid-template-columns:264px minmax(0,1fr) 296px} }
   @media (max-width:1180px){ #chatview{padding:0 40px;gap:22px;grid-template-columns:300px minmax(0,1fr);max-width:1240px} #progress{display:none} }
   @media (prefers-reduced-motion: reduce){
-    .agrp .talk i,.note.enter,.note.out,.orb.ping::after,.stopask{animation:none}
+    .agrp .talk i,.note.enter,.note.out,.orb.ping::after,.stopask,.actcard.enter{animation:none}
     #progress,.pgap,.plan .track i,.plan .track.long i.fill,.plan .track.long b{transition:none}
   }
 
@@ -525,6 +546,7 @@
   <section id="pane">
     <div id="panehead"></div>
     <div id="goals"></div>
+    <div id="tapact"></div>
     <div id="msgs"></div>
     <div id="tray"></div>
     <form id="composer">
@@ -938,7 +960,7 @@ function setTab(name, instant){
 }
 tabs.addEventListener('click', e => { const b = e.target.closest('.tab'); if (b) setTab(b.dataset.tab); });
 
-const msgsEl = $('#msgs'), head = $('#panehead'), goalsEl = $('#goals');
+const msgsEl = $('#msgs'), head = $('#panehead'), goalsEl = $('#goals'), tapactEl = $('#tapact');
 const ta = $('#composer textarea'), sendBtn = $('#sendbtn');
 const tray = $('#tray'), attachBtn = $('#attach'), filepick = $('#filepick'), pane = $('#pane');
 let pending = [];   // [{file, url}] images waiting to send
@@ -1033,6 +1055,9 @@ const agentOf = k => k.slice(6);
 let taps = {items: [], me: '', fetched: 0, error: ''};
 let rendered = {key: null, sig: '', count: 0};
 const sending = [];       // optimistic tap messages: {key, body, ts}
+const flyAsked = {}, acceptAt = {};   // tap key -> ms of this page's own Fly / Accept (shown until the server's read has it, 2 min cap)
+let actState = {key: '', confirm: false, busy: false};   // the open tap's action card: Accept confirm open, a request in flight
+let focusedAsk = '';      // the question the composer was last focused for (key|at), so a poll never steals focus again
 
 function esc(t){ return t.replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 function md(src){
@@ -1276,6 +1301,100 @@ function renderHead(d){
   }
 }
 
+/* ---- a tap's action card, above its messages: a holding tap's question, a landed tap's proof and Accept, a proposed tap's Fly ---- */
+const fresh = at => !!at && Date.now() - at < 120000;
+function proofShots(t){          // only the TapSpace proof route; a raw # would end the URL at a fragment
+  return (Array.isArray(t.proof) ? t.proof : []).map(p => ({
+    src: p && typeof p.url === 'string' ? p.url.replace(/#/g, '%23') : '',
+    alt: p && typeof p.alt === 'string' ? p.alt : ''})).filter(p => p.src.startsWith('/api/taps/proof?'));
+}
+function askOf(t){ const a = t.ask; return a && typeof a === 'object' && typeof a.text === 'string' && a.text.trim() ? a : null; }
+function answered(d, ask){       // a reply of yours (sent or still sending) newer than the question
+  const at = ask ? tms(ask.at) : NaN;
+  if (!Number.isFinite(at)){ const last = d.msgs[d.msgs.length - 1]; return !!last && last.who === 'you'; }
+  return d.msgs.some(m => m.who === 'you' && tms(m.ts) > at);
+}
+function setPart(el, sig, html){ if (el.dataset.sig === sig) return false; el.dataset.sig = sig; el.innerHTML = html; return true; }
+function renderAct(d){           // true while a holding tap's question waits on you
+  const t = d && d.tap, ph = t && hasPhase(t) ? t.phase : '';
+  if (actState.key !== current) actState = {key: current, confirm: false, busy: false};
+  if (ph !== 'landed') actState.confirm = false;
+  if (ph !== 'holding' && ph !== 'landed' && ph !== 'proposed'){
+    if (tapactEl.firstChild) tapactEl.innerHTML = '';
+    tapactEl.dataset.sig = ''; return false;
+  }
+  if (tapactEl.dataset.sig !== current + '|' + ph){
+    tapactEl.dataset.sig = current + '|' + ph;
+    tapactEl.innerHTML = `<div class="actcard enter ${ph}"><div></div><div></div></div>`;
+  }
+  const card = tapactEl.firstChild, [top, foot] = card.children;
+  if (ph === 'holding'){
+    const ask = askOf(t), done = answered(d, ask), at = ask ? tms(ask.at) : NaN;
+    card.classList.toggle('answered', done);
+    setPart(top, [done, ask && ask.text, ask && ask.at].join('|'),
+      `<div class="actlabel">${done ? 'Answered' : 'Needs you'}${Number.isFinite(at) ? '<em></em>' : ''}</div>` +
+      `<div class="acttext ask">${ask ? esc(ask.text.trim()) : 'It’s waiting on your reply.'}</div>`);
+    const em = top.querySelector('em'); if (em) em.textContent = when(ask.at);
+    setPart(foot, '', '');
+    const fk = current + '|' + (ask ? ask.at : '');
+    if (!done && focusedAsk !== fk && document.body.classList.contains('chatmode')){
+      focusedAsk = fk;
+      const ae = document.activeElement;     // never take the caret from another field
+      if (!ae || ae === ta || !/^(INPUT|TEXTAREA)$/.test(ae.tagName)) ta.focus();
+    }
+    return !done;
+  }
+  if (ph === 'landed'){
+    const shots = proofShots(t);
+    if (setPart(top, shots.map(s => s.src + ' ' + s.alt).join('|'), `<div class="actlabel">Landed</div>` + (shots.length
+        ? `<div class="proof">${shots.map(s => `<img src="${esc(s.src)}" alt="${esc(s.alt)}" title="${esc(s.alt)}" loading="lazy" decoding="async">`).join('')}</div>`
+        : `<div class="acttext">No pictures in the issue yet.</div>`))){
+      top.querySelectorAll('.proof img').forEach(im => im.addEventListener('error', () => {
+        const g = im.parentElement; im.remove();
+        if (g && !g.children.length) g.outerHTML = '<div class="acttext">No pictures in the issue yet.</div>';
+      }, {once: true}));
+    }
+    const goals = Array.isArray(t.goals) ? t.goals : [];
+    const all = goals.length > 0 && goals.every(g => g.done), acc = fresh(acceptAt[current]);
+    setPart(foot, [all, acc, actState.confirm, tapName(t)].join('|'), acc
+      ? `<div class="acttext">Accepted. It shows as Done in a moment.</div>`
+      : actState.confirm
+      ? `<div class="stopask"><div>Accept <b>${esc(tapName(t))}</b>? It closes on GitHub as done.</div>
+          <div class="row"><button type="button" class="rbtn clear" data-act="cancel">Cancel</button><button type="button" class="rbtn go" data-act="accept">Accept</button></div></div>`
+      : `<div class="actrow"><span>${all ? 'Every goal is checked.' : ''}</span><button type="button" class="rbtn go" data-act="confirm">Accept</button></div>`);
+    const yes = foot.querySelector('[data-act=accept]');
+    if (yes) yes.textContent = actState.busy ? 'Accepting…' : 'Accept';
+  } else {
+    const asked = t.fly_requested === true || fresh(flyAsked[current]);
+    setPart(top, 'proposed', `<div class="actlabel">Proposed</div>`);
+    setPart(foot, String(asked), `<div class="actrow"><span>${asked ? 'Waiting to fly.' : 'Not flying yet.'}</span>` +
+      (asked ? '' : `<button type="button" class="rbtn go" data-act="fly">Fly</button>`) + `</div>`);
+  }
+  foot.querySelectorAll('button').forEach(b => { b.disabled = actState.busy; });
+  return false;
+}
+tapactEl.addEventListener('click', async e => {
+  const im = e.target.closest('.proof img');
+  if (im){ openImage(im.src); lbcap.textContent = im.alt; return; }
+  const b = e.target.closest('button[data-act]'), key = current;
+  if (!b || b.disabled || !taps.items.some(x => x.key === key)) return;
+  const act = b.dataset.act, redraw = () => renderAct(threadData());
+  if (act === 'confirm' || act === 'cancel'){
+    actState.confirm = act === 'confirm'; redraw();
+    tapactEl.querySelector(actState.confirm ? '[data-act=cancel]' : '[data-act=confirm]')?.focus();
+    return;
+  }
+  actState.busy = true; redraw();
+  const r = await postJ(act === 'fly' ? '/api/taps/fly' : '/api/taps/accept', {key});
+  if (actState.key === key){ actState.busy = false; actState.confirm = false; }
+  if (!r.ok){ redraw(); toast((act === 'fly' ? 'Couldn’t fly it: ' : 'Couldn’t accept it: ') + (r.error || 'TapSpace said no')); return; }
+  (act === 'fly' ? flyAsked : acceptAt)[key] = Date.now(); redraw();
+  setTimeout(pollTaps, 2500); setTimeout(pollTaps, 6000);
+});
+tapactEl.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && actState.confirm && !actState.busy){ actState.confirm = false; renderAct(threadData()); }
+});
+
 function nearEnd(){ return msgsEl.scrollHeight - msgsEl.scrollTop - msgsEl.clientHeight < 120; }
 function scrollEnd(instant){
   if (instant){ msgsEl.style.scrollBehavior = 'auto'; msgsEl.scrollTop = msgsEl.scrollHeight; msgsEl.style.scrollBehavior = ''; }
@@ -1288,12 +1407,13 @@ function renderThread(){
     const first = railOrder(agents)[0];   // a fresh page opens on the lead (taps only once the agents have answered)
     const fall = first ? agentKey(first.name) : (agentsLoaded && taps.items[0] ? taps.items[0].key : '');
     if (fall && fall !== current){ current = fall; return renderThread(); }
-    head.innerHTML = ''; goalsEl.innerHTML = ''; head.dataset.sig = '';
+    head.innerHTML = ''; goalsEl.innerHTML = ''; head.dataset.sig = ''; renderAct(null);
     msgsEl.innerHTML = `<div class="hello"><div class="big">The space is open.</div>Agents join with <code>tap.py listen --as NAME</code>. Your taps show up here on their own.</div>`;
     rendered = {key: '', sig: ''}; return;
   }
   renderHead(d);
-  ta.placeholder = d.agent ? 'Message ' + (d.agent.title || 'Claude') + '…' : 'Message this tap…';
+  const asking = renderAct(d);
+  ta.placeholder = d.agent ? 'Message ' + (d.agent.title || 'Claude') + '…' : asking ? 'Answer this tap…' : 'Message this tap…';
   attachBtn.classList.toggle('hide', !d.agent);
   syncSend();
   const sig = current + '|' + d.msgs.map(m => m.id + (m.seen ? 's' : '') + (m.pending ? 'p' : '') + ((m.images || []).length)).join(',') + '|' + d.typing + '|' + d.switching;
