@@ -191,6 +191,8 @@ workspace where any number of agents can be connected at once:
   tap.py step --as "NAME" next --note "14 of 20 builders done"   # or a number (1 = first), a step's name, done
   tap.py progress --as "NAME"                                   # prints the card as stored
   ```
+  A script spins a master down with `tap.py stop --as "NAME"` (the same
+  route as the rail's Spin down; exit 0 when it stopped, 1 when refused).
 - **Notes per master.** Under each master in the rail: the cards you sent a
   change note on that belong to that master, newest first, with a blue dot on
   the agent. A row clears when the master posts a new version of that card;

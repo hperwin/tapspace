@@ -26,6 +26,9 @@
                                          -> moves the goal card (N counts from 1, as the card shows it);
                                             --note alone changes only the note
   tap.py progress --as NAME              -> prints the goal card as stored (a relay car reads it here)
+  tap.py stop --as NAME                  -> spins that master down, as the Chat rail's Spin down does: its
+                                            Claude Code session ends and it leaves the list (--as is required)
+                                            exit 0 = stopped, 1 = refused (nothing was ended)
   Taps (the reviewer's GitHub agent issues; every agent can talk to all of them):
   tap.py taps                            -> list them: key, status, title, last message
   tap.py tap-read KEY                    -> the whole thread of one tap (KEY = owner/repo#n)
@@ -319,6 +322,9 @@ def main():
     pg = sub.add_parser("progress")
     pg.add_argument("--as", dest="name", default=me, required=not me)
 
+    sp = sub.add_parser("stop")
+    sp.add_argument("--as", dest="name", required=True, help="the master to spin down (never defaults to yourself)")
+
     sub.add_parser("taps")
     tr = sub.add_parser("tap-read")
     tr.add_argument("key")
@@ -486,6 +492,11 @@ def main():
             return 1
         print(json.dumps(row.get("progress"), indent=1))
         return 0
+
+    if a.cmd == "stop":
+        r = _call("/api/agents/stop", {"name": a.name})
+        print(json.dumps(r))
+        return 0 if r.get("ok") else 1
 
     if a.cmd == "tap-say":
         r = _call("/api/taps/say", {"key": a.key, "body": a.text, "via": a.name})

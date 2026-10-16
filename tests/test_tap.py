@@ -206,6 +206,23 @@ class TapWire(unittest.TestCase):
         self.assertEqual((r.returncode, json.loads(r.stdout)), (0, None))
         self.assertEqual(self.tap("progress", "--as", "Nobody").returncode, 1)
 
+    # stop
+
+    def test_stop_posts_the_name_and_exits_on_the_answer(self):
+        Stub.answers["/api/agents/stop"] = (200, {"ok": True, "stopped": [4242], "tmux": ["master-x"]})
+        r = self.tap("stop", "--as", "Claude · main")
+        self.assertEqual((r.returncode, json.loads(r.stdout)["stopped"]), (0, [4242]), r.stderr)
+        self.assertEqual(self.posts("/api/agents/stop"), [{"name": "Claude · main"}])
+        Stub.answers["/api/agents/stop"] = (409, {"ok": False, "error": "no live Claude session to end for this agent"})
+        r = self.tap("stop", "--as", "Claude · main")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("no live Claude session", r.stdout)
+
+    def test_stop_never_defaults_to_tapspace_agent(self):
+        r = self.tap("stop", TAPSPACE_AGENT="Claude · main")
+        self.assertEqual(r.returncode, 2)
+        self.assertEqual(Stub.seen, [])
+
     # doctor
 
     def test_doctor_counts_owners_cards_notes_links_and_sessions(self):
