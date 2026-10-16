@@ -1247,10 +1247,10 @@ function renderHead(d){
       <span class="chip ${a.state}"><i></i>${MASTER[a.state]}</span>`;
   } else {
     const t = d.tap;
-    sig = t.key + '|' + t.status + '|' + t.title;
+    sig = [t.key, t.status, t.phase, t.phase_word, t.replying, t.title].join('|');
     html = tapAvatar(t) + `<span class="tx"><div class="nm">${esc(tapName(t))}</div>
       <div class="sub">${esc(t.repo.split('/')[1] || t.repo)} · <a href="${esc(t.url)}" target="_blank" rel="noopener">open issue</a></div></span>
-      <span class="chip ${t.status}"><i></i>${STATUS[t.status]}</span>`;
+      <span class="chip ${tapCls(t)}${hasPhase(t) && t.replying ? ' working' : ''}"><i></i>${esc(tapWord(t))}</span>`;
   }
   if (head.dataset.sig !== sig){
     const swap = head.dataset.key !== current;
