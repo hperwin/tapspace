@@ -46,7 +46,8 @@
 
 Cards land under their master by themselves: inside Claude Code every call names the session it
 runs in (only when that Claude process is an ancestor of this one, so an id inherited through tmux
-or a launcher is never sent). Outside Claude Code, post with --owner NAME.
+or a launcher is never sent). A lane in its own process (claude -p, Codex, a separate tmux session)
+or outside Claude Code posts with --owner NAME.
 
 Server default http://127.0.0.1:4747 (override: TAPSPACE_URL).
 Screenshots must be REAL renders of the running surface, never generated images.

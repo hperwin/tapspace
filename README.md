@@ -108,7 +108,8 @@ runs in on every call (the `X-Claude-Session` and `X-Claude-Pid` headers, sent o
 `tap.py`, so an id inherited through tmux or a launcher is never sent), and the server ties a session to a NAME whenever a
 master listens, replies, retitles or relays. A relay keeps the NAME, so cards from every car and its lanes stay with one master.
 Older cards fall back to the master already known for their campaign, or to an exact match of their agent label with a
-master's title. Outside Claude Code (a plain terminal, a background job), add `--owner "NAME"`.
+master's title. A lane in its own process (`claude -p`, Codex, a separate tmux session) or outside Claude Code (a plain
+terminal, a background job) adds `--owner "NAME"`; only lanes inside the master's own Claude Code process land by themselves.
 
 ## HTTP API (for agents that aren't Python)
 
