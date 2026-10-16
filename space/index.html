@@ -1210,12 +1210,13 @@ function syncList(box, items, keyOf, sigOf, html, emptyText){
 function renderRail(){
   syncAgents();
 
-  syncList(taplist, taps.items, t => t.key, t => t.status + '|' + t.title + '|' + t.messages.length, t => {
+  syncList(taplist, taps.items, t => t.key, t => [t.status, t.phase, t.phase_word, t.replying, t.title, t.messages.length].join('|'), t => {
       const last = t.messages.filter(m => m.who === 'tap').pop();
-      return tapAvatar(t) + `<span class="tx"><div class="nm">${esc(tapName(t))}</div>
-        <div class="sub">${STATUS[t.status]} · ${esc(t.repo.split('/')[1])}${last ? ' · ' + when(last.ts) : ''}</div></span><span class="unread"></span>`;
+      const sub = [esc(tapWord(t)), esc(t.repo.split('/')[1]), last ? when(last.ts) : ''].filter(Boolean).join(' · ');
+      return tapAvatar(t) + `<span class="tx${t.phase === 'closed' ? ' dim' : ''}"><div class="nm">${esc(tapName(t))}</div>
+        <div class="sub">${sub}</div></span><span class="unread"></span>`;
     }, taps.fetched ? 'No taps flying under your name.' : (taps.error ? 'Couldn’t reach GitHub: ' + esc(taps.error) : 'Looking for your taps…'));
-  const needs = taps.items.filter(t => t.status === 'needs-you').length;
+  const needs = taps.items.filter(isHolding).length;
   const unread = [...agents.map(a => agentKey(a.name)), ...taps.items.map(t => t.key)].filter(isUnread).length;
   const bc = $('#badge-chat'); const n = Math.max(needs, unread);
   bc.textContent = n; bc.classList.toggle('show', n > 0);
