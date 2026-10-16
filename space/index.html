@@ -1113,7 +1113,11 @@ function syncAgents(){
   const box = $('#agentlist');
   if (!agents.length){ box.innerHTML = `<div class="railempty">No agents in the space yet. Any agent joins with tap.py listen --as NAME.</div>`; return; }
   if (box.querySelector('.railempty')) box.innerHTML = '';
-  const have = new Map([...box.children].map(el => [el.dataset.key, el]));
+  // agents that left go first, so the rows that stay are already in order and never get re-inserted
+  // (a re-inserted row replays its entrance)
+  const keys = new Set(agents.map(a => agentKey(a.name)));
+  const have = new Map();
+  [...box.children].forEach(el => keys.has(el.dataset.key) ? have.set(el.dataset.key, el) : el.remove());
   agents.forEach((a, i) => {
     const key = agentKey(a.name);
     let g = have.get(key);
