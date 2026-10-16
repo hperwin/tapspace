@@ -1124,6 +1124,8 @@ TAPS = {"me": "", "items": [], "fetched": 0.0, "error": ""}
 _taps_kick = threading.Event()
 HOT = {}                    # tap key -> refresh it every few seconds until this time
 TAP_HOT_EVERY = 6
+_UNLISTED = {}              # tap key -> when it was first kept although GitHub search did not list it yet
+TAP_SEARCH_LAG = 15 * 60    # how long such a tap is kept without the search listing it
 VIA = DATA / "tap-via.json"  # comment url -> the agent that sent it for the reviewer
 
 
@@ -1526,14 +1528,33 @@ def _refresh_taps():
     found = json.loads(_gh("search", "issues", "label:" + ",".join(TAP_JOURNEY), "--author", me,
                            "--limit", "60", "--sort", "updated",
                            "--json", "repository,number,state,closedAt"))
-    items = []
+    items, listed = [], set()
     for f in found:
+        repo = f["repository"]["nameWithOwner"]
+        listed.add(f"{repo}#{f['number']}")
         if f["state"] != "open" and _too_old(f.get("closedAt")):
             continue
-        repo = f["repository"]["nameWithOwner"]
         iss = _issue(repo, f["number"])
         if _is_mine(iss):
             items.append(_tap(repo, f["number"], iss))
+    # GitHub search lags a new issue by minutes: a tap someone just talked to (hot) that search does not
+    # list yet stays, up to TAP_SEARCH_LAG, instead of vanishing until the index catches up
+    now = time.time()
+    for key in list(HOT):
+        _UNLISTED.setdefault(key, now)
+    for key in list(_UNLISTED):
+        if key in listed or now - _UNLISTED[key] > TAP_SEARCH_LAG:
+            _UNLISTED.pop(key, None)
+            continue
+        repo, num = key.split("#")
+        try:
+            iss = _issue(repo, num)
+        except Exception:
+            iss = None
+        if not iss or not _is_mine(iss) or (iss["state"] != "OPEN" and _too_old(iss.get("closedAt"))):
+            _UNLISTED.pop(key, None)
+            continue
+        items.append(_tap(repo, int(num), iss))
     _publish(items)
 
 
@@ -1554,6 +1575,7 @@ def _refresh_hot():
         items = [fresh if t["key"] == key else t for t in items]
         if not any(t["key"] == key for t in items):
             items.append(fresh)
+            _UNLISTED.setdefault(key, time.time())      # the last search did not list it: keep it (_refresh_taps)
     _publish(items)
 
 
