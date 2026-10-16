@@ -437,6 +437,12 @@ struct PaneView: View {
                             .modifier(SwapIn(box: swap, rise: 4))
                         Rectangle().fill(Color.hairline).frame(height: 1)
                     }
+                    // A holding, landed or proposed tap: its question, its proof, its flight.
+                    if let tap, MuddiTapCard.shows(tap) {
+                        MuddiTapCard(tap: tap, store: store)
+                            .modifier(SwapIn(box: swap, rise: 4))
+                        Rectangle().fill(Color.hairline).frame(height: 1)
+                    }
                 }
                 .background(Color.white)
                 .zIndex(2)
@@ -488,7 +494,7 @@ struct PaneHeader: View {
                 Spacer(minLength: 8)
                 StatusChip(state: agent.state, label: agentLabel[agent.state, default: agent.state])
             } else if let tap {
-                TapAvatar(status: tap.status, working: tap.replying == true)
+                TapAvatar(status: tap.status, working: tap.replying == true, phase: tap.tapPhase)
                 VStack(alignment: .leading, spacing: 2) {
                     HeaderTitle(text: tap.name)
                     HStack(spacing: 4) {
@@ -499,7 +505,7 @@ struct PaneHeader: View {
                     .foregroundStyle(Color.dim)
                 }
                 Spacer(minLength: 8)
-                StatusChip(state: tap.status, label: tap.phaseLabel)
+                StatusChip(state: tap.chipState, label: tap.phaseLabel)
             }
         }
         .foregroundStyle(Color.ink)
@@ -550,6 +556,8 @@ struct StatusChip: View {
         let (fg, bg, breathe): (NSColor, Color, Double) = switch state {
         case "thinking", "needs-you", "switching", "starting": (Palette.blue, Color.tapBlue.opacity(0.1), 1.0)
         case "flying": (Palette.ink, Color.black.opacity(0.045), 1.2)
+        // a tap en route with nobody working this minute: the flying chip, still
+        case "enroute": (Palette.ink, Color.black.opacity(0.045), 0)
         case "landed": (Palette.green, Color.up.opacity(0.1), 0)
         case "here": (Palette.green, Color.black.opacity(0.045), 2.4)
         default: (Palette.faint, Color.black.opacity(0.045), 0)
