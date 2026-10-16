@@ -1,7 +1,7 @@
 #!/bin/bash
 # Builds TapSpace (release), bundles TapSpace.app with its Info.plist and icon, ad-hoc signs it and
 # installs it to /Applications/TapSpace.app. It never quits, relaunches or brings forward a running
-# TapSpace: that copy keeps its build until it is next opened, and then opens the new one.
+# TapSpace: that copy keeps its build and shows Update ready; clicking it restarts on the new one.
 #
 #   Scripts/install.sh                  build and install
 #   BUNDLE_ONLY=1 Scripts/install.sh    build and sign .build/TapSpace.app only; /Applications untouched
@@ -60,7 +60,7 @@ touch "$DEST"
 # 5. Open only when asked and nothing is running: behind the front app (open -g), and the app does
 #    not activate itself either (TAPSPACE_BACKGROUND=1).
 if [[ -n "$RUNNING" ]]; then
-    echo "TapSpace is running (PID $(echo $RUNNING)): it keeps its build until it is next opened."
+    echo "TapSpace is running (PID $(echo $RUNNING)): it shows Update ready and keeps its build until that is clicked."
 elif [[ "${OPEN:-0}" == "1" ]]; then
     if [[ -n "${TAPSPACE_URL:-}" ]]; then
         open -g --env TAPSPACE_BACKGROUND=1 --env "TAPSPACE_URL=$TAPSPACE_URL" "$DEST"
