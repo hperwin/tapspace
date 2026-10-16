@@ -1771,6 +1771,7 @@ function byFirst(x, y){
 }
 function board(list, links, now){
   const live = (Array.isArray(list) ? list : []).filter(a => a && a.name && isLive(a, now)).sort(byFirst);
+  const li = live.findIndex(a => a.role === 'lead'); if (li > 0) live.unshift(live.splice(li, 1)[0]);   // the lead's card first
   const names = new Set(live.map(a => a.name));
   const best = new Map();                          // one link per pair, the newest
   for (const l of Array.isArray(links) ? links : []){
