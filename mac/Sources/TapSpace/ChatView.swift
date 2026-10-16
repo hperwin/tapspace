@@ -418,7 +418,7 @@ struct PaneView: View {
                 .background(Color.white)
                 .zIndex(2)
             }
-            MessageList(store: store, agent: agent, tap: tap, animator: animator, geo: geo)
+            MessageList(store: store, agent: agent.map(ThreadAgent.init), tap: tap, animator: animator, geo: geo)
                 .modifier(SwapIn(box: swap, rise: 10))
                 .zIndex(1)
             Rectangle().fill(Color.hairline).frame(height: 1)
@@ -621,16 +621,28 @@ struct GoalCheck: View {
     }
 }
 
+/// What the thread list shows of an agent. Not the whole Agent: its `seen`
+/// moves on every heartbeat and would re-render the thread on every poll.
+struct ThreadAgent: Equatable {
+    let name: String
+    let title: String
+    let state: String
+
+    init(_ a: Agent) { name = a.name; title = a.title; state = a.state }
+}
+
 struct MessageList: View {
     let store: Store
-    let agent: Agent?
+    let agent: ThreadAgent?
     let tap: Tap?
     let animator: BubbleAnimator
     let geo: ChatGeometry
     @State private var position = ScrollPosition(edge: .bottom)
     @State private var nearBottom = true
     @State private var lastThread = ""
-    @State private var pinUntil = Date.distantPast
+    @State private var earlier = EarlierPages()
+    /// Rows laid out: the newest 40, and 40 more per "Show earlier messages".
+    static let page = 40
 
     private var messages: [DisplayMessage] {
         let key = store.thread
@@ -683,18 +695,24 @@ struct MessageList: View {
         let _ = animator.sync(thread: store.thread, keys: keys, fly: Set(rows.filter(\.0.fly).map(\.1)))
         let sig = keys.joined(separator: ",") + "|\(typing)|" + msgs.map { $0.receipt.map { "\($0)" } ?? "" }.joined()
             + "|" + msgs.map { "\($0.images.count)" }.joined()
+        let limit = Self.page * (1 + earlier.count(in: store.thread))
         GeometryReader { box in
             let maxW = min(620, box.size.width * 0.82)
             ScrollView(.vertical) {
-                // Lazy: opening a thread builds and lays out only the bubbles
-                // on screen (the bottom of it), not every message, so the tab
-                // slide and the rail glide never wait on a long thread.
-                LazyVStack(spacing: 12) {
+                // Eager, over the newest rows only: the content height is exact, so
+                // the bottom anchor holds the end through every size change. A lazy
+                // stack estimated the rows it had not placed, and with one bubble
+                // taller than the pane that estimate never settled under the anchor:
+                // layout looped inside one run-loop pass and the app froze.
+                VStack(spacing: 12) {
                     if msgs.isEmpty {
                         Hello(agent: agent, tap: tap)
                             .frame(minHeight: box.size.height - 60)
                     }
-                    ForEach(ProcessInfo.processInfo.environment["CHATEXP_NOLIST"] == nil ? rows : [], id: \.1) { m, k in
+                    if rows.count > limit {
+                        EarlierButton { earlier.open(in: store.thread) }
+                    }
+                    ForEach(ProcessInfo.processInfo.environment["CHATEXP_NOLIST"] == nil ? Array(rows.suffix(limit)) : [], id: \.1) { m, k in
                         BubbleRow(m: m, box: animator.box(k), maxWidth: maxW, geo: geo)
                     }
                     // The dots' spring is scoped to the dots: on the list it would also
@@ -728,20 +746,17 @@ struct MessageList: View {
             // that builds it; scrolling the old one there afterwards cost a
             // second full layout of the thread a frame later, mid-glide.
             .id(ProcessInfo.processInfo.environment["CHATEXP_NOID"] == nil ? store.thread : "one")
-            // Stay pinned to the end while content or the viewport changes size
-            // (markdown settling, goals appearing, the composer growing), when we
-            // were at the end before the change or a thread just opened.
-            .onScrollGeometryChange(for: ListGeometry.self, of: { g in
-                ListGeometry(content: g.contentSize.height, container: g.containerSize.height, offset: g.contentOffset.y)
-            }, action: { old, new in
-                nearBottom = new.gap < 120
-                let resized = old.content != new.content || old.container != new.container
-                if resized, old.gap < 120 || Date() < pinUntil { position.scrollTo(edge: .bottom) }
-            })
+            // Near the end, a new message brings the list down to it. A size change
+            // (markdown settling, goals appearing, the composer growing) scrolls
+            // nothing here: the bottom anchor keeps the end in place on its own.
+            .onScrollGeometryChange(for: Bool.self, of: { g in
+                g.contentSize.height - (g.contentOffset.y + g.containerSize.height) < 120
+            }, action: { _, near in nearBottom = near })
             .onChange(of: sig, initial: true) {
                 let switched = lastThread != store.thread
                 lastThread = store.thread
-                if switched { pinUntil = Date().addingTimeInterval(0.8) }
+                // A thread opens on its newest page.
+                if switched { earlier = EarlierPages() }
                 if store.isViewingCandidate { store.markRead(store.thread) }
                 if agent != nil { ChatOutbox.shared.prune(Set(msgs.map(\.id))) }
                 // A switched thread is a fresh scroll view already at its bottom.
@@ -754,11 +769,35 @@ struct MessageList: View {
     }
 }
 
-struct ListGeometry: Equatable {
-    let content: CGFloat
-    let container: CGFloat
-    let offset: CGFloat
-    var gap: CGFloat { content - (offset + container) }
+/// Earlier pages opened in the thread on screen. Keyed by thread, so the frame
+/// that builds a newly opened thread already lays out only its newest page.
+struct EarlierPages: Equatable {
+    private var thread = ""
+    private var pages = 0
+    func count(in t: String) -> Int { t == thread ? pages : 0 }
+    mutating func open(in t: String) { pages = count(in: t) + 1; thread = t }
+}
+
+/// The next page of earlier messages, in the meta line's voice. Its rows go in
+/// above what is on screen, and the bottom anchor keeps that in place.
+struct EarlierButton: View {
+    let action: () -> Void
+    @State private var hover = false
+
+    var body: some View {
+        Button(action: action) {
+            Text("Show earlier messages")
+                .font(.system(size: 10.5, weight: .medium))
+                .tracking(0.2)
+                .foregroundStyle(hover ? Color.dim : Color.faint)
+                .padding(.vertical, 4)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .pointerStyle(.link)
+        .onHover { hover = $0 }
+        .frame(maxWidth: .infinity)
+    }
 }
 
 extension Store {
@@ -775,7 +814,7 @@ extension Store {
 }
 
 struct Hello: View {
-    let agent: Agent?
+    let agent: ThreadAgent?
     let tap: Tap?
 
     var body: some View {
