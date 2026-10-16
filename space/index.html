@@ -412,13 +412,17 @@
   .plan .stepline:empty{display:none}
   .plan .stepline b{font-weight:600;color:var(--ink);font-variant-numeric:tabular-nums}
   .orb.ping::after{animation:ripple 1.2s ease-out 1}
-  .pgap{flex:none;display:flex;align-items:center;height:0;margin-top:-10px;opacity:0;overflow:hidden;padding-left:50px;
-    padding-right:4px;font-size:11px;color:var(--dim);white-space:nowrap;
-    transition:height .5s cubic-bezier(.22,.9,.24,1),margin-top .5s cubic-bezier(.22,.9,.24,1),opacity .35s ease}
-  .pgap.open{height:20px;margin-top:0;opacity:1}
-  .pgap span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
-  .pgap b{font-weight:600;color:var(--ink);display:inline-block;max-width:36%;overflow:hidden;text-overflow:ellipsis;vertical-align:top}
-  .pgap em{flex:none;margin-left:8px;font-style:normal;color:var(--faint);font-variant-numeric:tabular-nums}
+  /* the gap between two talking cards: "A → B · 2m", then what was said (two lines at most); it opens to fit its lines */
+  .pgap{flex:none;display:grid;grid-template-rows:0fr;margin-top:-10px;opacity:0;padding:0 4px 0 50px;
+    font-size:11px;line-height:15px;color:var(--dim);
+    transition:grid-template-rows .5s cubic-bezier(.22,.9,.24,1),margin-top .5s cubic-bezier(.22,.9,.24,1),opacity .35s ease}
+  .pgap.open{grid-template-rows:1fr;margin-top:0;opacity:1}
+  .pgap .pin{min-height:0;overflow:hidden}
+  .pgap .pw{display:flex;white-space:nowrap;padding-top:1px}
+  .pgap .pw b{flex:0 1 auto;min-width:0;max-width:48%;overflow:hidden;text-overflow:ellipsis;font-weight:600;color:var(--ink)}
+  .pgap .pw i{flex:none;margin:0 4px;font-style:normal}
+  .pgap .pw em{flex:none;margin-left:4px;font-style:normal;color:var(--faint);font-variant-numeric:tabular-nums}
+  .pgap .ps{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;padding-bottom:1px}
   #progress .railempty{padding:8px 4px}
   @media (min-width:1181px){
     /* with the right column showing, only the brand row is veiled; HUD rows float above the panel's top clearance */
@@ -1691,6 +1695,7 @@ function makeGap(p){
   base.setAttribute('class', 'lbase'); run.setAttribute('class', 'lrun'); run.style.opacity = '0';
   grp.append(base, run); svg.appendChild(grp);
   const g = {key: p.key, el, grp, base, run, html: '', d: '', last: null, drawn: still(), chase: [], timer: 0};
+  ro.observe(el);                                   // its words wrap to a second line: the card below moves, the line follows
   requestAnimationFrame(() => el.classList.add('open'));
   if (!g.drawn){
     base.style.opacity = '0';
@@ -1703,12 +1708,13 @@ function makeGap(p){
   }
   return g;
 }
-function fillGap(g, p, now){
-  const l = p.link, last = +l.last || 0;
-  const html = `<span><b>${esc(titleOf(p.from) || 'Claude')}</b> → <b>${esc(titleOf(p.to) || 'Claude')}</b>` +
-    (l.summary ? ' · ' + esc(String(l.summary)) : '') + `</span><em>${when(last || now)}</em>`;
+function fillGap(g, p, now){                        // "A → B · 2m", then the summary under it (two lines at most)
+  const l = p.link, last = +l.last || 0, said = String(l.summary || '').replace(/\s+/g, ' ').trim();
+  const html = `<div class="pin"><div class="pw"><b>${esc(titleOf(p.from) || 'Claude')}</b><i>→</i>` +
+    `<b>${esc(titleOf(p.to) || 'Claude')}</b><em>· ${when(last || now)}</em></div>` +
+    (said ? `<div class="ps">${esc(said)}</div>` : '') + `</div>`;
   if (g.html !== html){ g.el.innerHTML = html; g.html = html; }
-  g.el.title = String(l.summary || '');
+  g.el.title = said;
   g.upper = p.upper; g.lower = p.lower; g.down = p.from === p.upper;   // the chase runs from sender to receiver
   if (g.last !== null && last > g.last && !still()){ const rc = pcards.get(agentKey(p.to)); if (rc) ping(rc); }
   g.last = last;
@@ -1716,7 +1722,7 @@ function fillGap(g, p, now){
 function retireGap(g){
   g.leaving = true; g.el.classList.add('leaving'); g.el.classList.remove('open');
   clearTimeout(g.timer); cancelAll(g.chase); g.run.style.opacity = '0';
-  const done = () => { g.grp.remove(); g.el.remove(); if (pgaps.get(g.key) === g) pgaps.delete(g.key); };
+  const done = () => { ro.unobserve(g.el); g.grp.remove(); g.el.remove(); if (pgaps.get(g.key) === g) pgaps.delete(g.key); };
   if (still()){ done(); return; }
   try{ A.animate(A.svg.createDrawable(g.base), {draw: '1 1', duration: 450, ease: 'in(2)'}); }catch(e){}
   setTimeout(done, 520);
