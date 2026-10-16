@@ -2,7 +2,6 @@ import AppKit
 import Observation
 import SwiftUI
 
-private let statusLabel = ["needs-you": "Needs you", "flying": "Flying", "boarding": "Boarding", "landed": "Landed"]
 private let agentLabel = ["thinking": "Thinking", "here": "Here", "away": "Away", "switching": "Switching car", "starting": "Starting"]
 
 struct ChatView: View {
@@ -49,6 +48,8 @@ struct RailView: View {
     var body: some View {
         let details = Dictionary(store.agents.map { ($0.key, RailDetail.of($0, store: store)) },
                                  uniquingKeysWith: { first, _ in first })
+        // The lead first, its children indented under it, then the rest (no lead: as served).
+        let ordered = MuddiOrder.rows(store.agents)
         ScrollView(.vertical) {
             VStack(alignment: .leading, spacing: 8) {
                 RailTools(store: store)
@@ -58,7 +59,8 @@ struct RailView: View {
                               ? "No agents in the space yet. Any agent joins with tap.py listen --as NAME."
                               : "Looking for agents…")
                 }
-                ForEach(Array(store.agents.enumerated()), id: \.element.key) { i, a in
+                ForEach(Array(ordered.enumerated()), id: \.element.agent.key) { i, row in
+                    let a = row.agent
                     // The lines under a master are siblings of its row, never inside it:
                     // the row's frame is what the liquid selection follows.
                     VStack(alignment: .leading, spacing: 0) {
@@ -69,6 +71,8 @@ struct RailView: View {
                         .modifier(SpinDownRow(key: a.key, title: a.title, store: store))
                         RailAgentDetail(detail: details[a.key] ?? RailDetail()) { store.open(a.key) }
                     }
+                    // A child of the lead moves in as one: row, Spin down, talk line, notes.
+                    .padding(.leading, row.child ? MuddiOrder.indent : 0)
                 }
                 RailHead(title: "Your taps")
                 if store.taps.items.isEmpty {
@@ -76,8 +80,8 @@ struct RailView: View {
                 }
                 ForEach(Array(store.taps.items.enumerated()), id: \.element.key) { i, t in
                     RailRow(key: t.key, index: store.agents.count + i, store: store, onFrame: { frames[t.key] = $0 }) {
-                        TapAvatar(status: t.status, working: t.replying == true)
-                        RowText(title: t.name, sub: tapSub(t))
+                        TapAvatar(status: t.status, working: t.replying == true, phase: t.tapPhase)
+                        RowText(title: t.name, sub: tapSub(t), dim: t.tapPhase == .closed)
                     }
                 }
             }
@@ -86,10 +90,10 @@ struct RailView: View {
             .padding(.bottom, 20)
             .coordinateSpace(.named("rail"))
             .background(alignment: .topLeading) { ChatRailLiquid(track: track) }
-            // Agents re-sort by state (thinking first) and gain or shed the lines
-            // under them: rows glide, the body follows.
+            // Agents re-sort by state (thinking first), move under the lead or out,
+            // and gain or shed the lines under them: rows glide, the body follows.
             .animation(.spring(response: 0.5, dampingFraction: 0.82),
-                       value: store.agents.map { $0.key + "|" + (details[$0.key]?.sig ?? "") })
+                       value: ordered.map { $0.agent.key + ($0.child ? ">" : "") + "|" + (details[$0.agent.key]?.sig ?? "") })
         }
         .scrollIndicators(.never)
         .onChange(of: frames) { place(animated: true) }
@@ -110,7 +114,7 @@ struct RailView: View {
     }
 
     private func tapSub(_ t: Tap) -> String {
-        var s = statusLabel[t.status, default: t.status] + " · " + t.repoName
+        var s = t.phaseLabel + " · " + t.repoName
         if let last = t.messages.last(where: { $0.who == "tap" }) { s += " · " + when(last.date) }
         return s
     }
@@ -193,6 +197,8 @@ struct RailEmpty: View {
 struct RowText: View {
     let title: String
     let sub: String
+    /// A closed tap reads greyed.
+    var dim = false
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(title)
@@ -207,6 +213,7 @@ struct RowText: View {
                 .contentTransition(.interpolate)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .opacity(dim ? 0.55 : 1)
         .animation(.smooth(duration: 0.35), value: sub)
     }
 }
@@ -273,13 +280,35 @@ struct UnreadDot: View {
 }
 
 /// Ring avatar per tap: spinning arc = flying, breathing blue = needs you,
-/// dotted slow spin = boarding, green check = landed.
+/// dotted slow spin = boarding, green check = landed. With a phase from the
+/// server the look comes from MuddiLook (landed: green ring, done: the check).
 struct TapAvatar: View {
     let status: String
     var working = false
     var size: CGFloat = 38
+    /// nil (an older server, or the pill): the legacy look by `status`.
+    var phase: TapPhase? = nil
 
     var body: some View {
+        let look = phase.map { MuddiLook($0, working: working) } ?? legacyLook
+        ZStack {
+            Circle().fill(look.fill)
+            RingView(style: look.ring, lineWidth: 2.2 * size / 38, track: NSColor.black.withAlphaComponent(0.06))
+            Group {
+                if look.check {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 11 * size / 38, weight: .bold))
+                        .transition(.symbolEffect(.drawOn))
+                }
+            }
+            .foregroundStyle(look.glyph)
+        }
+        .frame(width: size, height: size)
+        .animation(.smooth(duration: 0.4), value: status + "|" + (phase?.rawValue ?? ""))
+    }
+
+    /// Today's look by the legacy status.
+    private var legacyLook: MuddiLook {
         // the ring only moves while the pilot is actually working
         let style: RingStyle = switch status {
         case "flying": .spin(Palette.ink, length: 0.27, period: working ? 1.6 : 0)
@@ -293,20 +322,7 @@ struct TapAvatar: View {
         default: Color(white: 0.957)
         }
         let fg: Color = status == "needs-you" ? .tapBlue : (status == "landed" ? .up : .dim)
-        ZStack {
-            Circle().fill(bg)
-            RingView(style: style, lineWidth: 2.2 * size / 38, track: NSColor.black.withAlphaComponent(0.06))
-            Group {
-                if status == "landed" {
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 11 * size / 38, weight: .bold))
-                        .transition(.symbolEffect(.drawOn))
-                }
-            }
-            .foregroundStyle(fg)
-        }
-        .frame(width: size, height: size)
-        .animation(.smooth(duration: 0.4), value: status)
+        return MuddiLook(ring: style, fill: bg, glyph: fg, check: status == "landed")
     }
 }
 
@@ -421,6 +437,12 @@ struct PaneView: View {
                             .modifier(SwapIn(box: swap, rise: 4))
                         Rectangle().fill(Color.hairline).frame(height: 1)
                     }
+                    // A holding, landed or proposed tap: its question, its proof, its flight.
+                    if let tap, MuddiTapCard.shows(tap) {
+                        MuddiTapCard(tap: tap, store: store)
+                            .modifier(SwapIn(box: swap, rise: 4))
+                        Rectangle().fill(Color.hairline).frame(height: 1)
+                    }
                 }
                 .background(Color.white)
                 .zIndex(2)
@@ -472,7 +494,7 @@ struct PaneHeader: View {
                 Spacer(minLength: 8)
                 StatusChip(state: agent.state, label: agentLabel[agent.state, default: agent.state])
             } else if let tap {
-                TapAvatar(status: tap.status, working: tap.replying == true)
+                TapAvatar(status: tap.status, working: tap.replying == true, phase: tap.tapPhase)
                 VStack(alignment: .leading, spacing: 2) {
                     HeaderTitle(text: tap.name)
                     HStack(spacing: 4) {
@@ -483,7 +505,7 @@ struct PaneHeader: View {
                     .foregroundStyle(Color.dim)
                 }
                 Spacer(minLength: 8)
-                StatusChip(state: tap.status, label: statusLabel[tap.status, default: tap.status])
+                StatusChip(state: tap.chipState, label: tap.phaseLabel)
             }
         }
         .foregroundStyle(Color.ink)
@@ -534,6 +556,8 @@ struct StatusChip: View {
         let (fg, bg, breathe): (NSColor, Color, Double) = switch state {
         case "thinking", "needs-you", "switching", "starting": (Palette.blue, Color.tapBlue.opacity(0.1), 1.0)
         case "flying": (Palette.ink, Color.black.opacity(0.045), 1.2)
+        // a tap en route with nobody working this minute: the flying chip, still
+        case "enroute": (Palette.ink, Color.black.opacity(0.045), 0)
         case "landed": (Palette.green, Color.up.opacity(0.1), 0)
         case "here": (Palette.green, Color.black.opacity(0.045), 2.4)
         default: (Palette.faint, Color.black.opacity(0.045), 0)
