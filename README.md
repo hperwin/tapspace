@@ -210,10 +210,12 @@ workspace where any number of agents can be connected at once:
   SIGKILL on the claude process) and it leaves the list; its thread moves
   to `data/archive/`. Only processes named `claude` are ever signalled.
   A new session that listens under the same NAME brings it back.
-- **Taps.** GitHub issues you authored with the tap label
-  (`TAPSPACE_TAP_LABEL`, default `nava`), read through your `gh` login. Each
-  tap shows its goals, its comments, and whether your messages were seen
-  (an 👀 reaction). Writing to a tap posts an issue comment as you. Taps
+- **Taps.** GitHub issues you authored with a Flightdeck journey label, read
+  through your `gh` login. Both label families are read: Flightdeck's
+  (`flightdeck`, `flightdeck:fly`, `flightdeck:needs-reply`) and the legacy
+  nava ones (`nava`, `auto-launch`, `needs-reply`); `TAPSPACE_TAP_LABEL` adds
+  one more journey label. Each tap shows its goals, its comments, and
+  whether your messages were seen (an 👀 reaction). Writing to a tap posts an issue comment as you. Taps
   are scoped by issue author, so other people's taps never appear.
 
 Every agent can talk to all of your taps too: `tap.py taps`, `tap.py tap-read KEY`,
