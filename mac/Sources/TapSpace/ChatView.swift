@@ -341,11 +341,17 @@ final class BubbleAnimator {
     private var boxes: [String: SpringBox] = [:]
     private var known: Set<String> = []
     private var thread = ""
+    private var loaded = false
     weak var geo: ChatGeometry?
 
-    func sync(thread: String, keys: [String], fly: Set<String>) {
-        if thread != self.thread {
+    /// `loaded`: the thread's history has been fetched. The rows of that first
+    /// fetch are history, not arrivals: they take their places without springing
+    /// in, as on any later open (springing in, every laid-out row re-rendered on
+    /// every frame).
+    func sync(thread: String, loaded: Bool, keys: [String], fly: Set<String>) {
+        if thread != self.thread || !self.loaded {
             self.thread = thread
+            self.loaded = loaded
             known = Set(keys)
             boxes.removeAll()
             return
@@ -692,7 +698,8 @@ struct MessageList: View {
             if k != m.id { m.fly = true }
             return (m, k)
         }
-        let _ = animator.sync(thread: store.thread, keys: keys, fly: Set(rows.filter(\.0.fly).map(\.1)))
+        let _ = animator.sync(thread: store.thread, loaded: agent.map { store.chats[$0.name] != nil } ?? true,
+                              keys: keys, fly: Set(rows.filter(\.0.fly).map(\.1)))
         let sig = keys.joined(separator: ",") + "|\(typing)|" + msgs.map { $0.receipt.map { "\($0)" } ?? "" }.joined()
             + "|" + msgs.map { "\($0.images.count)" }.joined()
         let limit = Self.page * (1 + earlier.count(in: store.thread))
