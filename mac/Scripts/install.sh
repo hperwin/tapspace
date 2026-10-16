@@ -14,7 +14,10 @@ export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Develope
 NAME=TapSpace
 BUNDLE_ID=com.hayden.tapspace
 DEST="/Applications/$NAME.app"
+# Absolute paths throughout: actool hands its work to a long-lived ibtoold, which resolves relative
+# paths against the folder it was first started from (another checkout's, after an earlier install).
 SCRATCH="${SCRATCH:-.build}"
+mkdir -p "$SCRATCH" && SCRATCH="$(cd "$SCRATCH" && pwd)"
 
 # 1. Icon: Resources/TapSpace.icon (Icon Composer format: a white fill, white in
 #    dark mode too, and one flat blue dot) compiled by actool into Assets.car plus
@@ -24,7 +27,7 @@ echo "==> Compiling the icon"
 ICON="$SCRATCH/icon"
 rm -rf "${ICON:?}"
 mkdir -p "$ICON"
-xcrun actool "Resources/$NAME.icon" --compile "$ICON" --output-partial-info-plist "$ICON/partial.plist" \
+xcrun actool "$PWD/Resources/$NAME.icon" --compile "$ICON" --output-partial-info-plist "$ICON/partial.plist" \
     --app-icon "$NAME" --include-all-app-icons --enable-on-demand-resources NO \
     --target-device mac --platform macosx --minimum-deployment-target 26.0 >/dev/null
 
@@ -44,7 +47,7 @@ printf 'APPL????' > "$APP/Contents/PkgInfo"
 codesign --force --deep --sign - "$APP"
 codesign --verify --strict "$APP"
 if [[ "${BUNDLE_ONLY:-0}" == "1" ]]; then
-    echo "Bundled: $PWD/$APP (not installed)"
+    echo "Bundled: $APP (not installed)"
     exit 0
 fi
 
