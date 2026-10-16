@@ -66,6 +66,7 @@ struct RailView: View {
                             OrbView(state: a.state).frame(width: 38, height: 38)
                             RowText(title: a.title, sub: agentSub(a))
                         }
+                        .modifier(SpinDownRow(key: a.key, title: a.title, store: store))
                         RailAgentDetail(detail: details[a.key] ?? RailDetail()) { store.open(a.key) }
                     }
                 }
