@@ -133,22 +133,22 @@
   .notquite{background:rgba(0,0,0,.045);color:var(--ink)}
   .notquite:hover{background:rgba(0,0,0,.08)}
 
-  .chat{max-height:0;overflow:hidden;transition:max-height .45s cubic-bezier(.3,.8,.3,1);padding:0 12px}
-  .chat.open{max-height:200px}
-  .chat textarea{
+  .chat,.ucdraw{max-height:0;overflow:hidden;transition:max-height .45s cubic-bezier(.3,.8,.3,1);padding:0 12px}
+  .chat.open,.ucdraw.open{max-height:200px}
+  .chat textarea,.ucard textarea{
     width:100%;min-height:78px;resize:none;border:1px solid var(--line);border-radius:11px;
     background:rgba(0,0,0,.025);padding:10px 11px;
     font:13px/1.5 -apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif;color:var(--ink);
     outline:none;transition:border-color .2s ease,background .2s ease;
   }
-  .chat textarea:focus{border-color:rgba(0,0,0,.18);background:#fff}
-  .chat .send{
+  .chat textarea:focus,.ucard textarea:focus{border-color:rgba(0,0,0,.18);background:#fff}
+  .chat .send,.ucard .send{
     margin:8px 0 12px;width:100%;padding:10px 0;border:0;border-radius:11px;cursor:pointer;
     background:var(--ink);color:#fff;font:600 12.5px/1 -apple-system,sans-serif;
     transition:opacity .15s ease,transform .15s ease;
   }
-  .chat .send:disabled{opacity:.3;cursor:default}
-  .chat .send:active{transform:scale(.975)}
+  .chat .send:disabled,.ucard .send:disabled{opacity:.3;cursor:default}
+  .chat .send:active,.ucard .send:active{transform:scale(.975)}
 
   .state{display:none;align-items:center;gap:8px;padding:11px 14px 13px;font-size:12px;color:var(--dim)}
   .state .sdot{width:6px;height:6px;border-radius:50%;background:var(--faint);animation:breathe 2s ease-in-out infinite}
@@ -391,7 +391,114 @@
   .typing span:nth-child(2){animation-delay:.15s} .typing span:nth-child(3){animation-delay:.3s}
   @keyframes dot{0%,60%,100%{transform:translateY(0);opacity:.35}30%{transform:translateY(-4px);opacity:1}}
   .hello{margin:auto;text-align:center;color:var(--faint);font-size:12.5px;line-height:1.6;max-width:320px}
-  .hello .big{font-size:22px;font-weight:650;color:var(--ink);letter-spacing:-.02em;margin-bottom:6px}
+  .hello .big,.ucard .uword{font-size:22px;font-weight:650;color:var(--ink);letter-spacing:-.02em;margin-bottom:6px}
+  /* ---- update cards (contract sections 3, 4 and 9): a master's card in its thread, its answers folded in. Class names
+     never meet a global rule (no card, chat, state, meta, title, agent, ver, acts, shot, note or plan); the shared looks
+     come in by selector list (the drawer, inputs and Send above) or by their own global class (btn, checkveil, chip,
+     gonenote, stopask, rbtn) ---- */
+  .msg.ucard{width:520px}
+  .ucard.wait{opacity:0}                              /* held out of sight until its thread's open settles (contract 10) */
+  .ucbody{background:var(--card);border-radius:18px;padding:14px;display:flex;flex-direction:column;gap:12px;
+    box-shadow:0 1px 2px rgba(0,0,0,.05),0 6px 18px rgba(0,0,0,.07)}
+  .uchead{display:flex;align-items:center;gap:12px}
+  .uface,.uiface{display:flex}
+  .uctx{flex:1;min-width:0;display:flex;flex-direction:column}
+  .ucwho{font-size:11.5px;color:var(--dim);margin-bottom:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .ucwho:empty,.ucvis:empty{display:none}
+  .uline{font-size:14px;font-weight:600;line-height:1.4;overflow-wrap:anywhere}
+  .uvlabel{display:block;margin-top:6px;font-size:11.5px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .uvlabel b{font-weight:600;color:var(--ink);font-variant-numeric:tabular-nums}
+  .ucard .uword{margin:0}
+  .upills{display:flex;flex-wrap:wrap;gap:6px}
+  .upill{display:flex}
+  .ucard .upill.now .uck{border-color:rgb(var(--hl));background:rgba(var(--hl),.1)}   /* the step it is on */
+  .ucitems{display:flex;flex-direction:column;gap:2px;margin:0 -4px}
+  .uitem{display:flex;align-items:center;gap:10px;padding:6px 4px;min-width:0}
+  .uiface{flex:none}
+  .uitem .tx{flex:1;min-width:0;display:flex;flex-direction:column}
+  .uitem .nm{font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .uitem .sub{font-size:11.5px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .uend{flex:none;display:flex;align-items:center;gap:8px}
+  .ucn{font-size:10.5px;color:var(--dim);font-variant-numeric:tabular-nums}
+  .ucard .uitem .ubar{width:64px}
+  .ucard .chip i{animation:none}
+  .ucshots{display:grid;gap:12px;grid-template-columns:repeat(auto-fill,minmax(200px,1fr))}
+  .ucshots.n1{grid-template-columns:1fr}
+  .uimg{min-width:0}
+  .uwell{position:relative;height:220px;border-radius:14px;overflow:hidden;background:#f2f2f3}
+  .ucshots.n1 .uwell{height:300px}
+  .uwell img{display:block;width:100%;height:100%;object-fit:contain;cursor:zoom-in}
+  .uwell .gonenote{display:flex}
+  .uclabel{margin:6px 2px 0;font-size:11.5px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  /* a decision card (contract A1): the pictures are the card, the line its only words, the buttons right under them */
+  .ucard.hero .ucshots{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .ucard.hero .ucshots.n1{grid-template-columns:1fr}
+  .ucard.hero .uwell{height:auto;min-height:120px}
+  .ucard.hero .uwell img{height:auto;max-height:420px}
+  .ucard.hero .ucshots:not(.n1) .uwell img{max-height:300px}
+  .ucard.hero .uclabel,.ucard.hero .ucwho{display:none}
+  .ucacts{display:flex;gap:8px;margin-top:8px}
+  .ucacts .btn{padding:9px 0}
+  .uimg.answered .ucacts,.uimg.answered .ucdraw,.uact.answered .ucacts,.uact.answered .ucdraw,.uact.confirming .ucacts{display:none}
+  .ucdraw{padding:0;visibility:hidden;transition:max-height .45s cubic-bezier(.3,.8,.3,1),visibility 0s .45s}   /* closed: out of the tab order */
+  .ucdraw.open{visibility:visible;transition:max-height .45s cubic-bezier(.3,.8,.3,1)}
+  .ucdraw textarea{margin-top:8px}
+  .ucard .send{margin:8px 0 0}
+  .ucard .stopask{margin:8px 0 0}
+  .usays{display:flex;align-items:center;gap:7px;margin-top:8px;font-size:12px;color:var(--dim);overflow-wrap:anywhere}
+  .usays:empty{display:none}
+  .usays.on{color:var(--green);font-weight:600}
+  .ucq{font-size:13px;line-height:1.45;overflow-wrap:anywhere}
+  .uchecks{display:flex;flex-direction:column;gap:2px;margin:6px -8px 0}
+  .ucheck{appearance:none;border:0;background:none;font:inherit;font-size:12.5px;color:inherit;text-align:left;cursor:pointer;
+    display:flex;align-items:center;gap:9px;padding:6px 8px;border-radius:10px;transition:background .25s ease,transform .2s ease}
+  .ucheck:hover{background:rgba(0,0,0,.03)}
+  .ucheck:active{transform:scale(.98)}
+  .ucheck:disabled{cursor:default;transform:none;background:none;color:var(--dim)}
+  .ucheck.on:disabled{color:var(--ink)}
+  .uask textarea{min-height:44px;max-height:160px;margin-top:8px}
+  .uask textarea:disabled{color:var(--dim)}
+  .uask.answered .send{display:none}
+  /* ---- update cards: the shared choreography (contract 4) on the page's own keyframes and curves. A card plays
+     once, on first view: .play (removed when every beat is done); each piece's delay comes from cardTimes(). ---- */
+  .ucard .orb,.ucard .orb::after,.ucard .tapav .arc{animation:none}   /* faces in a card hold still */
+  .ucard .uface{position:relative;flex:none}
+  .ucard .uface::after{content:"";position:absolute;inset:-4px;border-radius:50%;border:1.5px solid rgba(var(--hl),.35);
+    opacity:0;transform:scale(.85);pointer-events:none}                 /* the .orb ping ring, on any face kind */
+  .ucard.play .uface::after{animation:ripple 1.2s ease-out .1s 1}      /* .orb.ping, at beat 1 */
+  .ucard.play .uline,.ucard.play .uvlabel,.ucard.play .uword{animation:swapin .7s cubic-bezier(.22,.9,.24,1) both}
+  .ucard.play .upill{animation:thumbin .6s cubic-bezier(.3,1.4,.5,1) both}
+  .ucard.play .uitem{animation:railin .8s cubic-bezier(.22,.9,.24,1) both}
+  .ucard.play .uimg,.ucard.play .uact{animation:swapin 1.1s cubic-bezier(.22,.9,.24,1) both}
+  .ucard.play .uask{animation:railin .45s cubic-bezier(.22,.9,.24,1) both}
+  .ucard .ubar{position:relative;height:4px;border-radius:2px;background:rgba(0,0,0,.08)}
+  .ucard .ubar i{position:absolute;left:0;top:0;bottom:0;border-radius:2px;background:var(--ink);
+    transition:width .7s cubic-bezier(.22,.9,.24,1)}                   /* the long track's fill */
+  .ucard .ubar.all i{background:rgb(var(--hl))}
+  .ucard .uspark{display:block;width:100%;max-width:320px;height:auto;aspect-ratio:320/36;overflow:visible}
+  .ucard .uspark .lb{fill:none;stroke:rgba(0,0,0,.08);stroke-width:1}
+  .ucard .uspark .ls{fill:none;stroke:rgb(var(--hl));stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+  .ucard .uswap{animation:swapin .7s cubic-bezier(.22,.9,.24,1)}       /* a word that changes in place (#panehead) */
+  .ucard .checkveil.gone{opacity:0}                                   /* the approve veil clears after its hold */
+  .ucard .uck{position:relative;flex:none;width:15px;height:15px;border-radius:50%;border:1.5px solid var(--faint);
+    transition:border-color .25s ease}
+  .ucard .uck i{position:absolute;inset:-1.5px;border-radius:50%;background:var(--green);transform:scale(0);
+    transition:transform .35s cubic-bezier(.3,1.6,.5,1)}              /* the unread dot's pop */
+  .ucard .uck svg{position:absolute;inset:-1.5px;width:15px;height:15px}
+  .ucard .uck path{fill:none;stroke:#fff;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round;
+    stroke-dasharray:1;stroke-dashoffset:1}
+  .ucard .on .uck{border-color:var(--green)}
+  .ucard .on .uck i{transform:scale(1)}
+  .ucard .on .uck path{stroke-dashoffset:0}
+  .ucard .tick .uck path{stroke-dashoffset:1;animation:draw .45s cubic-bezier(.4,0,.2,1) .1s forwards}  /* a live tick draws */
+  .ucard .usent .sdot{width:6px;height:6px;border-radius:50%;background:var(--faint);animation:breathe 2s ease-in-out infinite}
+  @media (prefers-reduced-motion: reduce){
+    .msg.ucard.new,.ucard .uswap,.ucard .tick .uck path,.ucard .usent .sdot,
+    .ucard .checkveil.show circle,.ucard .checkveil.show path{animation:none}
+    .ucard .tick .uck path,.ucard .checkveil.show circle,.ucard .checkveil.show path{stroke-dashoffset:0}
+    .ucard .ubar i,.ucard .uck i,.ucard .ucdraw{transition:none}
+    .ucard .checkveil{transition:opacity .2s ease}
+  }
 
   #composer{display:flex;gap:10px;align-items:flex-end;padding:12px 14px 14px;border-top:1px solid var(--line)}
   #composer textarea{flex:1;resize:none;border:1px solid var(--line);border-radius:16px;background:rgba(0,0,0,.025);
@@ -546,6 +653,7 @@
       <button class="rbtn new" id="newsession" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg>New session</button>
       <button class="rbtn clear" id="pairphone" type="button" title="Connect Glint on your phone">Pair phone</button>
     </div>
+    <!-- W2 (contract section 5): the lead's pinned group (its row, the fleet strip, the disclosure) goes above this head -->
     <div class="railhead">Agents</div>
     <div id="agentlist"><div class="railempty">No agents in the space yet.</div></div>
     <div class="railhead">Your taps</div>
@@ -964,7 +1072,7 @@ function setTab(name, instant){
   placePill(instant);
   store('tapspace.tab', name);
   if (location.hash !== '#' + name) history.replaceState(null, '', '#' + name);
-  if (name === 'chat'){ markRead(current); scrollEnd(true); }
+  if (name === 'chat'){ markRead(current); scrollEnd(true); showCards(false); }   // a card waiting on the Chat tab plays now
 }
 tabs.addEventListener('click', e => { const b = e.target.closest('.tab'); if (b) setTab(b.dataset.tab); });
 
@@ -1063,6 +1171,7 @@ const agentOf = k => k.slice(6);
 let taps = {items: [], me: '', fetched: 0, error: ''};
 let rendered = {key: null, sig: '', count: 0};
 const sending = [];       // optimistic tap messages: {key, body, ts}
+const outbox = [];        // what this page sent an agent and the server has not echoed yet: {agent, nonce, body, images, answer, ts, sent, hold}
 const flyAsked = {}, acceptAt = {};   // tap key -> ms of this page's own Fly / Accept (shown until the server's read has it, 2 min cap)
 let actState = {key: '', confirm: false, busy: false};   // the open tap's action card: Accept confirm open, a request in flight
 let focusedAsk = '';      // the question the composer was last focused for (key|at), so a poll never steals focus again
@@ -1156,7 +1265,98 @@ function face(key, size, hint){
     {key, repo: key.split('#')[0], initial: h.initial, status: '', phase: h.phase || 'done'}, st);
 }
 
+// ---- pure: update cards (no DOM, no page globals; tests/test_web_cards.py and test_card_motion.py run this block in node) ----
+const CARD_V = 1;                                   // the card version this page draws; any other shows its plain body
+const CHAT_IMG = /^\/chat-media\/[\w-]+\.(?:png|jpe?g|gif|webp|heic)$/i;   // a card's pictures come from chat media only
+const SENT_HOLD = 600;                              // ms "Sent" shows at least, even when the echo is at once (contract 10)
+const cardOk = c => !!c && typeof c === 'object' && c.v === CARD_V && typeof c.line === 'string' && c.line.trim() !== '';
+const cardAsk = c => c.ask && typeof c.ask === 'object' && typeof c.ask.q === 'string' && c.ask.q.trim() ? c.ask : null;
+const askChecks = a => (Array.isArray(a.checks) ? a.checks : []).filter(x => x && typeof x.id === 'string').slice(0, 6);
+const cardAction = c => c.action && typeof c.action === 'object' && c.action.kind === 'tap_accept' &&
+  typeof c.action.tap === 'string' && c.action.tap ? c.action : null;
+// Contract A1: a card with pictures, no visual and at most one item is a decision card: the pictures are the card.
+const cardHero = c => Array.isArray(c.images) && c.images.length > 0 && !c.visual && (!Array.isArray(c.items) || c.items.length <= 1);
+const askReady = (ticks, text) => ticks > 0 || String(text || '').trim() !== '';   // Send needs a tick or words (contract 10)
+const rowKey = r => r.nonce ? 'n' + r.nonce : 'm' + r.id;   // a row sent with a nonce keeps its node when the server echoes it
+const newNonce = tag => tag + ':' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+const clampInt = (x, lo, hi) => Math.max(lo, Math.min(Math.floor(+x) || 0, hi));
+// The agent thread as drawn. An answer folds into the card it answers when that card is in the thread (later answers win,
+// per image, for the ask and for the action; an accept stays accepted); every other row is a message. out: what this page
+// sent and the server has not echoed yet ({nonce, body, images} or {nonce, answer, hold}), shown at once and dropped once a
+// row carries its nonce; an answer keeps its pending look until its hold is over.
+function foldThread(rows, out, now){
+  const st = new Map();
+  for (const r of rows) if (r.role === 'master' && cardOk(r.card))
+    st.set(r.id, {shots: (Array.isArray(r.card.images) ? r.card.images : []).map(() => ({verdict: '', note: '', pending: false})),
+                  ask: cardAsk(r.card) ? {checks: [], text: '', done: false, pending: false} : null,
+                  act: cardAction(r.card) ? {verdict: '', note: '', pending: false} : null});
+  const fold = (a, pending) => {
+    const s = a && typeof a === 'object' ? st.get(+a.card) : null;
+    if (!s) return false;
+    if (a.image !== undefined){
+      if (!Number.isInteger(a.image) || a.image < 0 || a.image >= s.shots.length || !['approve', 'change'].includes(a.verdict)) return false;
+      s.shots[a.image] = {verdict: a.verdict, note: a.verdict === 'change' ? String(a.note || '') : '', pending};
+    } else if (a.action !== undefined){
+      if (!s.act || !['accept', 'deny'].includes(a.action)) return false;
+      if (s.act.verdict !== 'accept' || s.act.pending) s.act = {verdict: a.action, note: a.action === 'deny' ? String(a.note || '') : '', pending};
+    } else {
+      if (!s.ask) return false;
+      s.ask = {checks: Array.isArray(a.checks) ? a.checks.map(String) : [], text: String(a.text || ''), done: true, pending};
+    }
+    return true;
+  };
+  const msgs = [], echoed = new Set();
+  for (const r of rows){
+    if (r.nonce) echoed.add(r.nonce);
+    if (r.role === 'you' && r.answer && fold(r.answer, false)) continue;
+    const m = {who: r.role === 'you' ? 'you' : 'them', body: String(r.body || ''), ts: r.ts, id: rowKey(r), rid: r.id,
+               images: Array.isArray(r.images) ? r.images : []};
+    if (st.has(r.id)){ m.card = r.card; m.cst = st.get(r.id); }
+    msgs.push(m);
+  }
+  for (const o of out){
+    const said = echoed.has(o.nonce);
+    if (o.answer){ if (!said || now < (o.hold || 0)) fold(o.answer, true); }
+    else if (!said) msgs.push({who: 'you', body: o.body || '', ts: o.ts, id: 'n' + o.nonce, images: o.images || [], pending: true});
+  }
+  return msgs;
+}
+// A timeline visual (contract 10): goal checks with only the current step's words and "2 of 5" (module 4's step line).
+function timeLine(v){
+  const steps = (Array.isArray(v && v.steps) ? v.steps : []).map(String).slice(0, 7), n = steps.length, at = clampInt(v && v.at, 0, n);
+  return {steps, n, at, count: at >= n ? 'Done' : (at + 1) + ' of ' + n, text: at >= n ? n + ' of ' + n : steps[at]};
+}
+const stepCount = (cur, n) => !n ? '' : cur >= n ? 'Done' : (cur + 1) + ' of ' + n;   // a master item's place in its goal card
+// A graph visual's line in a w x 36 box (P7 2.0, the same on every client): 2 clear on each side, straight segments, flat
+// at mid height when every point is equal.
+function sparkPath(points, w = 320){
+  const v = (Array.isArray(points) ? points : []).map(Number).filter(Number.isFinite).slice(0, 24);
+  if (v.length < 2) return '';
+  const h = 36, p = 2, lo = Math.min(...v), hi = Math.max(...v), f = x => +x.toFixed(1);
+  return v.map((y, i) => (i ? 'L' : 'M') + f(p + (w - 2 * p) * i / (v.length - 1)) + ' ' +
+    f(hi === lo ? h / 2 : p + (h - 2 * p) * (hi - y) / (hi - lo))).join('');
+}
+/* when each piece plays (contract 4, P7 2.0): ms after the card arrives, with the page's staggers; one table for all three clients */
+const CARD_END = 2400;                    // ms after arrival: the biggest card's last beat has finished
+function cardMoved(it){                   // the item's snapshot moved since the previous card (contract 1, was)
+  const w = it && it.was;
+  if (!w || typeof w !== 'object') return false;
+  if ('phase' in w && w.phase !== it.phase) return true;
+  if (Array.isArray(w.goals) && String(w.goals) !== String(it.goals)) return true;
+  return 'current' in w && !!it.progress && w.current !== it.progress.current;
+}
+function cardTimes(card){                 // ms after arrival
+  const items = Array.isArray(card.items) ? card.items : [];
+  const S = 70, CAP = 5, tc = 450 + S * Math.min(Math.max(items.length - 1, 0), CAP) + 300;
+  const moved = items.map((it, i) => cardMoved(it) ? i : -1).filter(i => i >= 0);
+  return {line: 100, visual: 250, pill: i => 250 + 40 * i, item: i => 450 + S * Math.min(i, CAP),
+          change: new Map(moved.map((i, k) => [i, tc + 40 * k])), image: j => 650 + S * Math.min(j, CAP), ask: 800};
+}
+// ---- end pure: cards ----
+
 /* unread = the other side said something after you last looked at that thread */
+/* O2 (contract section 6): the focus rule lands here in wave 2 (quiet(k) = k == focus || on screen); every dot, the
+   Progress cards and the tab badge read isUnread. */
 function lastTheirs(key){
   if (isAgent(key)){ const a = agents.find(x => agentKey(x.name) === key); return a && a.last_master ? a.last_master * 1000 : 0; }
   const t = taps.items.find(x => x.key === key); if (!t) return 0;
@@ -1234,6 +1434,8 @@ function syncAgents(){
   const have = new Map();
   [...box.children].forEach(el => keys.has(el.dataset.key) ? have.set(el.dataset.key, el) : el.remove());
   const order = railOrder(agents), lead = order[0] && order[0].role === 'lead' ? order[0] : null;
+  /* W2 (contract sections 5 and 10): the lead pinned first by position, the fleet strip under it and the one disclosure
+     that folds every other master and tap land here (syncLead, syncFleet). */
   order.forEach((a, i) => {
     const key = agentKey(a.name);
     let g = have.get(key);
@@ -1302,6 +1504,7 @@ function renderRail(){
       return tapAvatar(t) + `<span class="tx${t.phase === 'closed' ? ' dim' : ''}"><div class="nm">${esc(tapName(t))}</div>
         <div class="sub">${sub}</div></span><span class="unread"></span>`;
     }, taps.fetched ? 'No taps flying under your name.' : (taps.error ? 'Couldn’t reach GitHub: ' + esc(taps.error) : 'Looking for your taps…'));
+  /* O2: the Chat tab badge (wave 2: the number of distinct keys with news). */
   const needs = taps.items.filter(isHolding).length;
   const unread = [...agents.map(a => agentKey(a.name)), ...taps.items.map(t => t.key)].filter(isUnread).length;
   const bc = $('#badge-chat'); const n = Math.max(needs, unread);
@@ -1313,7 +1516,7 @@ function threadData(){
     const a = agents.find(x => agentKey(x.name) === current);
     if (!a) return null;
     const rows = chat.agent === a.name ? chat.messages : [];
-    return {msgs: rows.map(r => ({who: r.role === 'you' ? 'you' : 'them', body: r.body, ts: r.ts, id: 'm' + r.id, images: r.images || []})),
+    return {msgs: foldThread(rows, outbox.filter(o => o.agent === a.name), Date.now()),
             typing: a.state === 'thinking', switching: a.state === 'switching', agent: a};
   }
   const t = taps.items.find(x => x.key === current);
@@ -1449,6 +1652,368 @@ tapactEl.addEventListener('keydown', e => {
   if (e.key === 'Escape' && actState.confirm && !actState.busy){ actState.confirm = false; renderAct(threadData()); }
 });
 
+/* ---- update cards (contract sections 3, 4, 9 and 10): a master's card, built once per row and drawn at rest; its answers
+   fold into it; it plays its beats once, the first time it is on screen ---- */
+const cardMsgs = new Map();   // a card node's id -> its latest folded message (the handlers read it)
+const cardUi = new Map();     // card row id -> {confirm, busy, accepted}: a decision card's Accept confirm (contract A1)
+const cardSeen = new Set();   // card row ids that have been on screen on this page, played or drawn at rest
+const cardLive = new Set();   // card row ids that arrived by a poll into their open, loaded thread
+const cardRM = matchMedia('(prefers-reduced-motion: reduce)');
+let openMark = {key: current, at: readAt(current)};   // the open thread's read mark as it stood when the thread opened
+const CHECK = '<span class="uck"><i></i><svg viewBox="0 0 15 15" aria-hidden="true"><path pathLength="1" d="M4.3 7.7 L6.5 9.9 L10.7 5.3"/></svg></span>';
+function cardDraft(rid, part, v){ return (v === undefined ? store('tapspace.card.' + rid + '.' + part) : store('tapspace.card.' + rid + '.' + part, v)) || ''; }
+function faceTitle(key, snap){                      // the words beside a face: a master's title, a tap's name, a project
+  snap = snap || {};
+  if (isAgent(key)) return titleOf(agentOf(key)) || String(snap.title || '');
+  const t = taps.items.find(x => x.key === key);
+  return t ? tapName(t) : String(snap.title || '').replace(/^\[[^\]]*\]\s*/, '');
+}
+function cardEl(m){
+  const c = m.card, el = document.createElement('div');
+  const shots = Array.isArray(c.images) ? c.images : [], act = cardAction(c), ask = cardAsk(c), hero = cardHero(c);
+  const items = hero ? [] : (Array.isArray(c.items) ? c.items : []).slice(0, 8);   // a decision card's one item is its face
+  el.className = 'msg them ucard' + (hero ? ' hero' : '');
+  el.dataset.card = m.rid;
+  el.innerHTML = `<div class="ucbody" role="group" aria-label="${esc(c.line)}"><div class="uchead"><span class="uface"></span>` +
+    `<span class="uctx"><span class="ucwho"></span><span class="uline">${esc(c.line)}</span></span></div>` +
+    (c.visual ? `<div class="ucvis">${visualHtml(c.visual)}</div>` : '') +
+    (items.length ? `<div class="ucitems">${items.map((it, i) => itemRow(it, c, i)).join('')}</div>` : '') +
+    (shots.length ? `<div class="ucshots${shots.length === 1 ? ' n1' : ''}">${shots.map((s, i) => shotHtml(m, s, i, !act)).join('')}</div>` : '') +
+    (act ? actHtml(m) : '') + (ask ? askHtml(m, ask) : '') + `</div><div class="meta2"></div>`;
+  el.querySelectorAll('.uwell img').forEach(im => {
+    im.addEventListener('error', () => { im.outerHTML = '<div class="gonenote">No picture</div>'; }, {once: true});
+    if (hero) im.addEventListener('load', () => {  // a picture at its own aspect grows the card: keep it in view if he was at the end
+      if (rendered.stick && msgsEl.scrollHeight - msgsEl.scrollTop - msgsEl.clientHeight < 120 + im.offsetHeight) revealCard(el, true);
+    }, {once: true});
+  });
+  return el;
+}
+function visualHtml(v){                             // beat 2: the one visual, at rest (contract section 1)
+  if (!v || typeof v !== 'object') return '';
+  if (v.kind === 'progress'){
+    const total = clampInt(v.total, 1, 999), done = clampInt(v.done, 0, total);
+    return `<div class="ubar${done >= total ? ' all' : ''}"><i style="width:${100 * done / total}%"></i></div>` +
+      `<span class="uvlabel">${v.label ? esc(String(v.label)) : `<b>${done} of ${total}</b>`}</span>`;
+  }
+  if (v.kind === 'timeline'){
+    const t = timeLine(v);
+    return !t.n ? '' : `<div class="upills" aria-hidden="true">${t.steps.map((s, i) =>
+      `<span class="upill${i < t.at ? ' on' : i === t.at ? ' now' : ''}" title="${esc(s)}">${CHECK}</span>`).join('')}</div>` +
+      `<span class="uvlabel"><b>${esc(t.count)}</b> · ${esc(t.text)}</span>`;
+  }
+  if (v.kind === 'graph'){
+    const d = sparkPath(v.points);
+    return !d ? '' : `<svg class="uspark" viewBox="0 0 320 36" aria-hidden="true"><line class="lb" x1="0" y1="35.5" x2="320" y2="35.5"/>` +
+      `<path class="ls" d="${d}"/></svg>` + (v.label ? `<span class="uvlabel">${esc(String(v.label))}</span>` : '');
+  }
+  return v.kind === 'word' && typeof v.text === 'string' && v.text.trim() ? `<div class="uword">${esc(v.text)}</div>` : '';
+}
+function itemFace(it, snap, kind, w){               // an item's face from the card's snapshot (w: as it was), never live, so its beat never jumps
+  const ref = String(it.ref || ''), st = ' style="--s:26px"';
+  if (isAgent(ref)){
+    const a = agents.find(x => agentKey(x.name) === ref);
+    return masterFace({look: (a || snap).look, state: (w && w.state) || it.state || snap.state || 'away'}, st);
+  }
+  if (ref.startsWith('project:') || kind === 'project') return face(ref, 26, snap);
+  const t = taps.items.find(x => x.key === ref), ph = (w && w.phase) || it.phase || snap.phase;
+  return tapAvatar({key: ref, repo: (t && t.repo) || ref.split('#')[0], initial: (t && t.initial) || snap.initial, status: '',
+                    phase: PHASES.has(ph) ? ph : 'done', replying: false}, st);
+}
+function itemRow(it, c, i){                         // beat 3: one thing that moved, as it stands now
+  it = it && typeof it === 'object' ? it : {};
+  const ref = String(it.ref || ''), snap = (c.faces || {})[ref] || {}, kind = it.kind || snap.kind || '';
+  let end = '';
+  if (kind === 'tap'){
+    const g = Array.isArray(it.goals) && it.goals.length === 2 ? it.goals : null, ph = PHASES.has(it.phase) ? it.phase : '';
+    end = (g ? `<span class="ucn">${+g[0]}/${+g[1]}</span>` : '') +
+      (ph ? `<span class="chip p-${ph}"><i></i>${esc(String(it.word || PHASE_WORD[ph]))}</span>` : '');
+  } else if (it.progress && typeof it.progress === 'object' && Array.isArray(it.progress.steps) && it.progress.steps.length){
+    const n = it.progress.steps.length, cur = clampInt(it.progress.current, 0, n);
+    end = `<span class="ubar${cur >= n ? ' all' : ''}"><i style="width:${100 * cur / n}%"></i></span><span class="ucn">${stepCount(cur, n)}</span>`;
+  }
+  const title = String(it.title || snap.title || '').replace(/^\[[^\]]*\]\s*/, '') || faceTitle(ref, snap);
+  return `<div class="uitem" data-k="${i}"><span class="uiface">${itemFace(it, snap, kind)}</span><span class="tx"><span class="nm">${esc(title)}</span>` +
+    (it.note ? `<span class="sub">${esc(String(it.note))}</span>` : '') + `</span>` + (end ? `<span class="uend">${end}</span>` : '') + `</div>`;
+}
+function drawHtml(v, uc){                           // the Not quite field: the Visual tab's drawer, its words and Send
+  return `<div class="ucdraw"><textarea maxlength="2000" placeholder="Tell the agent what to change…">${esc(v)}</textarea>` +
+    `<button type="button" class="send" data-uc="${uc}"${v.trim() ? '' : ' disabled'}>Send</button></div>`;
+}
+function shotHtml(m, s, i, decide){                 // beat 4: one picture; on a card without an action, Approve and Not quite under it
+  const src = String(m.images[i] || ''), label = String(s && s.label || 'Image ' + (i + 1));
+  return `<div class="uimg" data-image="${i}"><div class="uwell">` +
+    (CHAT_IMG.test(src) ? `<img src="${esc(src)}" alt="${esc(label)}" loading="lazy" decoding="async">` : '<div class="gonenote">No picture</div>') +
+    (decide ? `<div class="checkveil"><svg viewBox="0 0 76 76"><circle cx="38" cy="38" r="34"/><path d="M24 39.5 L34 49 L52 28"/></svg></div>` : '') +
+    `</div><div class="uclabel">${esc(label)}</div>` + (!decide ? '' :
+      `<div class="ucacts"><button type="button" class="btn approve" data-uc="approve">Approve</button><button type="button" class="btn notquite" data-uc="notquite">Not quite</button></div>` +
+      drawHtml(cardDraft(m.rid, 'n' + i), 'change') + `<div class="usays"></div>`) + `</div>`;
+}
+function actHtml(m){                                // contract A1: the card's one action, right under its pictures
+  return `<div class="uact"><div class="ucacts"><button type="button" class="btn approve" data-uc="accept">Accept</button>` +
+    `<button type="button" class="btn notquite" data-uc="notquite">Not quite</button></div><div class="ucconfirm"></div>` +
+    drawHtml(cardDraft(m.rid, 'deny'), 'deny') + `<div class="usays"></div></div>`;
+}
+function askHtml(m, ask){                           // beat 5: the question, its boxes, the text box and Send
+  let ticked = []; try{ ticked = JSON.parse(cardDraft(m.rid, 'checks') || '[]'); }catch(e){}
+  if (!Array.isArray(ticked)) ticked = [];
+  const checks = askChecks(ask);
+  return `<div class="uask"><div class="ucq">${esc(ask.q)}</div>` +
+    (checks.length ? `<div class="uchecks">${checks.map(x => { const on = ticked.includes(x.id);
+      return `<button type="button" class="ucheck${on ? ' on' : ''}" role="checkbox" aria-checked="${on}" data-c="${esc(x.id)}">${CHECK}<span>${esc(String(x.label || ''))}</span></button>`; }).join('')}</div>` : '') +
+    (ask.text ? `<textarea maxlength="2000" rows="1" placeholder="Your answer…">${esc(cardDraft(m.rid, 'text'))}</textarea>` : '') +
+    `<button type="button" class="send" data-uc="ask">Send</button><div class="usays"></div></div>`;
+}
+function paintCard(el, m, first){                   // state only: a card's content never changes (R1)
+  const c = m.card, s = m.cst, fk = String(c.face || current), snap = (c.faces || {})[fk] || {};
+  cardMsgs.set(m.id, m);
+  paintFace(el.querySelector('.uface'), fk, snap);
+  const who = fk === current ? '' : faceTitle(fk, snap);   // a card about someone else names them
+  setPart(el.querySelector('.ucwho'), who, esc(who));
+  el.querySelectorAll('.uimg').forEach(t => { if (t.querySelector('.ucacts')) paintShot(t, s.shots[+t.dataset.image] || {}, first); });
+  const ak = el.querySelector('.uask'); if (ak && s.ask) paintAsk(ak, s.ask, first);
+  const ac = el.querySelector('.uact'); if (ac && s.act) paintAct(ac, m, s.act, first);
+  const t = when(m.ts); setPart(el.querySelector(':scope > .meta2'), t, t);
+}
+function paintFace(slot, key, snap){                // the head face: live when this page knows it (never a loop), kept in place for its beat
+  const f = slot.firstElementChild;
+  if (isAgent(key) && f && f.classList.contains('orb')){
+    const a = agents.find(x => agentKey(x.name) === key) || {look: snap.look, state: snap.state || 'away'}, cls = orbCls(a);
+    if (f.className !== cls) f.className = cls;
+    const fs = a.look + '|' + a.state; if (f.dataset.fs !== fs){ f.dataset.fs = fs; f.innerHTML = faceArt(a.look, a.state); }
+    return;
+  }
+  const h = face(key, 0, snap); setPart(slot, h, h);
+}
+function says(box, v, words, first){                // the line under a picture, an action or the ask; a change of words swaps in
+  const el = box.querySelector(':scope > .usays');
+  el.className = 'usays' + (v === 'ok' ? ' on' : v === 'sent' ? ' usent' : '');
+  if (setPart(el, v + '|' + words, words) && !first) cardSwap(el);
+}
+const SENT = '<span class="sdot"></span>Sent';
+function paintShot(t, st, first){                   // an image's verdict: its buttons, Approved, Sent, or Not quite and the note
+  const v = st.verdict === 'approve' ? 'ok' : st.verdict === 'change' ? (st.pending ? 'sent' : 'no') : '', was = t.dataset.v;
+  t.dataset.v = v;
+  t.classList.toggle('answered', !!v);
+  const draw = t.querySelector('.ucdraw'), veil = t.querySelector('.checkveil');
+  if (v) draw.classList.remove('open');
+  else if (first && draw.querySelector('textarea').value.trim()) draw.classList.add('open');   // a note typed before a reload
+  if (v === 'ok' && !first && !was){              // Approve: the check draws, holds as the Visual card's does, then clears
+    clearTimeout(veil._t); veil.classList.remove('gone'); veil.classList.add('show');
+    veil._t = setTimeout(() => { veil.classList.add('gone'); veil._t = setTimeout(() => veil.classList.remove('show', 'gone'), 500); }, 1450);
+  }
+  if (v !== 'ok'){ clearTimeout(veil._t); veil.classList.remove('show', 'gone'); }
+  if (!v && was && !first) cardSwap(t.querySelector('.ucacts'));   // refused: the buttons come back
+  says(t, v, v === 'ok' ? CHECK + 'Approved' : v === 'sent' ? SENT : v === 'no' ? 'Not quite' + (st.note ? ': ' + esc(st.note) : '') : '', first);
+}
+function paintAct(ac, m, st, first){                // contract A1: Accept through the page's own Accept confirm, or Not quite
+  const tap = cardAction(m.card).tap, ui = cardUi.get(m.rid) || {};
+  const v = st.verdict === 'accept' || ui.accepted ? 'ok' : st.verdict === 'deny' ? (st.pending ? 'sent' : 'no') : '';
+  ac.classList.toggle('answered', !!v);
+  ac.classList.toggle('confirming', !v && !!ui.confirm);
+  const draw = ac.querySelector('.ucdraw');
+  if (v) draw.classList.remove('open');
+  else if (first && draw.querySelector('textarea').value.trim()) draw.classList.add('open');
+  const title = faceTitle(tap, (m.card.faces || {})[tap]) || 'this tap', ask = !v && ui.confirm;
+  setPart(ac.querySelector('.ucconfirm'), ask + '|' + title, !ask ? '' :
+    `<div class="stopask"><div>Accept <b>${esc(title)}</b>? It closes on GitHub as done.</div><div class="row">` +
+    `<button type="button" class="rbtn clear" data-uc="cancel">Cancel</button><button type="button" class="rbtn go" data-uc="confirm">Accept</button></div></div>`);
+  ac.querySelectorAll('.ucconfirm button').forEach(b => { b.disabled = !!ui.busy; });
+  const yes = ac.querySelector('[data-uc=confirm]'); if (yes) yes.textContent = ui.busy ? 'Accepting…' : 'Accept';
+  says(ac, v, v === 'ok' ? CHECK + (fresh(acceptAt[tap]) ? 'Accepted. It shows as Done in a moment.' : 'Accepted')
+    : v === 'sent' ? SENT : v === 'no' ? 'Not quite' + (st.note ? ': ' + esc(st.note) : '') : '', first);
+}
+function paintAsk(ak, st, first){
+  const boxes = [...ak.querySelectorAll('.ucheck')], txt = ak.querySelector('textarea');
+  if (st.done){                                     // the answer as sent (here or on another client)
+    boxes.forEach(b => { const on = st.checks.includes(b.dataset.c); b.classList.toggle('on', on); b.classList.remove('tick'); b.setAttribute('aria-checked', on); });
+    if (txt && txt.value !== st.text) txt.value = st.text;
+  }
+  boxes.forEach(b => { b.disabled = st.done; }); if (txt) txt.disabled = st.done;
+  ak.classList.toggle('answered', st.done);
+  syncAsk(ak);
+  says(ak, st.pending ? 'sent' : st.done ? 'done' : '', st.pending ? SENT : st.done ? 'Answered' : '', first);
+}
+function syncAsk(ak){                               // Send waits for a tick or words (contract 10)
+  const txt = ak.querySelector('textarea');
+  ak.querySelector('[data-uc=ask]').disabled = ak.classList.contains('answered') || !askReady(ak.querySelectorAll('.ucheck.on').length, txt && txt.value);
+}
+function cardSwap(x){                               // a word or line swapped in place: the pane head's swap, or a 0.2 s fade
+  if (!x) return;
+  if (cardRM.matches){ x.animate([{opacity: 0}, {opacity: 1}], {duration: 200, easing: 'ease-out'}); return; }
+  x.classList.remove('uswap'); void x.offsetWidth; x.classList.add('uswap');
+  clearTimeout(x._sw); x._sw = setTimeout(() => x.classList.remove('uswap'), 750);   // a later display flip never replays it
+}
+// First view (contract 10): a card plays its beats the first time it is on screen in the open, focused thread, when it
+// arrived live on this page or is newer than the thread's read mark as it stood when the thread opened. At most the newest
+// two play per open, once the open has settled; every other card is already at rest, as a played card ends.
+const CARD_SETTLE = 700;                  // ms after a thread opens: the head's swapin (#panehead.swap) has finished
+const cardsOnScreen = () => document.body.classList.contains('chatmode') && document.visibilityState === 'visible' && document.hasFocus();
+function showCards(opened){
+  if (!cardsOnScreen()) return;
+  const due = [];
+  for (const el of msgsEl.children){
+    const m = el.classList.contains('ucard') && cardMsgs.get(el.dataset.id);
+    if (!m || cardSeen.has(m.rid)) continue;
+    cardSeen.add(m.rid);
+    if (cardLive.has(m.rid) || (openMark.key === current && tms(m.ts) > openMark.at)) due.push([el, m]);
+  }
+  due.slice(-2).forEach(([el, m]) => {
+    if (!opened) return beginCard(el, m);
+    el.classList.add('wait');                     // out of sight until the open settles, then it arrives
+    setTimeout(() => { if (el.isConnected) beginCard(el, m); else cardSeen.delete(m.rid); }, CARD_SETTLE);
+  });
+}
+function beginCard(el, m){
+  el.classList.remove('wait');
+  if (rendered.stick) revealCard(el, false);
+  if (cardRM.matches){ el.animate([{opacity: 0}, {opacity: 1}], {duration: 200, easing: 'ease-out'}); return; }   // R9: one 0.2 s fade
+  el.classList.add('new');                          // beat 0: the shell arrives as a message (msgin)
+  playCard(el, m.card, cardParts(el, m));
+}
+// The newest card in view: one that fits sits at the end (end), one taller than the thread shows its head (face and line)
+// rather than its foot, so its first beats are seen.
+function revealCard(el, end){
+  const box = msgsEl.getBoundingClientRect(), r = el.getBoundingClientRect(), top = r.top - box.top + msgsEl.scrollTop;
+  if (msgsEl.scrollHeight - (top + r.height) > 120) return;                    // not the newest thing in the thread
+  if (r.height + 24 <= msgsEl.clientHeight){ if (end) scrollEnd(true); return; }
+  msgsEl.scrollTop = top - 12;
+}
+// The pieces playCard moves, each set where its beat starts: the bar at visual.from, a moved item as it was.
+function cardParts(el, m){
+  const c = m.card, q = s => el.querySelector(s), items = (Array.isArray(c.items) ? c.items : []).slice(0, 8);
+  const parts = {face: q('.uface > *'), line: q('.uline'), vlabel: q('.uvlabel'), word: q('.uword'), fill: null,
+    spark: q('.uspark .ls'), pills: [...el.querySelectorAll('.upill')], items: [], images: [...el.querySelectorAll('.uimg, .uact')], ask: q('.uask')};
+  const bar = q('.ucvis .ubar i'), v = c.visual;
+  if (bar && v.kind === 'progress'){ const total = clampInt(v.total, 1, 999);
+    parts.fill = {el: bar, to: bar.style.width}; snapWidth(bar, 100 * clampInt(v.from, 0, total) / total + '%'); }
+  el.querySelectorAll('.uitem').forEach(row => {
+    const it = items[+row.dataset.k] || {};
+    const p = {el: row, face: row.querySelector('.uiface > *'), now(){ this.face = itemLook(row, it, c, null, false); }};
+    if (cardMoved(it)) p.face = itemLook(row, it, c, it.was, true);
+    parts.items.push(p);
+  });
+  return parts;
+}
+function snapWidth(x, w){ x.style.transition = 'none'; x.style.width = w; void x.offsetWidth; x.style.transition = ''; }
+function itemLook(row, it, c, w, quiet){            // an item as it was (w) or as it is now; quiet sets it with no motion. Returns its face.
+  const ref = String(it.ref || ''), snap = (c.faces || {})[ref] || {}, kind = it.kind || snap.kind || '';
+  const slot = row.querySelector('.uiface'); slot.innerHTML = itemFace(it, snap, kind, w);
+  const word = (el, t) => { if (el && el.textContent !== t){ el.textContent = t; if (!quiet) cardSwap(el); } };
+  if (kind === 'tap'){
+    const ph = w && PHASES.has(w.phase) ? w.phase : it.phase, g = w && Array.isArray(w.goals) ? w.goals : it.goals, chip = row.querySelector('.chip');
+    if (chip && PHASES.has(ph)){ chip.className = 'chip p-' + ph; const t = ph === it.phase && it.word ? String(it.word) : PHASE_WORD[ph];
+      if (chip.lastChild.textContent !== t){ chip.lastChild.textContent = t; if (!quiet) cardSwap(chip); } }
+    if (Array.isArray(g) && g.length === 2) word(row.querySelector('.ucn'), +g[0] + '/' + +g[1]);
+  } else if (it.progress && Array.isArray(it.progress.steps)){
+    const n = it.progress.steps.length, cur = clampInt(w && 'current' in w ? w.current : it.progress.current, 0, n), bar = row.querySelector('.ubar');
+    if (bar && n){ bar.classList.toggle('all', cur >= n); const x = bar.firstElementChild, to = 100 * cur / n + '%';
+      if (quiet) snapWidth(x, to); else x.style.width = to; }
+    word(row.querySelector('.ucn'), stepCount(cur, n));
+  }
+  return slot.firstElementChild;
+}
+// The shared beats (contract 4, P7 2.1.3): CSS delays carry beats 1, 2, 4 and 5 under .play; the fill, the sparkline's
+// draw, the nods and the items' change beats run here. .play and the inline delays come off once every beat is done.
+function playCard(el, card, parts){
+  const t = cardTimes(card), M = window.tsPanel, moving = !!M && !M.still();
+  const delay = (x, ms) => { if (x) x.style.animationDelay = ms + 'ms'; };
+  delay(parts.line, t.line); delay(parts.vlabel, t.visual); delay(parts.word, t.visual);
+  parts.pills.forEach((p, i) => delay(p, t.pill(i)));
+  parts.items.forEach((it, i) => delay(it.el, t.item(i)));
+  parts.images.forEach((im, j) => delay(im, t.image(j)));
+  delay(parts.ask, t.ask);
+  el.classList.add('play');
+  const at = (ms, fn) => setTimeout(fn, ms);
+  if (moving && parts.face) at(100, () => M.nod(parts.face));                       // beat 1: ripple (CSS) + nod
+  if (parts.fill) at(t.visual, () => { parts.fill.el.style.width = parts.fill.to; }); // from -> done/total
+  if (parts.spark && moving){                                                        // hidden until it draws (makeGap's way)
+    parts.spark.style.opacity = '0';
+    at(t.visual, () => { parts.spark.style.opacity = ''; M.draw(parts.spark); });
+  }
+  for (const [i, ms] of t.change) at(ms, () => { const it = parts.items[i]; if (!it) return; it.now(); if (moving) M.nod(it.face); });
+  at(CARD_END, () => {
+    el.classList.remove('play', 'new');
+    el.querySelectorAll('[style*="animation-delay"]').forEach(x => { x.style.animationDelay = ''; });
+  });
+}
+// An answer: shown at once (the outbox), posted with a nonce, rolled back on a refusal, its "Sent" held at least 0.6 s,
+// then given way to the server's echo. Never the Visual tab's review route, never a tap route (R3, R5).
+async function answerCard(m, answer, done, fail){
+  const name = agentOf(current), o = {agent: name, nonce: newNonce('c' + m.rid), answer, ts: Date.now() / 1000, hold: Date.now() + SENT_HOLD};
+  outbox.push(o);
+  const a = agents.find(x => x.name === name); if (a) a.state = 'thinking';   // an answer keeps it thinking until it replies (R6)
+  renderThread(); renderRail();
+  const r = await postJ('/api/chat', {agent: name, nonce: o.nonce, answer});
+  if (!r.ok){ outbox.splice(outbox.indexOf(o), 1); renderThread(); if (fail) fail(); toast(r.error || 'Didn’t send. Is TapSpace still running?'); return; }
+  o.sent = Date.now(); if (done) done();
+  setTimeout(renderThread, Math.max(0, o.hold - Date.now()) + 30);   // the hold is over: the final words swap in
+  pollAgents(); pollChat();
+}
+// Contract A1: Accept goes through the guarded human route with the card's id; the server writes the answer row itself.
+async function acceptCard(m){
+  const tap = cardAction(m.card).tap, ui = cardUi.get(m.rid) || {};
+  cardUi.set(m.rid, ui); ui.busy = true; repaintCard(m.id);
+  const r = await postJ('/api/taps/accept', {key: tap, card: m.rid});
+  ui.busy = false; ui.confirm = false;
+  if (!r.ok){ repaintCard(m.id); toast('Couldn’t accept it: ' + (r.error || 'TapSpace said no')); return; }
+  ui.accepted = true; acceptAt[tap] = Date.now(); repaintCard(m.id);
+  setTimeout(pollTaps, 2500); setTimeout(pollTaps, 6000); pollChat();
+}
+function repaintCard(id){ const el = [...msgsEl.children].find(x => x.dataset.id === id), m = cardMsgs.get(id); if (el && m) paintCard(el, m, false); }
+msgsEl.addEventListener('click', e => {
+  const el = e.target.closest('.ucard'), m = el && cardMsgs.get(el.dataset.id);
+  if (!m) return;
+  const im = e.target.closest('.uwell img');
+  if (im){ openImage(im.src); lbcap.textContent = im.alt; return; }
+  const b = e.target.closest('[data-uc], .ucheck');
+  if (!b || b.disabled) return;
+  if (b.classList.contains('ucheck')){              // a tick: the disc pops and its check draws; remembered as a draft
+    const on = !b.classList.contains('on'), ak = b.closest('.uask');
+    b.classList.toggle('on', on); b.classList.toggle('tick', on); b.setAttribute('aria-checked', on);
+    clearTimeout(b._t); if (on) b._t = setTimeout(() => b.classList.remove('tick'), 600);
+    cardDraft(m.rid, 'checks', JSON.stringify([...ak.querySelectorAll('.ucheck.on')].map(x => x.dataset.c)));
+    syncAsk(ak);
+    return;
+  }
+  const t = b.closest('.uimg'), ac = b.closest('.uact'), i = t ? +t.dataset.image : -1, dr = (t || ac)?.querySelector('.ucdraw');
+  const note = () => dr.querySelector('textarea').value.trim(), ui = cardUi.get(m.rid) || {};
+  const uc = b.dataset.uc;
+  if (uc === 'approve') answerCard(m, {card: m.rid, image: i, verdict: 'approve'});
+  else if (uc === 'notquite'){
+    dr.classList.toggle('open');
+    if (dr.classList.contains('open')){ const x = dr.querySelector('textarea'); x.focus({preventScroll: true}); setTimeout(() => x.scrollIntoView({block: 'nearest', behavior: 'smooth'}), 460); }
+  } else if (uc === 'change' && note()) answerCard(m, {card: m.rid, image: i, verdict: 'change', note: note()},
+    () => cardDraft(m.rid, 'n' + i, ''), () => dr.classList.add('open'));
+  else if (uc === 'deny' && note()) answerCard(m, {card: m.rid, action: 'deny', note: note()},
+    () => cardDraft(m.rid, 'deny', ''), () => dr.classList.add('open'));
+  else if (uc === 'accept' || uc === 'cancel'){     // the page's Accept confirm, right under the picture
+    ui.confirm = uc === 'accept'; cardUi.set(m.rid, ui); if (ui.confirm) dr.classList.remove('open'); repaintCard(m.id);
+    el.querySelector(ui.confirm ? '[data-uc=cancel]' : '[data-uc=accept]')?.focus();
+  } else if (uc === 'confirm') acceptCard(m);
+  else if (uc === 'ask'){
+    const ak = b.closest('.uask'), ask = cardAsk(m.card) || {}, txt = ak.querySelector('textarea'), a = {card: m.rid};
+    if (askChecks(ask).length) a.checks = [...ak.querySelectorAll('.ucheck.on')].map(x => x.dataset.c);
+    if (ask.text && txt && txt.value.trim()) a.text = txt.value.trim();
+    answerCard(m, a, () => { cardDraft(m.rid, 'text', ''); cardDraft(m.rid, 'checks', ''); });
+  }
+});
+msgsEl.addEventListener('input', e => {             // drafts: a note or an answer being typed survives the page's self-reload
+  const x = e.target, el = x.tagName === 'TEXTAREA' && x.closest('.ucard'), m = el && cardMsgs.get(el.dataset.id);
+  if (!m) return;
+  const t = x.closest('.uimg'), ac = x.closest('.uact'), ak = x.closest('.uask');
+  if (t || ac){ cardDraft(m.rid, t ? 'n' + t.dataset.image : 'deny', x.value); x.parentElement.querySelector('.send').disabled = !x.value.trim(); return; }
+  cardDraft(m.rid, 'text', x.value);
+  x.style.height = 'auto'; x.style.height = Math.min(x.scrollHeight, 160) + 'px';
+  syncAsk(ak);
+});
+msgsEl.addEventListener('keydown', e => {           // Cmd or Ctrl + Enter sends from a card's box; Escape folds the note or the confirm away
+  const x = e.target, el = x.closest && x.closest('.ucard'); if (!el) return;
+  if (x.tagName === 'TEXTAREA' && e.key === 'Enter' && (e.metaKey || e.ctrlKey)){ e.preventDefault(); x.closest('.ucdraw, .uask').querySelector('.send')?.click(); }
+  else if (e.key === 'Escape' && x.closest('.ucdraw')) x.closest('.ucdraw').classList.remove('open');
+  else if (e.key === 'Escape' && x.closest('.ucconfirm')) el.querySelector('[data-uc=cancel]')?.click();
+});
+/* ---- end update cards ---- */
+
 function nearEnd(){ return msgsEl.scrollHeight - msgsEl.scrollTop - msgsEl.clientHeight < 120; }
 function scrollEnd(instant){
   if (instant){ msgsEl.style.scrollBehavior = 'auto'; msgsEl.scrollTop = msgsEl.scrollHeight; msgsEl.style.scrollBehavior = ''; }
@@ -1460,7 +2025,7 @@ function renderThread(){
   if (!d){
     const first = railOrder(agents)[0];   // a fresh page opens on the lead (taps only once the agents have answered)
     const fall = first ? agentKey(first.name) : (agentsLoaded && taps.items[0] ? taps.items[0].key : '');
-    if (fall && fall !== current){ current = fall; return renderThread(); }
+    if (fall && fall !== current){ current = fall; openMark = {key: fall, at: readAt(fall)}; return renderThread(); }
     head.innerHTML = ''; goalsEl.innerHTML = ''; head.dataset.sig = ''; renderAct(null);
     msgsEl.innerHTML = `<div class="hello"><div class="big">The space is open.</div>Agents join with <code>tap.py listen --as NAME</code>. Your taps show up here on their own.</div>`;
     rendered = {key: '', sig: ''}; return;
@@ -1470,42 +2035,64 @@ function renderThread(){
   ta.placeholder = d.agent ? 'Message ' + (d.agent.title || 'Claude') + '…' : asking ? 'Answer this tap…' : 'Message this tap…';
   attachBtn.classList.toggle('hide', !d.agent);
   syncSend();
-  const sig = current + '|' + d.msgs.map(m => m.id + (m.seen ? 's' : '') + (m.pending ? 'p' : '') + ((m.images || []).length) + (m.via ? '@' + titleOf(m.via) : '')).join(',') + '|' + d.typing + '|' + d.switching +
-    (d.tap && hasPhase(d.tap) ? '|' + tapWord(d.tap) : '');
-  if (sig === rendered.sig) return;
-  const switched = rendered.key !== current;
+  // The open agent thread's rows have been fetched (P7 2.1.1, the Mac's rule): until then a render is the open itself, so
+  // the first fetch is history and never blurs in row by row.
+  const loaded = !d.agent || chat.agent === d.agent.name;
+  const sig = current + '|' + d.msgs.map(m => m.id + (m.seen ? 's' : '') + (m.pending ? 'p' : '') + ((m.images || []).length) +
+    (m.via ? '@' + titleOf(m.via) : '') + (m.cst ? '#' + JSON.stringify(m.cst) : '')).join(',') + '|' + d.typing + '|' + d.switching +
+    (d.tap && hasPhase(d.tap) ? '|' + tapWord(d.tap) : '') + (d.agent ? '|' + d.agent.state + '|' + d.agent.look : '');
+  if (sig === rendered.sig){ if (loaded) rendered.loaded = true; showCards(false); return; }
+  const switched = rendered.key !== current || !rendered.loaded;
   const stick = switched || nearEnd();
-  const known = switched ? null : new Set([...msgsEl.querySelectorAll('.msg')].map(e => e.dataset.id));
-  msgsEl.innerHTML = '';
+  if (switched){ msgsEl.innerHTML = ''; cardMsgs.clear(); }
+  // Nodes are keyed (a row by its nonce or id, the tail by name) and kept: a refresh, a typing flip or a new row never
+  // rebuilds one, so a half-typed note, a ticked box and a running entrance all survive. Only a new node enters.
+  const have = new Map([...msgsEl.children].map(el => [el.dataset.id, el])), want = [];
+  const node = (id, make) => { let el = have.get(id); if (!el){ el = make(); el.dataset.id = id; } want.push(el); return el; };
+  const div = (cls, html) => () => { const el = document.createElement('div'); el.className = cls; if (html) el.innerHTML = html; return el; };
   if (!d.msgs.length){
-    msgsEl.innerHTML = d.agent
-      ? `<div class="hello"><div class="big">Hey.</div>A direct line to ${esc(d.agent.title || 'Claude')}. Say anything.</div>`
+    const h = node('~hello', div('hello')), html = d.agent
+      ? `<div class="big">Hey.</div>A direct line to ${esc(d.agent.title || 'Claude')}. Say anything.`
       : hasPhase(d.tap)
-      ? `<div class="hello"><div class="big">${esc(tapWord(d.tap))}.</div>${d.tap.phase === 'proposed' ? 'This tap hasn’t flown yet.' : 'This tap hasn’t said anything yet. It posts its plan here when it takes off.'}</div>`
-      : `<div class="hello"><div class="big">Boarding.</div>This tap hasn’t said anything yet. It posts its plan here when it takes off.</div>`;
+      ? `<div class="big">${esc(tapWord(d.tap))}.</div>${d.tap.phase === 'proposed' ? 'This tap hasn’t flown yet.' : 'This tap hasn’t said anything yet. It posts its plan here when it takes off.'}`
+      : `<div class="big">Boarding.</div>This tap hasn’t said anything yet. It posts its plan here when it takes off.`;
+    setPart(h, html, html);
   }
   for (const m of d.msgs){
-    const el = document.createElement('div');
-    el.className = 'msg ' + m.who + (known && !known.has(m.id) ? ' new' : '');
-    el.dataset.id = m.id;
-    let meta = when(m.ts);
-    const via = m.via ? titleOf(m.via) : '';   // the sender's title; never its hidden name
-    if (m.who === 'you' && !d.agent) meta += (via ? ' · via ' + esc(via) : '') + (m.pending ? ' · sending' : (m.seen ? ' · <span class="seen">seen 👀</span>' : ' · delivered'));
-    const imgs = m.images || [];
-    const grid = imgs.length ? `<div class="imgs ${imgs.length > 4 ? 'nmany' : 'n' + imgs.length}">${imgs.map(u => `<img src="${esc(u)}" alt="" loading="lazy">`).join('')}</div>` : '';
-    el.innerHTML = grid + (m.body ? `<div class="bub">${md(m.body)}</div>` : '') + `<div class="meta2">${meta}</div>`;
-    msgsEl.appendChild(el);
+    const fresh = !have.has(m.id);
+    const el = node(m.id, () => m.card ? cardEl(m) : msgEl(m));
+    if (m.card){ if (fresh && !switched) cardLive.add(m.rid); paintCard(el, m, fresh); continue; }   // its beats wait for first view
+    if (fresh && !switched){ el.classList.add('new'); setTimeout(() => el.classList.remove('new'), 900); }   // a kept node never replays it
+    paintMsg(el, m, d);
   }
-  if (d.switching){ const sw = document.createElement('div'); sw.className = 'switchline'; sw.innerHTML = '<i></i>Switching car'; msgsEl.appendChild(sw); }
-  if (d.typing){ const ty = document.createElement('div'); ty.className = 'typing'; ty.innerHTML = '<span></span><span></span><span></span>'; msgsEl.appendChild(ty);
-    if (d.tap){ const n = document.createElement('div'); n.className = 'msg them'; n.innerHTML = '<div class="meta2">working on a reply</div>'; msgsEl.appendChild(n); } }
-  rendered = {key: current, sig};
+  if (d.switching) node('~switch', div('switchline', '<i></i>Switching car'));
+  if (d.typing){
+    node('~typing', div('typing', '<span></span><span></span><span></span>'));
+    if (d.tap) node('~typingnote', div('msg them', '<div class="meta2">working on a reply</div>'));
+  }
+  const keep = new Set(want);
+  [...msgsEl.children].forEach(el => keep.has(el) || el.remove());     // gone nodes first, so kept ones never re-insert
+  want.forEach((el, i) => { if (msgsEl.children[i] !== el) msgsEl.insertBefore(el, msgsEl.children[i] || null); });
+  rendered = {key: current, sig, loaded, stick};
   if (stick) scrollEnd(switched);
   if (document.body.classList.contains("chatmode")) markRead(current);
+  showCards(switched);
+}
+function msgEl(m){ const el = document.createElement('div'); el.className = 'msg ' + m.who; return el; }
+function paintMsg(el, m, d){                        // a bubble: its words and pictures, then its meta line (the only part that ages)
+  const imgs = m.images || [], c = imgs.join(' ') + '\n' + m.body;
+  if (el.dataset.c !== c){ el.dataset.c = c;
+    const grid = imgs.length ? `<div class="imgs ${imgs.length > 4 ? 'nmany' : 'n' + imgs.length}">${imgs.map(u => `<img src="${esc(String(u))}" alt="" loading="lazy">`).join('')}</div>` : '';
+    el.innerHTML = grid + (m.body ? `<div class="bub">${md(m.body)}</div>` : '') + '<div class="meta2"></div>'; }
+  let meta = when(m.ts);
+  const via = m.via ? titleOf(m.via) : '';   // the sender's title; never its hidden name
+  if (m.who === 'you' && !d.agent) meta += (via ? ' · via ' + esc(via) : '') + (m.pending ? ' · sending' : (m.seen ? ' · <span class="seen">seen 👀</span>' : ' · delivered'));
+  setPart(el.lastElementChild, meta, meta);
 }
 
 function openThread(key){
   current = key; store('tapspace.thread', key);
+  openMark = {key, at: readAt(key)};   // before this open marks it read: newer cards play on first view
   if (!isAgent(key)) fetch('/api/taps/refresh', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({key})});
   markRead(key); if (isAgent(key)) readNotes(agentOf(key));
   renderRail(); window.tsPanel?.render(agents, links); restoreDraft();   // the opened card's reply dot clears now, not on the next poll
@@ -1529,13 +2116,21 @@ $('#composer').addEventListener('submit', async e => {
   if (shots.length){ pending = []; renderTray(); }
   const post = (url, obj) => fetch(url, {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(obj)}).then(r => r.json());
   if (isAgent(key)){
-    const name = agentOf(key);
-    chat.messages.push({id: (chat.messages.at(-1)?.id || 0) + 0.5, role:'you', body, ts: Date.now()/1000, images: shots.map(p => p.url)});
+    // on the outbox with a nonce, so the server's echo keeps this bubble's node (one entrance, never two)
+    const name = agentOf(key), o = {agent: name, nonce: newNonce('w'), body, images: shots.map(p => p.url), ts: Date.now() / 1000};
+    outbox.push(o);
     const a = agents.find(x => x.name === name); if (a) a.state = 'thinking';
     renderThread(); renderRail(); scrollEnd();
     const images = await Promise.all(shots.map(async p => p.served ? {url: p.served} : ({b64: await fileB64(p.file), ext: extOf(p.file)})));
-    const r = await post('/api/chat', {agent: name, body, images}).catch(() => ({}));
-    if (!r.ok) toast(r.error || 'Didn’t send. Is TapSpace still running?');
+    const r = await post('/api/chat', {agent: name, body, images, nonce: o.nonce}).catch(() => ({}));
+    if (!r.ok){                                     // not sent: the bubble goes and the words and pictures come back
+      outbox.splice(outbox.indexOf(o), 1); renderThread();
+      toast(r.error || 'Didn’t send. Is TapSpace still running?');
+      if (current === key){ if (!ta.value){ ta.value = body; store('tapspace.draft.' + key, body); }
+        if (shots.length){ pending = shots.concat(pending).slice(0, 10); renderTray(); } syncSend(); }
+      return;
+    }
+    o.sent = Date.now();
     pollAgents(); pollChat();
   } else {
     const s = {key, body, ts: Date.now()}; sending.push(s); renderThread(); scrollEnd();
@@ -1613,6 +2208,7 @@ async function pollAgents(){
   // while he looked).
   const key = current, had = agentsLoaded && isAgent(key) ? newestNote(agentOf(key)) : null;
   agents = d.agents; links = Array.isArray(d.links) ? d.links : []; agentsLoaded = true;
+  /* W2 (contract sections 5 and 6): the served fleet and focus land here (d.fleet, d.focus). */
   // A note that lands while its master's thread is open and the page is in front is read at once. Rows already listed
   // wait for an explicit open: switching to Chat or the window coming forward never reads them.
   if (had !== null && current === key && document.body.classList.contains("chatmode") && document.hasFocus() &&
@@ -1624,6 +2220,11 @@ async function pollChat(){
   if (!isAgent(current)) return;
   const name = agentOf(current);
   try{ const d = await (await fetch('/api/chat?agent=' + encodeURIComponent(name))).json(); chat = {agent: name, messages: d.messages}; }catch(e){ return; }
+  const said = new Set(chat.messages.map(r => r.nonce).filter(Boolean));   // the server has these: their outbox rows go
+  for (let i = outbox.length - 1; i >= 0; i--){
+    const o = outbox[i];
+    if (o.agent === name && ((said.has(o.nonce) && Date.now() >= (o.hold || 0)) || (o.sent && Date.now() - o.sent > 120000))) outbox.splice(i, 1);
+  }
   renderRail(); renderThread();
 }
 async function pollTaps(){
@@ -1635,7 +2236,8 @@ setInterval(() => {
   const n = document.querySelectorAll('#space .card:not(.changes):not(.out)').length;
   const b = $('#badge-visual'); b.textContent = n; b.classList.toggle('show', n > 0);
 }, 1500);
-window.addEventListener('focus', () => { if (document.body.classList.contains("chatmode")) { markRead(current); renderRail(); } });
+window.addEventListener('focus', () => { if (document.body.classList.contains("chatmode")) { markRead(current); renderRail(); showCards(false); } });
+document.addEventListener('visibilitychange', () => showCards(false));   // a card that landed while the page was hidden plays when it shows
 window.addEventListener('resize', () => placePill(true));   // not setTab: that re-ran the read and the jump to the newest message
 
 const start = location.hash === '#chat' || location.hash === '#visual' ? location.hash.slice(1) : (store('tapspace.tab') || 'visual');
@@ -1886,6 +2488,10 @@ function nod(el){
   if (still()) return;
   A.animate(el, {scale: [1, 1.025, 1], duration: 520, ease: 'out(3)', onComplete: () => { el.style.transform = ''; }});
 }
+function draw(el){                        // a stroke draws itself on: the link's draw-on (makeGap), for an update card's sparkline
+  if (still()) return;
+  try{ A.animate(A.svg.createDrawable(el), {draw: ['0 0', '0 1'], duration: 700, ease: 'out(3)'}); }catch(e){}
+}
 function setText(el, t){ if (el.textContent !== t) el.textContent = t; }
 
 // The connectors follow the cards for `ms` (a glide, a gap opening or closing), frame by frame, and only while the
@@ -2096,7 +2702,7 @@ NARROW.addEventListener('change', syncMotion);
 RM.addEventListener('change', syncMotion);
 document.addEventListener('visibilitychange', syncMotion);
 
-window.tsPanel = {render};
+window.tsPanel = {render, nod, draw, still};   // script 2's update cards nod and draw through these (no-ops when still)
 render(agents, links);
 </script>
 </body>
