@@ -5,6 +5,7 @@ Runs server.py in-process on an ephemeral port with a throwaway data dir: never 
 live data, never a real push. Stdlib only.
     python3 tests/test_agents_api.py -v        (or: python3 -m unittest discover -s tests -v)
 """
+import base64
 import importlib.util
 import io
 import json
@@ -825,6 +826,114 @@ class TapButtonTests(unittest.TestCase):
             a, _ = srv.accept()
             with a:
                 self.assertEqual(S._socket_owners(*c.getsockname()), {os.getpid()})
+
+
+class ProofCardTests(unittest.TestCase):
+    """A landed tap's proof images become Visuals cards on their own (_proof_cards, run after every tap
+    refresh): one card per image, never a second one, a replaced image is a new version, and a card
+    already posted with the same bytes is adopted. The proof proxy is a fake that records each fetch."""
+
+    def setUp(self):
+        self.saved = (S._proof_image, S.TAPS["items"])
+        self.key = f"Org/repo-{uuid.uuid4().hex[:6]}#12"
+        self.images, self.fetches = {}, []
+
+        def image(key, i):
+            self.fetches.append(i)
+            if self.images.get(i) is None:
+                raise RuntimeError("GitHub did not hand it over")
+            return self.images[i], "image/png", f"https://github.com/user-attachments/assets/{i}"
+        S._proof_image = image
+
+    def tearDown(self):
+        S._proof_image, S.TAPS["items"] = self.saved
+
+    def tap(self, phase, *proof):
+        """Serves one tap whose proof is [(alt, v, bytes)], the way _tap and _proof shape it."""
+        self.images.update({i: raw for i, (_, _, raw) in enumerate(proof)})
+        S.TAPS["items"] = [{"key": self.key, "title": "Lineup cards read Lineup: Team", "phase": phase,
+                            "proof": [{"url": f"/api/taps/proof?key=k&i={i}&v={v}", "alt": alt}
+                                      for i, (alt, v, _) in enumerate(proof)]}]
+
+    def cards(self):
+        live = [t for t in call("/api/state")[1]["tickets"] if (t.get("proof") or {}).get("key") == self.key]
+        return sorted(live, key=lambda t: t["proof"]["i"])
+
+    def shot(self, t, v):
+        return (S.SHOTS / t["id"] / f"{v}.png").read_bytes()
+
+    def test_each_image_once_however_many_refreshes(self):
+        a, b = os.urandom(64), os.urandom(64)
+        self.tap("landed", ("MLB page reads Lineup: Orioles", "e6527aab", a), ("", "b91677f5", b))
+        for _ in range(3):
+            S._proof_cards()
+        c = self.cards()
+        self.assertEqual([(t["version"], t["status"], t["title"]) for t in c],
+                         [(1, "waiting", "MLB page reads Lineup: Orioles"), (1, "waiting", "Lineup cards read Lineup: Team")])
+        self.assertEqual((c[0]["agent"], c[0]["campaign"], c[0]["versions"][0]["ext"]),
+                         (self.key.split("/")[1], self.key, "png"))
+        self.assertEqual((self.shot(c[0], 1), self.shot(c[1], 1)), (a, b))
+        self.assertEqual(sorted(self.fetches), [0, 1])          # each image fetched once, then known
+
+    def test_a_replaced_image_is_a_new_version_of_its_card(self):
+        a, b, b2 = os.urandom(64), os.urandom(64), os.urandom(64)
+        self.tap("landed", ("one", "11111111", a), ("two", "22222222", b))
+        S._proof_cards()
+        first = self.cards()
+        self.assertEqual(decide(first[1]["id"], "approve")[0], 200)
+        self.tap("landed", ("one", "11111111", a), ("two, retaken", "33333333", b2))
+        S._proof_cards()
+        S._proof_cards()
+        c = self.cards()
+        self.assertEqual([t["id"] for t in c], [t["id"] for t in first])
+        self.assertEqual([(t["version"], t["status"]) for t in c], [(1, "waiting"), (2, "waiting")])
+        self.assertEqual((c[1]["title"], self.shot(c[1], 1), self.shot(c[1], 2)), ("two, retaken", b, b2))
+
+    def test_only_a_landed_tap(self):
+        for phase in ("proposed", "enroute", "holding", "done", "closed"):
+            self.tap(phase, ("one", "11111111", os.urandom(64)))
+            S._proof_cards()
+        self.assertEqual((self.cards(), self.fetches), ([], []))
+
+    def test_an_image_github_does_not_hand_over_is_tried_again(self):
+        self.tap("landed", ("one", "11111111", None))
+        S._proof_cards()
+        self.assertEqual(self.cards(), [])
+        self.images[0] = os.urandom(64)
+        S._proof_cards()
+        self.assertEqual(len(self.cards()), 1)
+
+    def test_a_card_posted_by_hand_with_the_same_bytes_is_adopted(self):
+        a = os.urandom(64)
+        code, r = call("/api/post", {"agent": "Lineup titles tap", "title": "MLB lineup card", "campaign": "Simulator tap",
+                                     "image_b64": base64.b64encode(a).decode()})
+        self.assertEqual(code, 200)
+        self.tap("landed", ("MLB page", "11111111", a), ("Soccer page", "22222222", os.urandom(64)))
+        S._proof_cards()
+        S._proof_cards()
+        c = self.cards()
+        self.assertEqual([(t["id"], t["title"], t["version"]) for t in c][0], (r["id"], "MLB lineup card", 1))
+        self.assertEqual(len(c), 2)
+        self.assertEqual(stored(r["id"])["proof"], {"key": self.key, "i": 0, "v": "11111111"})
+
+    def test_the_lead_owns_it_and_hears_the_notes(self):
+        self.tap("landed", ("one", "11111111", os.urandom(64)))
+        S._proof_cards()
+        self.assertEqual((self.cards()[0]["owner"], self.cards()[0]["owner_how"]), (None, None))
+        lead = name("lead")
+        join(lead)
+        S._set_lead(lead)
+        try:
+            t = self.cards()[0]
+            self.assertEqual((t["owner"], t["owner_how"]), (lead, "lead"))
+            self.assertEqual(decide(t["id"])[0], 200)
+            event = json.loads(S.INBOX.read_text().splitlines()[-1])
+            self.assertEqual((event["ticket"], event["owner"], event["campaign"]), (t["id"], lead, self.key))
+        finally:
+            with S._lock:
+                a = S._agents()
+                a[lead].pop("role", None)
+                S._agents_write(a)
 
 
 class CompatTests(unittest.TestCase):

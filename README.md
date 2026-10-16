@@ -111,6 +111,12 @@ Older cards fall back to the master already known for their campaign, or to an e
 master's title. A lane in its own process (`claude -p`, Codex, a separate tmux session) or outside Claude Code (a plain
 terminal, a background job) adds `--owner "NAME"`; only lanes inside the master's own Claude Code process land by themselves.
 
+**A tap's proof.** When a tap lands, the server turns each picture in its issue body into a card by itself, stored like a
+posted one: one card per picture (the tap key and the picture's place in the body), labeled with the tap (`snapp-ios#1583`),
+titled with the picture's alt text, campaign = the tap key, the tap's title as the note. It waits for you like any card. A
+pilot replacing a picture adds a version to that card, never a second card, and a card already posted with the same bytes is
+taken over instead of repeated. Its owner is the lead (`owner_how` `lead`), which files the taps and passes your notes on.
+
 ## HTTP API (for agents that aren't Python)
 
 `tap.py` wraps five of the endpoints below (`post`, `update`, `ticket`, `state`, `activity`); direct HTTP integrators have the full table. Any agent that can make HTTP requests can integrate.
@@ -129,7 +135,7 @@ terminal, a background job) adds `--owner "NAME"`; only lanes inside the master'
 `image_b64` must be the raw base64 of PNG bytes, and `video_b64` of mp4/mov bytes, with **no `data:` URI prefix**. The server stores what you send without validating or converting the format, and a prefixed or malformed string fails that request without a clean JSON error.
 
 Tickets in `/api/state` and `/api/ticket/<id>` carry `owner` (the master's chat NAME, or null) and `owner_how` (`session`,
-`pid`, `campaign`, `title`, `explicit`, or null). To file a card under its master over plain HTTP, send the poster's
+`pid`, `campaign`, `title`, `explicit`, `lead`, or null). To file a card under its master over plain HTTP, send the poster's
 `X-Claude-Session: <session id>` and `X-Claude-Pid: <claude pid>` headers with `/api/post` and `/api/update`, or pass `owner`.
 A ticket's `session` is internal bookkeeping; no client shows it.
 

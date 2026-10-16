@@ -730,7 +730,8 @@ def _owner_at_write(p, who, ix):
 def _owner_of(t, ix):
     """(NAME, how) a card is served with: the owner stored when it was posted, else the session it
     was posted from (claimed later), else the one master its campaign is known for, else the one
-    agent whose title or NAME is its label. Reads only; (None, None) when nothing says."""
+    agent whose title or NAME is its label, else, for a tap's proof card, the lead (it files the taps
+    and speaks to them). Reads only; (None, None) when nothing says."""
     if t.get("owner"):
         return t["owner"], t.get("owner_how")
     s = ix["sessions"].get(t.get("session") or "")
@@ -740,7 +741,10 @@ def _owner_of(t, ix):
     if len(names) == 1:
         return names[0], "campaign"
     hit = _match_agent(t.get("agent"), ix["agents"])
-    return (hit, "title") if hit else (None, None)
+    if hit:
+        return hit, "title"
+    lead = t.get("proof") and next((n for n, a in ix["agents"].items() if a.get("role") == "lead"), None)
+    return (lead, "lead") if lead else (None, None)
 
 
 def _learn_campaign(campaign, owner):
@@ -1637,6 +1641,59 @@ def _refresh_hot():
     _publish(items)
 
 
+def _holds(t, raw):
+    """Whether ticket t's current version is exactly these bytes."""
+    e = next((e for e in t.get("versions", []) if e.get("v") == t["version"]), {})
+    try:
+        f = SHOTS / t["id"] / f"{t['version']}.{e.get('ext') or 'png'}"
+        return f.stat().st_size == len(raw) and f.read_bytes() == raw
+    except OSError:
+        return False
+
+
+def _proof_cards():
+    """Each proof image of a landed tap becomes a Visuals card, stored the way /api/post stores one and
+    waiting for the reviewer: one card per image (tap key, index), and the pilot replacing an image (a new
+    v) adds a version to that card, never a second card. A card that already shows the same bytes (posted
+    by hand) is adopted instead. An image GitHub does not hand over is tried again on the next refresh."""
+    todo = [(t, i, p["url"].rsplit("&v=", 1)[1]) for t in TAPS["items"] if t["phase"] == "landed"
+            for i, p in enumerate(t["proof"])]
+    if not todo:
+        return
+    with _lock:
+        have = {(c["proof"]["key"], c["proof"]["i"]): c["proof"]["v"] for c in _load()["tickets"] if c.get("proof")}
+    for t, i, v in todo:
+        if have.get((t["key"], i)) == v:
+            continue
+        try:
+            raw, ctype, _ = _proof_image(t["key"], i)
+        except Exception:
+            continue
+        with _lock:
+            state = _load()
+            card = next((c for c in state["tickets"] if c.get("proof", {}).get("key") == t["key"]
+                         and c["proof"]["i"] == i), None) or \
+                next((c for c in state["tickets"] if not c.get("proof") and _holds(c, raw)), None)
+            if card is None:
+                card = {"id": uuid.uuid4().hex[:10], "agent": t["key"].split("/", 1)[1], "title": "",
+                        "campaign": t["key"], "created": time.time(), "version": 0, "versions": [],
+                        "status": "waiting", "decisions": [], "owner": None, "owner_how": None, "session": None}
+                state["tickets"].append(card)
+            new = not _holds(card, raw)
+            if new:
+                card["version"] += 1
+                ext = _PROOF_TYPES[ctype][1:]
+                (SHOTS / card["id"]).mkdir(parents=True, exist_ok=True)
+                (SHOTS / card["id"] / f"{card['version']}.{ext}").write_bytes(raw)
+                card["versions"].append({"v": card["version"], "note": t["title"], "ts": time.time(),
+                                         "media": "image", "ext": ext})
+                card["title"], card["status"] = t["proof"][i]["alt"] or t["title"], "waiting"
+            card["proof"] = {"key": t["key"], "i": i, "v": v}
+            _save(state)
+        if new:
+            _push("New visual", card["title"], kind="needs_you", id=card["id"])
+
+
 TAP_FLY_LABEL = {"color": "0e8a16", "description": "Flightdeck: fly this journey without a tap (capped, never auto-accepted)"}
 
 
@@ -1742,6 +1799,7 @@ def _taps_loop():
                 last_full = time.time()
             else:
                 _refresh_hot()
+            _proof_cards()
         except Exception as e:
             TAPS["error"] = str(e)
         _taps_kick.wait(TAP_HOT_EVERY if HOT else TAP_REFRESH - (time.time() - last_full))

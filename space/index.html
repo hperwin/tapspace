@@ -702,8 +702,8 @@ async function highlightChanges(el, t){
   if ((cur.media || 'image') !== 'image' || (prev.media || 'image') !== 'image') return;
   try{
     const regions = await diffRegions(
-      '/shots/' + t.id + '/' + (t.version-1) + '.png',
-      '/shots/' + t.id + '/' + t.version + '.png');
+      '/shots/' + t.id + '/' + (t.version-1) + '.' + (prev.ext || 'png'),
+      '/shots/' + t.id + '/' + t.version + '.' + (cur.ext || 'png'));
     if (regions) regionCache.set(t.id, regions);
     paintHighlights(el, regions);
   }catch(e){ /* highlight is best-effort, never block the card */ }
@@ -716,7 +716,7 @@ const lbimg = document.getElementById('lbimg');
 const lbcap = document.getElementById('lbcap');
 
 function openLightbox(t){
-  lbimg.src = '/shots/' + t.id + '/' + t.version + '.png';
+  lbimg.src = '/shots/' + t.id + '/' + t.version + '.' + (verEntry(t, t.version).ext || 'png');
   lbcap.textContent = t.agent + ' · ' + t.title + ' · v' + t.version;
   lbstage.querySelectorAll('.hls').forEach(h => h.remove());
   lightbox.classList.add('open');
