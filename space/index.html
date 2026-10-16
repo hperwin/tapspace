@@ -223,6 +223,7 @@
   .railempty{font-size:12px;color:var(--faint);padding:8px 12px;line-height:1.5}
   /* rail: under each agent, who it is talking with and the cards you sent it change notes on */
   .agrp{display:flex;flex-direction:column}
+  .agrp.child{margin-left:20px}   /* a master under the lead: the row, its lines and its Spin down shift together */
   .agrp .talk{display:flex;align-items:center;gap:6px;min-width:0;padding:0 12px 4px 62px;font-size:11px;color:rgb(var(--hl))}
   .agrp .talk[hidden]{display:none}
   .agrp .talk span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -1141,6 +1142,13 @@ function syncNotes(box, key, notes){
   if (more){ if (!m){ m = document.createElement('div'); m.className = 'more'; box.appendChild(m); } m.textContent = '+' + more + ' more'; }
   else if (m) m.remove();
 }
+// the lead first, then the masters under it, then the rest; each block keeps the server's order (working first, then newest)
+function railOrder(list){
+  const lead = list.find(a => a.role === 'lead');
+  if (!lead) return list;
+  const under = a => a !== lead && a.parent === lead.name;
+  return [lead, ...list.filter(under), ...list.filter(a => a !== lead && !under(a))];
+}
 function syncAgents(){
   const box = $('#agentlist');
   if (!agents.length){ box.innerHTML = `<div class="railempty">No agents in the space yet. Any agent joins with tap.py listen --as NAME.</div>`; return; }
@@ -1150,7 +1158,8 @@ function syncAgents(){
   const keys = new Set(agents.map(a => agentKey(a.name)));
   const have = new Map();
   [...box.children].forEach(el => keys.has(el.dataset.key) ? have.set(el.dataset.key, el) : el.remove());
-  agents.forEach((a, i) => {
+  const order = railOrder(agents), lead = order[0] && order[0].role === 'lead' ? order[0] : null;
+  order.forEach((a, i) => {
     const key = agentKey(a.name);
     let g = have.get(key);
     if (!g){
@@ -1167,6 +1176,8 @@ function syncAgents(){
       g.append(b, talk, notes, stop);
     }
     const [b, talk, notes] = g.children;
+    g.classList.toggle('lead', a === lead);
+    g.classList.toggle('child', !!lead && a !== lead && a.parent === lead.name);
     const sig = a.state + '|' + a.title + '|' + a.count;
     if (b.dataset.sig !== sig){ b.dataset.sig = sig;
       b.innerHTML = `<span class="orb ${a.state}"></span><span class="tx"><div class="nm">${esc(a.title || 'Claude')}</div>
@@ -1274,7 +1285,8 @@ function scrollEnd(instant){
 function renderThread(){
   const d = threadData();
   if (!d){
-    const fall = agents[0] ? agentKey(agents[0].name) : (taps.items[0] ? taps.items[0].key : '');
+    const first = railOrder(agents)[0];   // a fresh page opens on the lead (taps only once the agents have answered)
+    const fall = first ? agentKey(first.name) : (agentsLoaded && taps.items[0] ? taps.items[0].key : '');
     if (fall && fall !== current){ current = fall; return renderThread(); }
     head.innerHTML = ''; goalsEl.innerHTML = ''; head.dataset.sig = '';
     msgsEl.innerHTML = `<div class="hello"><div class="big">The space is open.</div>Agents join with <code>tap.py listen --as NAME</code>. Your taps show up here on their own.</div>`;
