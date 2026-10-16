@@ -374,8 +374,9 @@
   #pane{position:relative}
 
   /* ---- Chat tab, right column: one progress card per live agent, and the links between talking agents ---- */
-  #progress{display:flex;flex-direction:column;min-height:0;
-    padding-top:max(0px, calc(var(--hudb, 0px) - 54px));transition:padding-top .45s cubic-bezier(.22,.9,.24,1)}
+  /* the presence HUD floats over this column's top: a fixed clearance for its tallest state (4 activity rows), so the
+     column never slides while rows come and go */
+  #progress{display:flex;flex-direction:column;min-height:0;padding-top:62px}
   #plans{position:relative;flex:1;min-height:0;overflow-y:auto;scrollbar-width:none;
     display:flex;flex-direction:column;gap:10px;padding:6px 10px 24px}
   #plans .links{position:absolute;left:0;top:0;width:100%;height:0;overflow:visible;pointer-events:none;z-index:2}
@@ -1811,12 +1812,6 @@ function render(agentsIn, linksIn){
   if (sig !== boardSig){ boardSig = sig; scheduleLayout(700); }
   syncMotion();
 }
-
-// clear the presence HUD: the panel starts under its last row (the HUD grows down from the header)
-const hud = document.getElementById('hud');
-const hudBottom = () => document.documentElement.style.setProperty('--hudb', Math.round(hud.getBoundingClientRect().bottom) + 'px');
-new ResizeObserver(hudBottom).observe(hud);
-hudBottom();
 
 new MutationObserver(syncMotion).observe(document.body, {attributes: true, attributeFilter: ['class']});
 new MutationObserver(syncMotion).observe(lb, {attributes: true, attributeFilter: ['class']});
