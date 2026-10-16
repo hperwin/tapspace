@@ -251,7 +251,7 @@ struct ChatProgressCard: View {
                     } else if progress == nil {
                         Text("No goal yet")
                             .font(.system(size: 12))
-                            .foregroundStyle(Color.faint)
+                            .foregroundStyle(Color.dim)
                             .padding(.top, 1)
                     }
                     if let p = progress, !p.steps.isEmpty {
