@@ -532,11 +532,14 @@ def _chat_clear():
 # tap.py sends the Claude session it runs in (X-Claude-Session, X-Claude-Pid), only when that
 # Claude process is its own ancestor, so a stale inherited id is never sent. listen, reply, title
 # and relay record session -> NAME here; a card posted from that session, or by a lane inside it,
-# belongs to that NAME. A relay car adds its own session under the same NAME, so cards from either
-# car keep one owner. Cards without a provable owner fall back at read time.
+# belongs to that NAME, and a lane speaking under another NAME never moves it (_claim_moves). A relay
+# car adds its own session under the same NAME, so cards from either car keep one owner. Cards
+# without a provable owner fall back at read time.
 CLAIMS = DATA / "sessions.json"     # {"sessions": {sid: {name, pid, pid_start, first, seen, how}},
                                     #  "campaigns": {campaign: [NAME, ...]}}
 CLAIM_KEEP = 14 * 86400             # a session nobody spoke for in this long is forgotten
+CLAIM_MOVE = 30                     # a claimed session goes to another NAME only after its own NAME has
+                                    # not listened this long (the rail's Here window)
 
 
 def _claims():
@@ -564,9 +567,20 @@ def _proc_start(pid):
         return ""
 
 
+def _claim_moves(cur, name, how, now):
+    """Whether a session claimed by cur may now speak as name. An agent inside a master shares the
+    master's session, so its listen, reply or title under another NAME must not take that session:
+    a claim moves only through the new NAME's listen once cur has not listened for CLAIM_MOVE
+    seconds, or through a relay."""
+    if not cur or cur == name or how == "relay":
+        return True
+    return how == "listen" and now - (_agents().get(cur) or {}).get("listen", 0) > CLAIM_MOVE
+
+
 def _claim(who, name, how):
-    """This call's Claude session speaks as NAME; the newest claim wins per session. Listen polls
-    every 2 s, so nothing is written unless the claim is new, moved, or 10 minutes old."""
+    """This call's Claude session speaks as NAME: the first claim takes the session, a later one
+    only as _claim_moves allows. Listen polls every 2 s, so nothing is written unless the claim is
+    new, moved, or 10 minutes old."""
     sid, pid = who.get("session"), who.get("pid") or 0
     if not sid:
         return
@@ -574,10 +588,14 @@ def _claim(who, name, how):
     now = time.time()
     if old.get("name") == name and old.get("pid") == pid and now - old.get("seen", 0) < 600:
         return
+    if not _claim_moves(old.get("name"), name, how, now):
+        return
     start = old.get("pid_start", "") if old.get("pid") == pid else (_proc_start(pid) if pid else "")
     with _lock:
         c = _claims()
         row = c["sessions"].get(sid) or {"first": now}
+        if not _claim_moves(row.get("name"), name, how, now):
+            return
         row.update(name=name, pid=pid, pid_start=start, seen=now, how=how)
         c["sessions"][sid] = row
         c["sessions"] = {k: v for k, v in c["sessions"].items() if now - v.get("seen", 0) < CLAIM_KEEP}

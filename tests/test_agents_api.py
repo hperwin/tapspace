@@ -140,6 +140,14 @@ def progress(who, **body):
     return call("/api/agents/progress", {"name": who, **body})
 
 
+def quiet(who, secs):
+    """who last listened secs ago (busy answering, or gone)."""
+    with S._lock:
+        a = S._agents()
+        a[who]["listen"] = time.time() - secs
+        S._agents_write(a)
+
+
 class ProgressChangeTests(unittest.TestCase):
     """The pure rule behind POST /api/agents/progress."""
 
@@ -260,11 +268,37 @@ class OwnerTests(unittest.TestCase):
         self.assertEqual(served(post(session=s1))["owner"], a)     # a lane still running in the old car
         self.assertEqual(served(post(session=s2))["owner"], a)
 
-    def test_newest_claim_wins(self):
-        a, b, s = name("first"), name("second"), sid()
+    def test_another_name_in_the_session_never_takes_it_while_its_name_listens(self):
+        a, b, s = name("held"), name("lane"), sid()     # b: an agent inside a's Claude process
         join(a, session=s)
         join(b, session=s)
+        call("/api/chat/reply", {"agent": b, "body": "lane check"}, headers=ident(s))
+        call("/api/agents/title", {"agent": b, "title": "Lane check"}, headers=ident(s))
+        self.assertEqual(served(post(session=s))["owner"], a)
+        quiet(a, S.CLAIM_MOVE + 5)                        # a stops listening (answering, or gone)
+        call("/api/chat/reply", {"agent": b, "body": "lane check"}, headers=ident(s))
+        call("/api/agents/title", {"agent": b, "title": "Lane check"}, headers=ident(s))
+        self.assertEqual(served(post(session=s))["owner"], a)     # reply and title never move a claim
+        join(b, session=s)
+        self.assertEqual(served(post(session=s))["owner"], b)     # a listen does, once a is quiet
+        join(a, session=s)
+        self.assertEqual(served(post(session=s))["owner"], b)     # and b now holds it while it listens
+        self.assertEqual(S._claims()["sessions"][s]["how"], "listen")
+
+    def test_relay_moves_a_claim(self):
+        a, b, s = name("car"), name("next"), sid()
+        join(a, session=s)
+        join(b)
+        call("/api/agents/relay", {"agent": b}, headers=ident(s))
         self.assertEqual(served(post(session=s))["owner"], b)
+
+    def test_reply_or_title_claims_an_unclaimed_session(self):
+        a, b, s1, s2 = name("reply"), name("title"), sid(), sid()
+        join(a)
+        join(b)
+        call("/api/chat/reply", {"agent": a, "body": "back"}, headers=ident(s1))
+        call("/api/agents/title", {"agent": b, "title": "Title claim"}, headers=ident(s2))
+        self.assertEqual((served(post(session=s1))["owner"], served(post(session=s2))["owner"]), (a, b))
 
     def test_claimed_later_resolves_on_read_without_a_write(self):
         c, s = name("late"), sid()
