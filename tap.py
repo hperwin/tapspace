@@ -29,11 +29,20 @@
   tap.py stop --as NAME                  -> spins that master down, as the Chat rail's Spin down does: its
                                             Claude Code session ends and it leaves the list (--as is required)
                                             exit 0 = stopped, 1 = refused (nothing was ended)
+  tap.py lead --as NAME                  -> marks NAME the lead, the master over all masters: every client
+                                            shows it first and the other masters under it (one lead at a time;
+                                            the newest replaces the old one; --as is required)
+  tap.py new --as LEAD --dir DIR [--order-file FILE]
+                                         -> starts a new master in DIR (headless tmux, as the space's New
+                                            session does), born under LEAD, FILE's text added to its first
+                                            prompt; prints its NAME and tmux session
+  tap.py adopt --as LEAD CHILD           -> puts CHILD, a master already running, under LEAD
   Taps (the reviewer's GitHub agent issues; every agent can talk to all of them):
-  tap.py taps                            -> list them: key, status, title, last message
+  tap.py taps                            -> list them: key, phase (Proposed, Flying, Needs you, Landed, Done,
+                                            Closed), title, last message
   tap.py tap-read KEY                    -> the whole thread of one tap (KEY = owner/repo#n)
   tap.py tap-say --as NAME KEY "text"    -> message a tap as the reviewer (signed "Sent by NAME")
-  tap.py tap-watch [--timeout 3600]      -> blocks until any tap posts something new or changes status
+  tap.py tap-watch [--timeout 3600]      -> blocks until any tap posts something new or changes state
   tap.py relay --as NAME                 -> this session is handing off to its next car: the thread
                                             shows "Switching car" until the new car listens --as NAME
   tap.py reply --as NAME "text" [--image a.png ...]
@@ -326,6 +335,20 @@ def main():
     sp = sub.add_parser("stop")
     sp.add_argument("--as", dest="name", required=True, help="the master to spin down (never defaults to yourself)")
 
+    ld = sub.add_parser("lead")
+    ld.add_argument("--as", dest="name", required=True,
+                    help="the master to mark as the lead over all masters (never defaults to yourself)")
+
+    ad = sub.add_parser("adopt")
+    ad.add_argument("--as", dest="name", default=me, required=not me, help="the lead's chat NAME")
+    ad.add_argument("child", help="the chat NAME of a running master to put under the lead")
+
+    nw = sub.add_parser("new")
+    nw.add_argument("--as", dest="name", default=me, required=not me,
+                    help="the lead's chat NAME; the new master is born under it")
+    nw.add_argument("--dir", required=True, help="the folder the new master starts in (inside your home folder)")
+    nw.add_argument("--order-file", help="a text file whose words are added to the new master's first prompt")
+
     sub.add_parser("taps")
     tr = sub.add_parser("tap-read")
     tr.add_argument("key")
@@ -414,11 +437,16 @@ def main():
     if a.cmd in ("taps", "tap-read", "tap-watch"):
         def snap():
             return {t["key"]: t for t in _call("/api/taps")["items"]}
+        def word(t):                    # the one plain word every client shows; status on an older server
+            return t.get("phase_word") or t["status"]
+        def sig(t):
+            return (len(t["messages"]), t["status"], t.get("phase"))
         if a.cmd == "taps":
             for t in snap().values():
                 last = [m for m in t["messages"] if m["who"] == "tap"]
                 tail = (last[-1]["body"].splitlines() or [""])[0][:90] if last else ""
-                print(f"{t['key']}  [{t['status']}{', replying' if t.get('replying') else ''}]  {t['title']}")
+                fly = ", waiting to fly" if t.get("phase") == "proposed" and t.get("fly_requested") else ""
+                print(f"{t['key']}  [{word(t)}{fly}{', replying' if t.get('replying') else ''}]  {t['title']}")
                 if tail:
                     print(f"    last: {tail}")
             return 0
@@ -427,14 +455,14 @@ def main():
             t = snap().get(a.key)
             if not t:
                 print(json.dumps({"error": "no such tap of yours"})); return 1
-            print(f"{t['key']}  [{t['status']}]  {t['title']}\n{t['url']}")
+            print(f"{t['key']}  [{word(t)}]  {t['title']}\n{t['url']}")
             for g in t["goals"]:
                 print(f"  [{'x' if g['done'] else ' '}] {g['text']}")
             for m in t["messages"]:
                 who = "tap" if m["who"] == "tap" else ("you" + (f" (via {m['via']})" if m.get("via") else ""))
                 print(f"\n--- {who} · {m['ts']}{' · seen' if m.get('seen') else ''}\n{m['body']}")
             return 0
-        base = {k: (len(t["messages"]), t["status"]) for k, t in snap().items()}
+        base = {k: sig(t) for k, t in snap().items()}
         deadline = time.time() + a.timeout
         while time.time() < deadline:
             time.sleep(5)
@@ -443,16 +471,16 @@ def main():
             except Exception:
                 continue
             news = [t for k, t in now.items()
-                    if k not in base or (len(t["messages"]), t["status"]) != base[k]]
+                    if k not in base or sig(t) != base[k]]
             news = [t for t in news if t["messages"] and t["messages"][-1]["who"] == "tap"
-                    or (t["key"] in base and t["status"] != base[t["key"]][1])]
+                    or (t["key"] in base and sig(t)[1:] != base[t["key"]][1:])]
             if news:
                 for t in news:
-                    print(f"== {t['key']} [{t['status']}] {t['title']}")
+                    print(f"== {t['key']} [{word(t)}] {t['title']}")
                     if t["messages"]:
                         print(t["messages"][-1]["body"])
                 return 0
-            base = {k: (len(t["messages"]), t["status"]) for k, t in now.items()}
+            base = {k: sig(t) for k, t in now.items()}
         print(json.dumps({"timeout": True}))
         return 4
 
@@ -496,6 +524,30 @@ def main():
 
     if a.cmd == "stop":
         r = _call("/api/agents/stop", {"name": a.name})
+        print(json.dumps(r))
+        return 0 if r.get("ok") else 1
+
+    if a.cmd == "lead":
+        r = _call("/api/agents/lead", {"name": a.name})
+        print(json.dumps(r))
+        return 0 if r.get("ok") else 1
+
+    if a.cmd == "adopt":
+        r = _call("/api/agents/adopt", {"lead": a.name, "child": a.child})
+        print(json.dumps(r))
+        return 0 if r.get("ok") else 1
+
+    if a.cmd == "new":
+        body = {"folder": os.path.abspath(os.path.expanduser(a.dir)), "parent": a.name}
+        if a.order_file is not None:
+            try:
+                order = pathlib.Path(a.order_file).read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError) as e:
+                sys.exit(f"cannot read --order-file: {e}")
+            if not order.strip():
+                sys.exit(f"--order-file {a.order_file} is empty")
+            body["order"] = order
+        r = _call("/api/agents/new", body)
         print(json.dumps(r))
         return 0 if r.get("ok") else 1
 
