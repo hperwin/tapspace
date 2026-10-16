@@ -1214,7 +1214,7 @@ def _phase(repo, n, iss, msgs, prev):
 
 def _undash(s):
     """Long dashes out of what clients show (house rule): a spaced one reads as a comma."""
-    return re.sub(r"[—–]", "-", re.sub(r"\s+[—–]\s+", ", ", s))
+    return re.sub(r"[\u2014\u2013]", "-", re.sub(r"\s+[\u2014\u2013]\s+", ", ", s))
 
 
 def _readable(md, me, cap=600):
