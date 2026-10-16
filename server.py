@@ -10,9 +10,11 @@ AGENTS.md for the full protocol.
 Chat tab: talk to any number of agents, each in its own thread
 (data/chat.jsonl; an agent joins with `tap.py listen --as NAME` and answers
 with `tap.py reply --as NAME`), and see your taps: GitHub issues you
-authored with the tap label (TAPSPACE_TAP_LABEL, default nava), read and
+authored with a Flightdeck journey label (flightdeck, or the legacy nava), read and
 messaged through gh as you. Taps are scoped by issue AUTHOR, never comment
-author, so nobody else's taps ever show up here.
+author, so nobody else's taps ever show up here. Each tap carries a phase read
+from GitHub alone (proposed, en route, holding, landed, done, closed), the
+question it holds on, and its proof images through a token-guarded proxy.
 
 A master can publish its run (tap.py goal / step: a north star, the steps, the current one).
 Cards know the master that owns them from the Claude session tap.py runs in; a change note
@@ -24,6 +26,8 @@ Run:  python3 server.py     (or: python3 tap.py up)
 URL:  http://127.0.0.1:4747
 """
 import base64
+import calendar
+import hashlib
 import hmac
 import html
 import json
@@ -38,7 +42,7 @@ import threading
 import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 import links
 import qr
@@ -222,8 +226,13 @@ def _wait(since, timeout):
             _cv.wait_for(lambda: CURSOR["n"] > since, timeout)
         return {"cursor": CURSOR["n"], "changed": [k for k in KINDS if not fresh or CURSOR[k] > since]}
 
-# taps = the reviewer's own agent issues on GitHub (authored by them, tap label)
-TAP_LABEL = os.environ.get("TAPSPACE_TAP_LABEL", "nava")
+# taps = the reviewer's own agent issues on GitHub (authored by them, a journey label)
+# Flightdeck label families (renamed in place October 15, #2734): read either spelling, write the first.
+TAP_JOURNEY = tuple(dict.fromkeys(("flightdeck", "nava") + tuple(
+    x for x in [os.environ.get("TAPSPACE_TAP_LABEL", "").strip()] if x)))
+TAP_FLY = ("flightdeck:fly", "auto-launch")
+TAP_NEEDS_REPLY = ("flightdeck:needs-reply", "needs-reply")
+TAP_KEEP_CLOSED = 7 * 86400          # a closed tap stays visible this long, then drops
 TAP_REFRESH = 45            # seconds between background refreshes
 GH = shutil.which("gh") or "/opt/homebrew/bin/gh"
 
@@ -1073,14 +1082,182 @@ def _goals(body):
     return out
 
 
+def _has(names, family):
+    """Any label name in this family (exact, any case): flightdeck:fly:csat is attribution, not fly."""
+    fam = {f.casefold() for f in family}
+    return any(str(n).casefold() in fam for n in names)
+
+
+def _epoch(iso):
+    """GitHub's UTC stamp (2026-10-15T19:04:05Z) as epoch seconds."""
+    return calendar.timegm(time.strptime(iso[:19], "%Y-%m-%dT%H:%M:%S"))
+
+
+def _too_old(iso):
+    return bool(iso) and time.time() - _epoch(iso) > TAP_KEEP_CLOSED
+
+
+_FENCE = re.compile(r"^\s*(?:```|~~~)")
+
+
+def _unfenced(body):
+    """The body's lines outside ``` / ~~~ fences (the fence lines themselves left out)."""
+    out, fenced = [], False
+    for line in (body or "").split("\n"):
+        if _FENCE.match(line):
+            fenced = not fenced
+            continue
+        if not fenced:
+            out.append(line)
+    return out
+
+
+def _live_goals(body):
+    """[(text, checked)] the way Flightdeck counts goals (goalsFrom): every - [ ] / - [x] line outside
+    a fence; a goal whose whole text is struck through is cancelled and left out."""
+    out = []
+    for line in _unfenced(body):
+        m = _GOAL.match(line)
+        if not m:
+            continue
+        text = re.sub(r"\s*_\([^)]*\)_\s*$", "", m.group(2).replace("**", "")).strip()
+        if re.fullmatch(r"~~[\s\S]+~~", text):
+            continue
+        out.append((" ".join(text.split()), m.group(1) != " "))
+    return out
+
+
+def _gql(q, repo, n):
+    """One read-only GraphQL call about issue n of repo; the issue node."""
+    owner, name = repo.split("/", 1)
+    return json.loads(_gh("api", "graphql", "-f", "query=" + q, "-f", "o=" + owner, "-f", "r=" + name,
+                          "-F", f"n={int(n)}"))["data"]["repository"]["issue"]
+
+
+_CLOSER = {}                 # (repo, n, closedAt) -> "none" | "pr" | "commit", once GitHub says
+_Q_CLOSER = ("query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issue(number:$n){"
+             "timelineItems(itemTypes:[CLOSED_EVENT],last:1){nodes{... on ClosedEvent{closer{__typename}}}}}}}")
+
+
+def _closer_of(repo, n, closed_at):
+    """What closed the issue: "none" (a person or the board), "pr" or "commit" (a merge that said
+    closes #n), or None while GitHub cannot say (its timeline lags a fresh close)."""
+    k = (repo, int(n), closed_at)
+    if k in _CLOSER:
+        return _CLOSER[k]
+    try:
+        nodes = _gql(_Q_CLOSER, repo, n)["timelineItems"]["nodes"]
+    except Exception:
+        return None
+    if not nodes:
+        return None
+    kind = ((nodes[-1] or {}).get("closer") or {}).get("__typename")
+    _CLOSER[k] = {"PullRequest": "pr", "Commit": "commit"}.get(kind, "none")
+    return _CLOSER[k]
+
+
+_TICK = {}                   # (repo, n, sha1 of the body) -> epoch of the last goal change, or None
+_Q_EDITS = ("query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issue(number:$n){"
+            "createdAt userContentEdits(last:20){totalCount nodes{editedAt diff}}}}}")
+
+
+def _tick_at(repo, n, body):
+    """When the body's goals last changed (epoch), from GitHub's saved revisions of it; None when that
+    cannot be told. lastEditedAt is no stand-in: the board rewrites the body after landing."""
+    k = (repo, int(n), hashlib.sha1((body or "").encode()).hexdigest())
+    if k in _TICK:
+        return _TICK[k]
+    try:
+        iss = _gql(_Q_EDITS, repo, n)
+        edits = iss["userContentEdits"]
+        revs = sorted((e for e in edits["nodes"] or [] if e and e.get("editedAt")), key=lambda e: e["editedAt"])
+        cur = _live_goals(body)
+        same = lambda e: e.get("diff") is not None and _live_goals(e["diff"]) == cur
+        if not revs:
+            out = _epoch(iss["createdAt"])              # never edited: the goals are as filed
+        elif not same(revs[-1]):
+            out = None                                  # the newest saved revision is not this body
+        else:
+            j = len(revs) - 1
+            while j > 0 and same(revs[j - 1]):
+                j -= 1
+            out = _epoch(revs[j]["editedAt"]) if j > 0 or edits["totalCount"] <= len(revs) else None
+    except Exception:
+        return None
+    _TICK[k] = out
+    return out
+
+
+PHASE_WORD = {"proposed": "Proposed", "enroute": "Flying", "holding": "Needs you", "landed": "Landed",
+              "done": "Done", "closed": "Closed"}
+
+
+def _phase(repo, n, iss, msgs, prev):
+    """Hayden's five states plus closed, from GitHub alone (CONTRACT section 2), first match wins."""
+    if iss["state"] != "OPEN":
+        if str(iss.get("stateReason") or "").upper() != "COMPLETED":
+            return "closed"
+        by = _closer_of(repo, n, iss.get("closedAt"))
+        if by is None:                                  # unknown yet: never claim done unproven
+            return prev if prev in ("done", "closed") else "closed"
+        return "done" if by == "none" else "closed"
+    if _has([l["name"] for l in iss["labels"]], TAP_NEEDS_REPLY):
+        return "holding"
+    said = [_epoch(m["ts"]) for m in msgs if m["who"] == "tap"]
+    goals = _live_goals(iss["body"])
+    if goals and all(done for _, done in goals):
+        tick = _tick_at(repo, n, iss["body"])
+        if tick is None or (said and max(said) > tick):
+            return "landed"
+    return "enroute" if said else "proposed"
+
+
+def _undash(s):
+    """Long dashes out of what clients show (house rule): a spaced one reads as a comma."""
+    return re.sub(r"[—–]", "-", re.sub(r"\s+[—–]\s+", ", ", s))
+
+
+def _readable(md, me, cap=600):
+    """A comment's markdown as plain readable text, up to cap characters, without its leading @me."""
+    s = re.sub(r"<!--[\s\S]*?-->", "", md or "")
+    s = "\n".join(line for line in s.split("\n") if not _FENCE.match(line))
+    s = re.sub(r"!\[([^\]]*)\]\([^)]*\)", r"\1", s)
+    s = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", s)
+    s = re.sub(r"<(https?://[^>\s]+)>", r"\1", s)
+    s = re.sub(r"<br\s*/?>", "\n", s, flags=re.I)
+    s = re.sub(r"</?[A-Za-z][^>]*>", "", s)
+    s = re.sub(r"(?m)^[ \t]*#{1,6}[ \t]+", "", s)
+    s = re.sub(r"(?m)^[ \t]*(?:>[ \t]?)+", "", s)
+    s = re.sub(r"(?m)^([ \t]*)[-*+][ \t]+\[[ xX]\][ \t]+", r"\1- ", s)
+    for pat in (r"\*\*(.+?)\*\*", r"(?<!\w)__(.+?)__(?!\w)", r"~~(.+?)~~",
+                r"(?<![\w*])\*(?![\s*])(.+?)(?<![\s*])\*(?![\w*])",
+                r"(?<![\w_])_(?![\s_])(.+?)(?<![\s_])_(?![\w_])"):
+        s = re.sub(pat, r"\1", s)
+    s = _undash(html.unescape(s.replace("`", "")))
+    s = re.sub(rf"^\s*@{re.escape(me)}(?![\w-])[\s,:;.!\-]*", "", s, flags=re.I)
+    s = "\n".join(line for line in (" ".join(x.split()) for x in s.split("\n")) if line)
+    if len(s) > cap:
+        s = s[:cap - 3].rsplit(" ", 1)[0].rstrip() + "..."
+    return s
+
+
+def _ask(iss, me):
+    """The question a holding tap waits on: the newest comment not by me that mentions @me."""
+    hit = re.compile(rf"(?<![\w/-])@{re.escape(me)}(?![\w-])", re.I)
+    for c in reversed(iss["comments"]):
+        if c["author"]["login"].casefold() != me.casefold() and hit.search(c["body"] or ""):
+            return {"text": _readable(c["body"], me), "url": c["url"], "at": c["createdAt"]}
+    return None
+
+
 def _issue(repo, number):
     return json.loads(_gh("issue", "view", str(number), "--repo", repo, "--json",
-                          "author,title,body,labels,state,comments,url,createdAt,closedAt"))
+                          "author,title,body,labels,state,comments,url,createdAt,closedAt,stateReason"))
 
 
 def _is_mine(iss):
     return iss["author"]["login"] == _me() and \
-        any(l["name"] == TAP_LABEL for l in iss["labels"])
+        _has([l["name"] for l in iss["labels"]], TAP_JOURNEY)
 
 
 def _tap(repo, number, iss):
@@ -1095,22 +1272,29 @@ def _tap(repo, number, iss):
                      "ts": c["createdAt"], "seen": seen, "url": c["url"],
                      "via": via.get(c["url"], "")})
     tap_msgs = [m for m in msgs if m["who"] == "tap"]
+    # legacy status, kept for old clients (landed here means closed)
     if iss["state"] != "OPEN":
         status = "landed"
-    elif "needs-reply" in labels:
+    elif _has(labels, TAP_NEEDS_REPLY):
         status = "needs-you"
     elif tap_msgs:
         status = "flying"
     else:
         status = "boarding"
-    return {"key": f"{repo}#{number}", "repo": repo, "number": number,
+    key = f"{repo}#{number}"
+    prev = next((t.get("phase") for t in TAPS["items"] if t["key"] == key), None)
+    phase = _phase(repo, number, iss, msgs, prev)
+    return {"key": key, "repo": repo, "number": number,
             "title": iss["title"], "url": iss["url"], "status": status,
             "goals": _goals(iss["body"]), "messages": msgs,
             # the tap has your latest message (👀) and has not answered yet
             "replying": iss["state"] == "OPEN" and bool(msgs) and msgs[-1]["who"] == "you"
                         and msgs[-1]["seen"],
             "created": iss["createdAt"], "closed": iss.get("closedAt"),
-            "last": msgs[-1]["ts"] if msgs else iss["createdAt"]}
+            "last": msgs[-1]["ts"] if msgs else iss["createdAt"],
+            "phase": phase, "phase_word": PHASE_WORD[phase],
+            "ask": _ask(iss, me) if phase == "holding" else None,
+            "fly_requested": _has(labels, TAP_FLY)}
 
 
 _ORDER = {"needs-you": 0, "flying": 1, "boarding": 2, "landed": 3}
@@ -1133,15 +1317,15 @@ def _publish(items):
 
 def _refresh_taps():
     me = _me()
-    found = json.loads(_gh("search", "issues", "--label", TAP_LABEL, "--author", me,
-                           "--limit", "60", "--json", "repository,number,state,closedAt"))
-    cutoff = time.time() - 14 * 86400
+    # label:a,b is GitHub's OR; repeating --label would AND them. Newest first, so the cap never
+    # crowds out a live tap behind old closed ones.
+    found = json.loads(_gh("search", "issues", "label:" + ",".join(TAP_JOURNEY), "--author", me,
+                           "--limit", "60", "--sort", "updated",
+                           "--json", "repository,number,state,closedAt"))
     items = []
     for f in found:
-        if f["state"] != "open" and f.get("closedAt"):
-            closed = time.mktime(time.strptime(f["closedAt"][:19], "%Y-%m-%dT%H:%M:%S"))
-            if closed < cutoff:
-                continue
+        if f["state"] != "open" and _too_old(f.get("closedAt")):
+            continue
         repo = f["repository"]["nameWithOwner"]
         iss = _issue(repo, f["number"])
         if _is_mine(iss):
@@ -1160,7 +1344,7 @@ def _refresh_hot():
     for key in list(HOT):
         repo, num = key.split("#")
         iss = _issue(repo, num)
-        if not _is_mine(iss):
+        if not _is_mine(iss) or (iss["state"] != "OPEN" and _too_old(iss.get("closedAt"))):
             continue
         fresh = _tap(repo, int(num), iss)
         items = [fresh if t["key"] == key else t for t in items]
