@@ -1045,11 +1045,23 @@ function when(ts){
 }
 const STATUS = {'needs-you':'Needs you', flying:'Flying', boarding:'Boarding', landed:'Landed'};
 const MASTER = {thinking:'Thinking', here:'Here', away:'Away', switching:'Switching car', starting:'Starting'};
+// a tap's phase (proposed, en route, holding, landed, done, closed); a tap without one renders by its status, as before
+const PHASES = new Set(['proposed', 'enroute', 'holding', 'landed', 'done', 'closed']);
+const PHASE_WORD = {proposed:'Proposed', enroute:'Flying', holding:'Needs you', landed:'Landed', done:'Done', closed:'Closed'};
+const hasPhase = t => PHASES.has(t.phase);
+const tapCls = t => hasPhase(t) ? 'p-' + t.phase : t.status;
+function tapWord(t){
+  if (typeof t.phase_word === 'string' && t.phase_word.trim()) return t.phase_word.trim();
+  return (hasPhase(t) ? PHASE_WORD[t.phase] : STATUS[t.status]) || '';
+}
+const isHolding = t => hasPhase(t) ? t.phase === 'holding' : t.status === 'needs-you';
+const tms = ts => typeof ts === 'number' ? ts * 1000 : Date.parse(ts);
 function tapName(t){ return t.title.replace(/^\[[^\]]*\]\s*/, ''); }
 function tapAvatar(t){
-  return `<span class="tapav ${t.status}${t.replying ? ' working' : ''}"><svg viewBox="0 0 38 38"><circle class="trk" cx="19" cy="19" r="17"/>
-    <circle class="arc" cx="19" cy="19" r="17"${t.status === 'landed' || t.status === 'needs-you' ? '' : ''}/></svg>
-    <span class="num">${t.status === 'landed' ? '✓' : ''}</span></span>`;
+  const check = hasPhase(t) ? t.phase === 'done' : t.status === 'landed';
+  return `<span class="tapav ${tapCls(t)}${t.replying ? ' working' : ''}"><svg viewBox="0 0 38 38"><circle class="trk" cx="19" cy="19" r="17"/>
+    <circle class="arc" cx="19" cy="19" r="17"/></svg>
+    <span class="num">${check ? '✓' : ''}</span></span>`;
 }
 
 /* unread = the other side said something after you last looked at that thread */
