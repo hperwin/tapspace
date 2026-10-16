@@ -1337,10 +1337,19 @@ clearall.addEventListener('click', async () => {
   tick();
 });
 
+const newestNote = name => { const a = agents.find(x => x.name === name); return (a && +visibleNotes(a)[0]?.ts) || 0; };
+let agentsLoaded = false;
 async function pollAgents(){
   let d; try{ d = await (await fetch('/api/agents')).json(); }catch(e){ return; }
   if (!Array.isArray(d.agents)) return;
-  agents = d.agents; links = Array.isArray(d.links) ? d.links : [];
+  // The open thread's newest unread note before this poll (none on the first load: notes already waiting did not land
+  // while he looked).
+  const key = current, had = agentsLoaded && isAgent(key) ? newestNote(agentOf(key)) : null;
+  agents = d.agents; links = Array.isArray(d.links) ? d.links : []; agentsLoaded = true;
+  // A note that lands while its master's thread is open and the page is in front is read at once. Rows already listed
+  // wait for an explicit open: switching to Chat or the window coming forward never reads them.
+  if (had !== null && current === key && document.body.classList.contains("chatmode") && document.hasFocus() &&
+      newestNote(agentOf(key)) > had) readNotes(agentOf(key));
   renderRail(); renderThread();
   window.tsPanel?.render(agents, links);
 }
