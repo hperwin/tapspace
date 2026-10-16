@@ -355,7 +355,7 @@
   .actcard.answered .acttext.ask{color:var(--dim)}
   .proof{display:flex;gap:8px;margin-top:8px;overflow-x:auto;scrollbar-width:none}
   .proof img{flex:none;width:76px;height:76px;border-radius:10px;object-fit:cover;object-position:top;background:#f2f2f4;cursor:zoom-in}
-  .actrow{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:8px}
+  .actline{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:8px}
   #tapact .rbtn{padding:7px 11px;font-size:12px}
   #tapact .stopask{margin:10px 0 0}
   .rbtn.go{background:var(--ink);color:#fff}
@@ -1361,13 +1361,13 @@ function renderAct(d){           // true while a holding tap's question waits on
       : actState.confirm
       ? `<div class="stopask"><div>Accept <b>${esc(tapName(t))}</b>? It closes on GitHub as done.</div>
           <div class="row"><button type="button" class="rbtn clear" data-act="cancel">Cancel</button><button type="button" class="rbtn go" data-act="accept">Accept</button></div></div>`
-      : `<div class="actrow"><span>${all ? 'Every goal is checked.' : ''}</span><button type="button" class="rbtn go" data-act="confirm">Accept</button></div>`);
+      : `<div class="actline"><span>${all ? 'Every goal is checked.' : ''}</span><button type="button" class="rbtn go" data-act="confirm">Accept</button></div>`);
     const yes = foot.querySelector('[data-act=accept]');
     if (yes) yes.textContent = actState.busy ? 'Accepting…' : 'Accept';
   } else {
     const asked = t.fly_requested === true || fresh(flyAsked[current]);
     setPart(top, 'proposed', `<div class="actlabel">Proposed</div>`);
-    setPart(foot, String(asked), `<div class="actrow"><span>${asked ? 'Waiting to fly.' : 'Not flying yet.'}</span>` +
+    setPart(foot, String(asked), `<div class="actline"><span>${asked ? 'Waiting to fly.' : 'Not flying yet.'}</span>` +
       (asked ? '' : `<button type="button" class="rbtn go" data-act="fly">Fly</button>`) + `</div>`);
   }
   foot.querySelectorAll('button').forEach(b => { b.disabled = actState.busy; });
