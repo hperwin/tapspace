@@ -1585,6 +1585,8 @@ const lb = document.getElementById('lightbox');
 const pcards = new Map();   // agent key -> card parts
 const pgaps = new Map();    // pair key -> the gap label + its connector paths
 let emptyEl = null;
+let boardSig = '';          // the cards in order plus the pairs, as last laid out
+let wasShown = false;       // the panel was on screen at the last syncMotion
 
 const still = () => !A || RM.matches;
 function shown(){
@@ -1609,12 +1611,19 @@ function nod(el){
 }
 function setText(el, t){ if (el.textContent !== t) el.textContent = t; }
 
+// The connectors follow the cards for `ms` (a glide, a gap opening or closing), frame by frame, and only while the
+// panel is on screen: a window asked for while it is hidden resumes when it shows (syncMotion).
 let until = 0, raf = 0;
 function scheduleLayout(ms){
   until = Math.max(until, performance.now() + ms);
-  if (!raf) raf = requestAnimationFrame(frame);
+  if (!raf && shown()) raf = requestAnimationFrame(frame);
 }
-function frame(){ raf = 0; layout(); if (performance.now() < until) raf = requestAnimationFrame(frame); }
+function frame(){
+  raf = 0;
+  if (!shown()) return;
+  layout();
+  if (performance.now() < until) raf = requestAnimationFrame(frame);
+}
 function layout(){
   if (!plansEl.offsetParent) return;               // panel hidden: Visual tab or a narrow window
   svg.style.height = plansEl.scrollHeight + 'px';
@@ -1729,7 +1738,8 @@ function retireGap(g){
 }
 function syncMotion(){                              // the chase runs while a pair is drawn, only where someone can see it
   const on = shown();
-  if (on) scheduleLayout(0);
+  if (on && !wasShown) scheduleLayout(0);          // back on screen: place the lines once (and finish a glide asked for while hidden)
+  wasShown = on;
   for (const g of pgaps.values()){
     if (g.leaving) continue;
     const live = g.drawn;
@@ -1795,7 +1805,10 @@ function render(agentsIn, linksIn){
       {duration: 520, easing: 'cubic-bezier(.22,.9,.24,1)'});
   }
   added.forEach((c, i) => enter(c.el, i));
-  scheduleLayout(700);
+  // The lines follow frame by frame only when the cards, their order or the pairs changed (glides, gaps opening or
+  // closing). A poll that changed none of that runs no frames; a card or gap that changes size asks through `ro`.
+  const sig = seq.map(el => el.dataset.key || '').join('|') + '#' + pairs.map(p => p.key + '>' + p.from).join('|');
+  if (sig !== boardSig){ boardSig = sig; scheduleLayout(700); }
   syncMotion();
 }
 
