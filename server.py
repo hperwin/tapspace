@@ -10,9 +10,11 @@ AGENTS.md for the full protocol.
 Chat tab: talk to any number of agents, each in its own thread
 (data/chat.jsonl; an agent joins with `tap.py listen --as NAME` and answers
 with `tap.py reply --as NAME`), and see your taps: GitHub issues you
-authored with the tap label (TAPSPACE_TAP_LABEL, default nava), read and
+authored with a Flightdeck journey label (flightdeck, or the legacy nava), read and
 messaged through gh as you. Taps are scoped by issue AUTHOR, never comment
-author, so nobody else's taps ever show up here.
+author, so nobody else's taps ever show up here. Each tap carries a phase read
+from GitHub alone (proposed, en route, holding, landed, done, closed), the
+question it holds on, and its proof images through a token-guarded proxy.
 
 A master can publish its run (tap.py goal / step: a north star, the steps, the current one).
 Cards know the master that owns them from the Claude session tap.py runs in; a change note
@@ -24,6 +26,8 @@ Run:  python3 server.py     (or: python3 tap.py up)
 URL:  http://127.0.0.1:4747
 """
 import base64
+import calendar
+import hashlib
 import hmac
 import html
 import json
@@ -38,7 +42,7 @@ import threading
 import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 import links
 import qr
@@ -222,8 +226,13 @@ def _wait(since, timeout):
             _cv.wait_for(lambda: CURSOR["n"] > since, timeout)
         return {"cursor": CURSOR["n"], "changed": [k for k in KINDS if not fresh or CURSOR[k] > since]}
 
-# taps = the reviewer's own agent issues on GitHub (authored by them, tap label)
-TAP_LABEL = os.environ.get("TAPSPACE_TAP_LABEL", "nava")
+# taps = the reviewer's own agent issues on GitHub (authored by them, a journey label)
+# Flightdeck label families (renamed in place October 15, #2734): read either spelling, write the first.
+TAP_JOURNEY = tuple(dict.fromkeys(("flightdeck", "nava") + tuple(
+    x for x in [os.environ.get("TAPSPACE_TAP_LABEL", "").strip()] if x)))
+TAP_FLY = ("flightdeck:fly", "auto-launch")
+TAP_NEEDS_REPLY = ("flightdeck:needs-reply", "needs-reply")
+TAP_KEEP_CLOSED = 7 * 86400          # a closed tap stays visible this long, then drops
 TAP_REFRESH = 45            # seconds between background refreshes
 GH = shutil.which("gh") or "/opt/homebrew/bin/gh"
 
@@ -482,7 +491,62 @@ def _agent_rows():
     rank = {"thinking": 0, "switching": 0, "starting": 0, "here": 1, "away": 2}
     out.sort(key=lambda r: -r["last"])
     out.sort(key=lambda r: rank[r["state"]])
+    # the lead (Muddi, the master over masters): live only while its row is served. Every other row's
+    # parent is the NAME stored on it, else the live lead's; the lead comes first, then its children.
+    lead = next((r for r in out if agents[r["name"]].get("role") == "lead"), None)
+    for r in out:
+        stored = agents[r["name"]].get("parent")
+        r["parent"] = stored if isinstance(stored, str) and stored else \
+            (lead["name"] if lead and r is not lead else None)
+    if lead:
+        lead["role"] = "lead"
+        out = [lead] + [r for r in out if r is not lead and r["parent"] == lead["name"]] + \
+              [r for r in out if r is not lead and r["parent"] != lead["name"]]
     return out
+
+
+def _set_lead(name):
+    """NAME becomes the one lead (the newest call wins). A NAME that has not joined yet gets a bare row,
+    off the rail until it listens. The lead reports to no one."""
+    with _lock:
+        a = _agents()
+        for n, row in a.items():
+            if n != name:
+                row.pop("role", None)
+        row = a.get(name) or {"name": name, "first": time.time()}
+        row["role"] = "lead"
+        row.pop("parent", None)
+        a[name] = row
+        _agents_write(a)
+    _bump("agents")
+
+
+def _adopt(lead, child):
+    """Stores parent=lead on child (an empty lead clears it, back to the live lead) -> (code, answer).
+    A mark the reviewer's lead makes, not the child's activity, so seen is left alone."""
+    with _lock:
+        a = _agents()
+        if child not in a:
+            return 404, {"error": "no agent by that name has joined"}
+        if lead and lead not in a:
+            return 404, {"error": "no lead by that name has joined"}
+        if lead and lead == child:
+            return 400, {"error": "an agent cannot lead itself"}
+        if lead and a[child].get("role") == "lead":
+            return 400, {"error": "the lead reports to no one"}
+        up, seen = lead, set()
+        while up and up not in seen:
+            if up == child:
+                return 400, {"error": "that would make a loop"}
+            seen.add(up)
+            up = (a.get(up) or {}).get("parent")
+        if lead:
+            a[child]["parent"] = lead
+        else:
+            a[child].pop("parent", None)
+        _agents_write(a)
+    _bump("agents")
+    return 200, {"ok": True, "child": child, "parent": lead or None}
 
 
 def _agents_watch():
@@ -493,7 +557,8 @@ def _agents_watch():
         try:
             rows = _agent_rows()
             sig = ([(r["name"], r["state"], r["where"], r["title"], (r["progress"] or {}).get("updated"),
-                     r["notes_read"], [(n["ticket"], n["version"], n["ts"]) for n in r["notes"]])
+                     r["notes_read"], [(n["ticket"], n["version"], n["ts"]) for n in r["notes"]],
+                     r.get("role"), r["parent"])
                     for r in rows],
                    links.rows({r["name"] for r in rows}))
             if sig != last:
@@ -1006,7 +1071,14 @@ def _projects():
             for c in seen[:40]]
 
 
-def _spawn_master(folder, name):
+ORDER_MAX = 65536                    # bytes of a first order appended to a new master's prompt
+
+
+def _spawn_master(folder, name, parent="", order=""):
+    """Starts a master in folder under name (new-master.sh, detached) -> {agent, session, tmux, parent}.
+    The server picks the session id and the tmux name, so the answer names them before the child exists.
+    parent (a joined NAME) is stored on the row first, so the child is born under its lead; order is
+    kept under data/orders/ and appended to its first prompt."""
     home = pathlib.Path.home().resolve()
     f = pathlib.Path(folder).expanduser().resolve()
     if not f.is_dir() or not (str(f) + "/").startswith(str(home) + "/"):
@@ -1016,14 +1088,35 @@ def _spawn_master(folder, name):
         raise ValueError("bad name")
     if name in _agents() and _agent_state(_agents()[name], []) in ("here", "starting"):
         raise ValueError("an agent with that name is already running")
+    if parent:
+        if not _NAME.match(parent):
+            raise ValueError("bad parent name")
+        if parent not in _agents():
+            raise ValueError("no lead by that name has joined")
+        if parent == name:
+            raise ValueError("an agent cannot lead itself")
+    if len(order.encode()) > ORDER_MAX:
+        raise ValueError("order: up to 64 KB")
+    sid = str(uuid.uuid4())
+    ts = "master-" + re.sub(r"[^A-Za-z0-9_-]", "-", f.name) + "-" + sid[:6]   # new-master.sh's own rule
     where = "~/" + str(f.relative_to(home)) if f != home else "~"
-    _agent_touch(name, spawned=time.time(), where=where)
+    _agent_touch(name, spawned=time.time(), where=where, **({"parent": parent} if parent else {}))
+    extra = [parent] if parent else []
+    if order:
+        orders = DATA / "orders"
+        orders.mkdir(mode=0o700, exist_ok=True)
+        path = orders / f"{sid}.md"
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as fh:
+            fh.write(order)
+        extra = [parent, str(path)]
     log = DATA / "spawn.log"
     with log.open("a") as fh:
-        subprocess.Popen(["bash", str(ROOT / "new-master.sh"), str(f), name],
+        subprocess.Popen(["bash", str(ROOT / "new-master.sh"), str(f), name] + extra,
                          stdout=fh, stderr=subprocess.STDOUT, start_new_session=True,
-                         env={**os.environ, "TAPSPACE_URL": f"http://127.0.0.1:{PORT}"})
-    return name
+                         env={**os.environ, "TAPSPACE_URL": f"http://127.0.0.1:{PORT}",
+                              "TAPSPACE_MASTER_UUID": sid, "TAPSPACE_MASTER_TMUX": ts})
+    return {"agent": name, "session": sid, "tmux": ts, "parent": parent or None}
 
 
 # ---- taps (the reviewer's own pilot issues, read through gh) ----
@@ -1031,6 +1124,8 @@ TAPS = {"me": "", "items": [], "fetched": 0.0, "error": ""}
 _taps_kick = threading.Event()
 HOT = {}                    # tap key -> refresh it every few seconds until this time
 TAP_HOT_EVERY = 6
+_UNLISTED = {}              # tap key -> when it was first kept although GitHub search did not list it yet
+TAP_SEARCH_LAG = 15 * 60    # how long such a tap is kept without the search listing it
 VIA = DATA / "tap-via.json"  # comment url -> the agent that sent it for the reviewer
 
 
@@ -1073,14 +1168,301 @@ def _goals(body):
     return out
 
 
+def _has(names, family):
+    """Any label name in this family (exact, any case): flightdeck:fly:csat is attribution, not fly."""
+    fam = {f.casefold() for f in family}
+    return any(str(n).casefold() in fam for n in names)
+
+
+def _epoch(iso):
+    """GitHub's UTC stamp (2026-10-15T19:04:05Z) as epoch seconds."""
+    return calendar.timegm(time.strptime(iso[:19], "%Y-%m-%dT%H:%M:%S"))
+
+
+def _too_old(iso):
+    return bool(iso) and time.time() - _epoch(iso) > TAP_KEEP_CLOSED
+
+
+_FENCE = re.compile(r"^\s*(?:```|~~~)")
+
+
+def _unfenced(body):
+    """The body's lines outside ``` / ~~~ fences (the fence lines themselves left out)."""
+    out, fenced = [], False
+    for line in (body or "").split("\n"):
+        if _FENCE.match(line):
+            fenced = not fenced
+            continue
+        if not fenced:
+            out.append(line)
+    return out
+
+
+def _live_goals(body):
+    """[(text, checked)] the way Flightdeck counts goals (goalsFrom): every - [ ] / - [x] line outside
+    a fence; a goal whose whole text is struck through is cancelled and left out."""
+    out = []
+    for line in _unfenced(body):
+        m = _GOAL.match(line)
+        if not m:
+            continue
+        text = re.sub(r"\s*_\([^)]*\)_\s*$", "", m.group(2).replace("**", "")).strip()
+        if re.fullmatch(r"~~[\s\S]+~~", text):
+            continue
+        out.append((" ".join(text.split()), m.group(1) != " "))
+    return out
+
+
+def _gql(q, repo, n):
+    """One read-only GraphQL call about issue n of repo; the issue node."""
+    owner, name = repo.split("/", 1)
+    return json.loads(_gh("api", "graphql", "-f", "query=" + q, "-f", "o=" + owner, "-f", "r=" + name,
+                          "-F", f"n={int(n)}"))["data"]["repository"]["issue"]
+
+
+_CLOSER = {}                 # (repo, n, closedAt) -> "none" | "pr" | "commit", once GitHub says
+_Q_CLOSER = ("query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issue(number:$n){"
+             "timelineItems(itemTypes:[CLOSED_EVENT],last:1){nodes{... on ClosedEvent{closer{__typename}}}}}}}")
+
+
+def _closer_of(repo, n, closed_at):
+    """What closed the issue: "none" (a person or the board), "pr" or "commit" (a merge that said
+    closes #n), or None while GitHub cannot say (its timeline lags a fresh close)."""
+    k = (repo, int(n), closed_at)
+    if k in _CLOSER:
+        return _CLOSER[k]
+    try:
+        nodes = _gql(_Q_CLOSER, repo, n)["timelineItems"]["nodes"]
+    except Exception:
+        return None
+    if not nodes:
+        return None
+    kind = ((nodes[-1] or {}).get("closer") or {}).get("__typename")
+    _CLOSER[k] = {"PullRequest": "pr", "Commit": "commit"}.get(kind, "none")
+    return _CLOSER[k]
+
+
+_TICK = {}                   # (repo, n, sha1 of the body) -> epoch of the last goal change, or None
+_Q_EDITS = ("query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issue(number:$n){"
+            "createdAt userContentEdits(last:20){totalCount nodes{editedAt diff}}}}}")
+
+
+def _tick_at(repo, n, body):
+    """When the body's goals last changed (epoch), from GitHub's saved revisions of it; None when that
+    cannot be told. lastEditedAt is no stand-in: the board rewrites the body after landing."""
+    k = (repo, int(n), hashlib.sha1((body or "").encode()).hexdigest())
+    if k in _TICK:
+        return _TICK[k]
+    try:
+        iss = _gql(_Q_EDITS, repo, n)
+        edits = iss["userContentEdits"]
+        revs = sorted((e for e in edits["nodes"] or [] if e and e.get("editedAt")), key=lambda e: e["editedAt"])
+        cur = _live_goals(body)
+        same = lambda e: e.get("diff") is not None and _live_goals(e["diff"]) == cur
+        if not revs:
+            out = _epoch(iss["createdAt"])              # never edited: the goals are as filed
+        elif not same(revs[-1]):
+            out = None                                  # the newest saved revision is not this body
+        else:
+            j = len(revs) - 1
+            while j > 0 and same(revs[j - 1]):
+                j -= 1
+            out = _epoch(revs[j]["editedAt"]) if j > 0 or edits["totalCount"] <= len(revs) else None
+    except Exception:
+        return None
+    _TICK[k] = out
+    return out
+
+
+PHASE_WORD = {"proposed": "Proposed", "enroute": "Flying", "holding": "Needs you", "landed": "Landed",
+              "done": "Done", "closed": "Closed"}
+
+
+def _phase(repo, n, iss, msgs, prev):
+    """Hayden's five states plus closed, from GitHub alone (CONTRACT section 2), first match wins."""
+    if iss["state"] != "OPEN":
+        if str(iss.get("stateReason") or "").upper() != "COMPLETED":
+            return "closed"
+        by = _closer_of(repo, n, iss.get("closedAt"))
+        if by is None:                                  # unknown yet: never claim done unproven
+            return prev if prev in ("done", "closed") else "closed"
+        return "done" if by == "none" else "closed"
+    if _has([l["name"] for l in iss["labels"]], TAP_NEEDS_REPLY):
+        return "holding"
+    said = [_epoch(m["ts"]) for m in msgs if m["who"] == "tap"]
+    goals = _live_goals(iss["body"])
+    if goals and all(done for _, done in goals):
+        tick = _tick_at(repo, n, iss["body"])
+        if tick is None or (said and max(said) > tick):
+            return "landed"
+    return "enroute" if said else "proposed"
+
+
+def _undash(s):
+    """Long dashes out of what clients show (house rule): a spaced one reads as a comma."""
+    return re.sub(r"[\u2014\u2013]", "-", re.sub(r"\s+[\u2014\u2013]\s+", ", ", s))
+
+
+def _readable(md, me, cap=600):
+    """A comment's markdown as plain readable text, up to cap characters, without its leading @me."""
+    s = re.sub(r"<!--[\s\S]*?-->", "", md or "")
+    s = "\n".join(line for line in s.split("\n") if not _FENCE.match(line))
+    s = re.sub(r"!\[([^\]]*)\]\([^)]*\)", r"\1", s)
+    s = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", s)
+    s = re.sub(r"<(https?://[^>\s]+)>", r"\1", s)
+    s = re.sub(r"<br\s*/?>", "\n", s, flags=re.I)
+    s = re.sub(r"</?[A-Za-z][^>]*>", "", s)
+    s = re.sub(r"(?m)^[ \t]*#{1,6}[ \t]+", "", s)
+    s = re.sub(r"(?m)^[ \t]*(?:>[ \t]?)+", "", s)
+    s = re.sub(r"(?m)^([ \t]*)[-*+][ \t]+\[[ xX]\][ \t]+", r"\1- ", s)
+    for pat in (r"\*\*(.+?)\*\*", r"(?<!\w)__(.+?)__(?!\w)", r"~~(.+?)~~",
+                r"(?<![\w*])\*(?![\s*])(.+?)(?<![\s*])\*(?![\w*])",
+                r"(?<![\w_])_(?![\s_])(.+?)(?<![\s_])_(?![\w_])"):
+        s = re.sub(pat, r"\1", s)
+    s = _undash(html.unescape(s.replace("`", "")))
+    s = re.sub(rf"^\s*@{re.escape(me)}(?![\w-])[\s,:;.!\-]*", "", s, flags=re.I)
+    s = "\n".join(line for line in (" ".join(x.split()) for x in s.split("\n")) if line)
+    if len(s) > cap:
+        s = s[:cap - 3].rsplit(" ", 1)[0].rstrip() + "..."
+    return s
+
+
+def _ask(iss, me):
+    """The question a holding tap waits on: the newest comment not by me that mentions @me."""
+    hit = re.compile(rf"(?<![\w/-])@{re.escape(me)}(?![\w-])", re.I)
+    for c in reversed(iss["comments"]):
+        if c["author"]["login"].casefold() != me.casefold() and hit.search(c["body"] or ""):
+            return {"text": _readable(c["body"], me), "url": c["url"], "at": c["createdAt"]}
+    return None
+
+
+# ---- proof: the images a pilot put in the issue body, through this server ----
+# GitHub serves them only to a signed-in viewer (user-attachments) or by a short-lived signed url from the
+# issue's body_html, so no client can load them directly. Clients get /api/taps/proof?key=&i=&v= urls; the
+# server fetches each image once and keeps its bytes under data/proof/, named by the attachment id.
+PROOF = DATA / "proof"
+_PROOF_SRC = {}              # tap key -> ([(src, index among all body images)], how many images): never served
+_PROOF_HTML = {}             # tap key -> (fetched at, [(src, data-canonical-src)]) of its body_html
+_PROOF_LOCKS = {}            # tap key -> Lock, so a row of thumbnails makes one body_html call
+_PROOF_TYPES = {"image/png": ".png", "image/jpeg": ".jpg", "image/gif": ".gif", "image/webp": ".webp"}
+_PROOF_HOSTS = {"private-user-images.githubusercontent.com", "user-images.githubusercontent.com",
+                "camo.githubusercontent.com", "raw.githubusercontent.com"}
+_PROOF_MAX = 25_000_000
+_ASSET = re.compile(r"user-attachments/(?:assets|files)/([0-9A-Fa-f-]{36})")
+_IMG = re.compile(r"!\[([^\]]*)\]\(\s*<?([^)\s>]+)>?(?:\s+(?:\"[^\"]*\"|'[^']*'))?\s*\)|<img\b[^>]*>", re.I)
+_ATTR = re.compile(r"([\w-]+)\s*=\s*(?:\"([^\"]*)\"|'([^']*)'|([^\s>]+))")
+
+
+def _attrs(tag):
+    return {a.group(1).lower(): html.unescape(next(g for g in a.groups()[1:] if g is not None))
+            for a in _ATTR.finditer(tag)}
+
+
+def _github_image(url):
+    """Only GitHub's own image hosts, or an attachment on github.com itself: never an open proxy."""
+    from urllib.parse import urlsplit
+    p = urlsplit(url)
+    return p.scheme == "https" and (p.hostname in _PROOF_HOSTS or
+                                    (p.hostname == "github.com" and p.path.startswith("/user-attachments/")))
+
+
+def _proof(key, body):
+    """[{url, alt}] for the GitHub images in the body (markdown or <img>, outside comments and fences),
+    in order. v is a short hash of the image address, so a client cache never shows a replaced one."""
+    found = []
+    for m in _IMG.finditer("\n".join(_unfenced(re.sub(r"<!--[\s\S]*?-->", "", body or "")))):
+        if m.group(0).startswith("!"):
+            found.append((m.group(1), m.group(2)))
+        else:
+            a = _attrs(m.group(0))
+            found.append((a.get("alt", ""), a.get("src", "")))
+    keep = [(n, alt, src) for n, (alt, src) in enumerate(found) if _github_image(src)]
+    _PROOF_SRC[key] = ([(src, n) for n, _, src in keep], len(found))
+    return [{"url": f"/api/taps/proof?key={quote(key, safe='')}&i={i}&v={hashlib.sha1(src.encode()).hexdigest()[:8]}",
+             "alt": _undash(" ".join(alt.split()))} for i, (_, alt, src) in enumerate(keep)]
+
+
+def _proof_hit(cid):
+    for f in PROOF.glob(cid + ".*"):
+        if f.suffix in _PROOF_TYPES.values() and f.is_file():
+            return f.read_bytes(), _CTYPES[f.suffix]
+    return None
+
+
+def _proof_signed(key, src, n, total, fresh=False):
+    """The address GitHub serves image n of the body from right now: the matching <img> of body_html,
+    read once per key and reused inside the signed urls' five minutes."""
+    repo, num = key.split("#")
+    got = _PROOF_HTML.get(key)
+    if fresh or not got or time.time() - got[0] > 240:
+        raw = _gh("api", f"repos/{repo}/issues/{num}", "-H", "Accept: application/vnd.github.full+json",
+                  "--jq", ".body_html")
+        got = _PROOF_HTML[key] = (time.time(), [(a.get("src", ""), a.get("data-canonical-src", ""))
+                                                for a in map(_attrs, re.findall(r"<img\b[^>]*>", raw, re.I))])
+    tags, asset = got[1], _ASSET.search(src)
+    pick = next((s for s, _ in tags if asset and asset.group(1).lower() in s.lower()), None) or \
+        next((s for s, c in tags if c == src), None) or next((s for s, _ in tags if s == src), None) or \
+        (tags[n][0] if len(tags) == total else None)
+    if not pick:
+        raise RuntimeError("image not found in the issue")
+    return pick
+
+
+def _proof_fetch(url):
+    """(bytes, content type) of one GitHub image. The gh token goes only to github.com itself, as a
+    header never forwarded on a redirect; a signed url needs none."""
+    import urllib.request
+    from urllib.parse import urlsplit
+    if not _github_image(url):
+        raise RuntimeError("not a GitHub image")
+    req = urllib.request.Request(url, headers={"User-Agent": "TapSpace"})
+    if urlsplit(url).hostname == "github.com":
+        if not _TOKEN["v"]:
+            _TOKEN["v"] = _gh("auth", "token").strip()
+        req.add_unredirected_header("Authorization", "Bearer " + _TOKEN["v"])
+    with urllib.request.urlopen(req, timeout=20) as r:
+        ctype, raw = r.headers.get_content_type(), r.read(_PROOF_MAX + 1)
+    if len(raw) > _PROOF_MAX:
+        raise RuntimeError("image over 25 MB")
+    if ctype not in _PROOF_TYPES:
+        raise RuntimeError("not an image")
+    return raw, ctype
+
+
+def _proof_image(key, i):
+    """(bytes, content type, src) of proof image i of one of the taps served now: from data/proof/,
+    else fetched once and kept. LookupError when there is no such image, else any failure raises."""
+    if not any(t["key"] == key for t in TAPS["items"]):
+        raise LookupError("no such tap")
+    srcs, total = _PROOF_SRC.get(key) or ([], 0)
+    if not 0 <= i < len(srcs):
+        raise LookupError("no such image")
+    src, n = srcs[i]
+    asset = _ASSET.search(src)
+    cid = asset.group(1).lower() if asset else hashlib.sha1(src.encode()).hexdigest()[:24]
+    with _PROOF_LOCKS.setdefault(key, threading.Lock()):
+        hit = _proof_hit(cid)
+        if hit:
+            return hit + (src,)
+        try:
+            raw, ctype = _proof_fetch(_proof_signed(key, src, n, total))
+        except Exception:
+            raw, ctype = _proof_fetch(_proof_signed(key, src, n, total, fresh=True))   # a signed url ran out
+        PROOF.mkdir(parents=True, exist_ok=True)
+        tmp = PROOF / f".tmp-{cid}-{uuid.uuid4().hex[:8]}"
+        tmp.write_bytes(raw)
+        tmp.replace(PROOF / (cid + _PROOF_TYPES[ctype]))
+        return raw, ctype, src
+
+
 def _issue(repo, number):
     return json.loads(_gh("issue", "view", str(number), "--repo", repo, "--json",
-                          "author,title,body,labels,state,comments,url,createdAt,closedAt"))
+                          "author,title,body,labels,state,comments,url,createdAt,closedAt,stateReason"))
 
 
 def _is_mine(iss):
     return iss["author"]["login"] == _me() and \
-        any(l["name"] == TAP_LABEL for l in iss["labels"])
+        _has([l["name"] for l in iss["labels"]], TAP_JOURNEY)
 
 
 def _tap(repo, number, iss):
@@ -1095,22 +1477,30 @@ def _tap(repo, number, iss):
                      "ts": c["createdAt"], "seen": seen, "url": c["url"],
                      "via": via.get(c["url"], "")})
     tap_msgs = [m for m in msgs if m["who"] == "tap"]
+    # legacy status, kept for old clients (landed here means closed)
     if iss["state"] != "OPEN":
         status = "landed"
-    elif "needs-reply" in labels:
+    elif _has(labels, TAP_NEEDS_REPLY):
         status = "needs-you"
     elif tap_msgs:
         status = "flying"
     else:
         status = "boarding"
-    return {"key": f"{repo}#{number}", "repo": repo, "number": number,
+    key = f"{repo}#{number}"
+    prev = next((t.get("phase") for t in TAPS["items"] if t["key"] == key), None)
+    phase = _phase(repo, number, iss, msgs, prev)
+    return {"key": key, "repo": repo, "number": number,
             "title": iss["title"], "url": iss["url"], "status": status,
             "goals": _goals(iss["body"]), "messages": msgs,
             # the tap has your latest message (👀) and has not answered yet
             "replying": iss["state"] == "OPEN" and bool(msgs) and msgs[-1]["who"] == "you"
                         and msgs[-1]["seen"],
             "created": iss["createdAt"], "closed": iss.get("closedAt"),
-            "last": msgs[-1]["ts"] if msgs else iss["createdAt"]}
+            "last": msgs[-1]["ts"] if msgs else iss["createdAt"],
+            "phase": phase, "phase_word": PHASE_WORD[phase],
+            "ask": _ask(iss, me) if phase == "holding" else None,
+            "fly_requested": _has(labels, TAP_FLY),
+            "proof": _proof(key, iss["body"])}
 
 
 _ORDER = {"needs-you": 0, "flying": 1, "boarding": 2, "landed": 3}
@@ -1133,19 +1523,38 @@ def _publish(items):
 
 def _refresh_taps():
     me = _me()
-    found = json.loads(_gh("search", "issues", "--label", TAP_LABEL, "--author", me,
-                           "--limit", "60", "--json", "repository,number,state,closedAt"))
-    cutoff = time.time() - 14 * 86400
-    items = []
+    # label:a,b is GitHub's OR; repeating --label would AND them. Newest first, so the cap never
+    # crowds out a live tap behind old closed ones.
+    found = json.loads(_gh("search", "issues", "label:" + ",".join(TAP_JOURNEY), "--author", me,
+                           "--limit", "60", "--sort", "updated",
+                           "--json", "repository,number,state,closedAt"))
+    items, listed = [], set()
     for f in found:
-        if f["state"] != "open" and f.get("closedAt"):
-            closed = time.mktime(time.strptime(f["closedAt"][:19], "%Y-%m-%dT%H:%M:%S"))
-            if closed < cutoff:
-                continue
         repo = f["repository"]["nameWithOwner"]
+        listed.add(f"{repo}#{f['number']}")
+        if f["state"] != "open" and _too_old(f.get("closedAt")):
+            continue
         iss = _issue(repo, f["number"])
         if _is_mine(iss):
             items.append(_tap(repo, f["number"], iss))
+    # GitHub search lags a new issue by minutes: a tap someone just talked to (hot) that search does not
+    # list yet stays, up to TAP_SEARCH_LAG, instead of vanishing until the index catches up
+    now = time.time()
+    for key in list(HOT):
+        _UNLISTED.setdefault(key, now)
+    for key in list(_UNLISTED):
+        if key in listed or now - _UNLISTED[key] > TAP_SEARCH_LAG:
+            _UNLISTED.pop(key, None)
+            continue
+        repo, num = key.split("#")
+        try:
+            iss = _issue(repo, num)
+        except Exception:
+            iss = None
+        if not iss or not _is_mine(iss) or (iss["state"] != "OPEN" and _too_old(iss.get("closedAt"))):
+            _UNLISTED.pop(key, None)
+            continue
+        items.append(_tap(repo, int(num), iss))
     _publish(items)
 
 
@@ -1160,13 +1569,64 @@ def _refresh_hot():
     for key in list(HOT):
         repo, num = key.split("#")
         iss = _issue(repo, num)
-        if not _is_mine(iss):
+        if not _is_mine(iss) or (iss["state"] != "OPEN" and _too_old(iss.get("closedAt"))):
             continue
         fresh = _tap(repo, int(num), iss)
         items = [fresh if t["key"] == key else t for t in items]
         if not any(t["key"] == key for t in items):
             items.append(fresh)
+            _UNLISTED.setdefault(key, time.time())      # the last search did not list it: keep it (_refresh_taps)
     _publish(items)
+
+
+TAP_FLY_LABEL = {"color": "0e8a16", "description": "Flightdeck: fly this journey without a tap (capped, never auto-accepted)"}
+
+
+def _tap_act(key, act):
+    """POST /api/taps/fly | accept -> (http code, answer), through gh as the reviewer. fly adds the
+    fly label (creating it in that repo when missing); accept closes the issue as completed, the
+    reviewer's sign-off. A repeat answers already and writes nothing."""
+    m = re.match(r"^([\w.-]+/[\w.-]+)#(\d+)$", str(key or ""))
+    if not m:
+        return 400, {"error": "bad tap key"}
+    repo, n = m.group(1), m.group(2)
+    try:
+        iss = _issue(repo, n)
+        if not _is_mine(iss):
+            return 403, {"error": "not one of your taps"}
+        closed = iss["state"] != "OPEN"
+        if act == "fly":
+            if closed:
+                return 409, {"error": "this tap is closed"}
+            if _has([l["name"] for l in iss["labels"]], TAP_FLY):
+                return 200, {"ok": True, "already": True}
+        elif closed:
+            if str(iss.get("stateReason") or "").upper() == "COMPLETED":
+                return 200, {"ok": True, "already": True}
+            return 409, {"error": "this tap was closed another way"}
+        who = _gh("api", "user", "--jq", ".login").strip()
+        if who.casefold() != _me().casefold():
+            return 409, {"error": f"gh is signed in as {who}, not {_me()}"}
+        if act == "fly":
+            try:
+                _gh("api", f"repos/{repo}/labels/{TAP_FLY[0]}", "--jq", ".name")
+            except RuntimeError as e:
+                if "404" not in str(e):
+                    raise
+                try:
+                    _gh("label", "create", TAP_FLY[0], "--repo", repo, "--color", TAP_FLY_LABEL["color"],
+                        "--description", TAP_FLY_LABEL["description"])
+                except RuntimeError as e2:
+                    if "already exists" not in str(e2).lower():
+                        raise
+            _gh("issue", "edit", n, "--repo", repo, "--add-label", TAP_FLY[0])
+        else:
+            _gh("issue", "close", n, "--repo", repo, "--reason", "completed")
+    except Exception as e:
+        return 502, {"error": str(e)}
+    _inbox({"kind": f"tapspace-tap-{act}", "tap": key})
+    _hot(key, 0.15)
+    return 200, {"ok": True}
 
 
 # ---- near real-time: GitHub conditional requests ----
@@ -1388,6 +1848,29 @@ class H(BaseHTTPRequestHandler):
         if path == "/api/taps":
             self._json({k: TAPS[k] for k in ("me", "items", "fetched", "error")})
             return
+        if path == "/api/taps/proof":
+            # one proof image of one of your taps, as its proof[].url names it (local or bearer, like /api/taps)
+            key, i = self._q("key"), self._q("i")
+            if not re.match(r"^[\w.-]+/[\w.-]+#\d+$", key) or not re.fullmatch(r"[0-9]{1,4}", i):
+                self._json({"error": "bad proof address"}, 400)
+                return
+            try:
+                raw, ctype, src = _proof_image(key, int(i))
+            except LookupError as e:
+                self._json({"error": str(e)}, 404)
+                return
+            except Exception as e:
+                self._json({"error": str(e)[:240]}, 502)
+                return
+            self.send_response(200)
+            self.send_header("content-type", ctype)
+            self.send_header("content-length", str(len(raw)))
+            self.send_header("x-content-type-options", "nosniff")
+            self.send_header("cache-control", "private, max-age=31536000, immutable"
+                             if self._q("v") == hashlib.sha1(src.encode()).hexdigest()[:8] else "no-store")
+            self.end_headers()
+            self.wfile.write(raw)
+            return
         if path == "/api/state":
             ix = _owner_index()
             with _lock:
@@ -1464,7 +1947,8 @@ class H(BaseHTTPRequestHandler):
 
         if self.path in ("/api/chat", "/api/chat/reply", "/api/taps/say", "/api/chat/import",
                          "/api/agents/new", "/api/chat/clear", "/api/devices",
-                         "/api/agents/progress", "/api/agents/read", "/api/agents/stop"):
+                         "/api/agents/progress", "/api/agents/read", "/api/agents/stop",
+                         "/api/taps/fly", "/api/taps/accept", "/api/agents/lead", "/api/agents/adopt"):
             # these speak for the reviewer or write agent state: same-origin JSON only, so no
             # other page can drive them through the browser
             origin = self.headers.get("Origin")
@@ -1473,12 +1957,18 @@ class H(BaseHTTPRequestHandler):
                 self._json({"error": "forbidden"}, 403)
                 return
             if self.path == "/api/agents/new":
+                # parent and order come only from this Mac (tap.py new): the phone starts plain masters
+                parent, order = str(p.get("parent") or "").strip(), str(p.get("order") or "")
+                if (parent or order) and not self._local():
+                    self._json({"error": "parent and order only from this Mac"}, 403)
+                    return
                 try:
-                    name = _spawn_master(str(p.get("folder") or ""), str(p.get("name") or "").strip())
+                    out = _spawn_master(str(p.get("folder") or ""), str(p.get("name") or "").strip(),
+                                        parent=parent, order=order)
                 except Exception as e:
                     self._json({"error": str(e)}, 400)
                     return
-                self._json({"ok": True, "agent": name})
+                self._json({"ok": True, **out})
                 return
             if self.path == "/api/chat/clear":
                 msgs, agents = _chat_clear()
@@ -1550,7 +2040,38 @@ class H(BaseHTTPRequestHandler):
                 code, out = _stop_master(str(p.get("name") or p.get("agent") or "").strip())
                 self._json(out, code)
                 return
-            body = (p.get("body") or "").strip()
+            if self.path in ("/api/taps/fly", "/api/taps/accept"):
+                # the reviewer flies a proposed tap or signs a landed one off; the phone may (bearer), like say.
+                # A tap.py call from inside a Claude session is an agent, and accept is never an agent's.
+                w = self._who()
+                if self.path == "/api/taps/accept" and (w.get("session") or w.get("pid")):
+                    self._json({"error": "accept is Hayden's own sign-off"}, 403)
+                    return
+                code, out = _tap_act(p.get("key"), self.path.rsplit("/", 1)[1])
+                self._json(out, code)
+                return
+            if self.path in ("/api/agents/lead", "/api/agents/adopt"):
+                # Muddi takes the lead, or puts a master under a lead (local only)
+                if not self._local():
+                    self._json({"error": "only from this Mac"}, 403)
+                    return
+                if self.path == "/api/agents/lead":
+                    name = str(p.get("name") or p.get("agent") or "").strip()
+                    if not _NAME.match(name):
+                        self._json({"error": "bad agent name"}, 400)
+                        return
+                    _set_lead(name)
+                    self._json({"ok": True, "lead": name})
+                    return
+                lead, child = str(p.get("lead") or "").strip(), str(p.get("child") or "").strip()
+                if not _NAME.match(child) or (lead and not _NAME.match(lead)):
+                    self._json({"error": "bad agent name"}, 400)
+                    return
+                code, out = _adopt(lead, child)
+                self._json(out, code)
+                return
+            body = (p.get("body") or (str(p.get("text") or "") if self.path == "/api/taps/say" else "")
+                    or "").strip()
             chatting = self.path in ("/api/chat", "/api/chat/reply")
             if not body and not (chatting and p.get("images")):
                 self._json({"error": "empty"}, 400)

@@ -223,6 +223,7 @@
   .railempty{font-size:12px;color:var(--faint);padding:8px 12px;line-height:1.5}
   /* rail: under each agent, who it is talking with and the cards you sent it change notes on */
   .agrp{display:flex;flex-direction:column}
+  .agrp.child{margin-left:20px}   /* a master under the lead: the row, its lines and its Spin down shift together */
   .agrp .talk{display:flex;align-items:center;gap:6px;min-width:0;padding:0 12px 4px 62px;font-size:11px;color:rgb(var(--hl))}
   .agrp .talk[hidden]{display:none}
   .agrp .talk span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -284,6 +285,18 @@
   .tapav.landed{background:rgba(48,161,78,.09)}
   .tapav.landed .arc{stroke:var(--green)}
   .tapav.landed .num{color:var(--green)}
+  /* tap phases: the same rings under p-* classes (the status rules above stay for taps without a phase) */
+  .tapav.p-proposed .arc,.tapav.p-enroute .arc,.tapav.p-holding .arc,.tapav.p-landed .arc,.tapav.p-done .arc,.tapav.p-closed .arc{transform-origin:19px 19px}
+  .tapav.p-enroute .arc{stroke-dasharray:30 80}
+  .tapav.p-proposed .arc{stroke:var(--faint);stroke-dasharray:3 6}
+  .tapav.p-holding{background:rgba(var(--hl),.08)}
+  .tapav.p-holding .arc{stroke:rgb(var(--hl));animation:breathe 1.5s ease-in-out infinite}
+  .tapav.p-holding .num{color:rgb(var(--hl))}
+  .tapav.p-landed,.tapav.p-done{background:rgba(48,161,78,.09)}
+  .tapav.p-landed .arc,.tapav.p-done .arc{stroke:var(--green)}
+  .tapav.p-landed .num,.tapav.p-done .num{color:var(--green)}
+  .tapav.p-closed .arc{stroke:var(--faint)}
+  .thread .tx.dim{opacity:.55}
   @keyframes spin{to{transform:rotate(360deg)}}
 
   .chip{display:inline-flex;align-items:center;gap:6px;font-size:10.5px;font-weight:600;letter-spacing:.06em;
@@ -292,6 +305,10 @@
   .chip.flying{color:var(--ink)} .chip.flying i{animation:breathe 1.2s ease-in-out infinite}
   .chip.needs-you{background:rgba(var(--hl),.1);color:rgb(var(--hl))} .chip.needs-you i{animation:breathe 1s ease-in-out infinite}
   .chip.landed{background:rgba(48,161,78,.1);color:var(--green)}
+  .chip.p-enroute{color:var(--ink)} .chip.p-enroute.working i{animation:breathe 1.2s ease-in-out infinite}
+  .chip.p-holding{background:rgba(var(--hl),.1);color:rgb(var(--hl))} .chip.p-holding i{animation:breathe 1s ease-in-out infinite}
+  .chip.p-landed,.chip.p-done{background:rgba(48,161,78,.1);color:var(--green)}
+  .chip.p-closed{color:var(--faint)}
   .chip.thinking{background:rgba(var(--hl),.1);color:rgb(var(--hl))} .chip.thinking i{animation:breathe 1s ease-in-out infinite}
   .chip.here{color:var(--green)} .chip.away{color:var(--faint)}
   .chip.switching{background:rgba(var(--hl),.1);color:rgb(var(--hl))} .chip.switching i{animation:breathe .9s ease-in-out infinite}
@@ -321,6 +338,27 @@
   .goal.done{color:var(--ink);background:rgba(48,161,78,.07)}
   .goal.done b{border-color:var(--green);background:var(--green)}
   .goal.done b::after{content:"";width:6px;height:3px;border:solid #fff;border-width:0 0 1.6px 1.6px;transform:rotate(-45deg) translate(1px,-1px)}
+  /* a tap's action card, pinned above its messages: the question to answer, the proof and Accept, or Fly */
+  #tapact{padding:12px 20px;border-bottom:1px solid var(--line)}
+  #tapact:empty{display:none}
+  .actcard{border-radius:14px;padding:12px 14px;font-size:12.5px;line-height:1.45;color:var(--dim);background:rgba(0,0,0,.03)}
+  .actcard.enter{animation:railin .45s cubic-bezier(.22,.9,.24,1) both}
+  .actcard.holding{background:rgba(var(--hl),.07)}
+  .actcard.holding.answered{background:rgba(0,0,0,.03)}
+  .actlabel{display:flex;align-items:baseline;gap:6px;font-size:10.5px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--dim)}
+  .actcard.holding .actlabel{color:rgb(var(--hl))}
+  .actcard.holding.answered .actlabel{color:var(--dim)}
+  .actcard.landed .actlabel{color:var(--green)}
+  .actlabel em{font-style:normal;font-weight:500;letter-spacing:.02em;text-transform:none;color:var(--faint)}
+  .acttext{margin-top:5px}
+  .acttext.ask{color:var(--ink);white-space:pre-line;overflow-wrap:anywhere;max-height:calc(1.45em * 6);overflow-y:auto}
+  .actcard.answered .acttext.ask{color:var(--dim)}
+  .proof{display:flex;gap:8px;margin-top:8px;overflow-x:auto;scrollbar-width:none}
+  .proof img{flex:none;width:76px;height:76px;border-radius:10px;object-fit:cover;object-position:top;background:#f2f2f4;cursor:zoom-in}
+  .actline{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:8px}
+  #tapact .rbtn{padding:7px 11px;font-size:12px}
+  #tapact .stopask{margin:10px 0 0}
+  .rbtn.go{background:var(--ink);color:#fff}
 
   #msgs{flex:1;overflow-y:auto;padding:22px 22px 10px;display:flex;flex-direction:column;gap:12px;scroll-behavior:smooth}
   .msg{max-width:min(620px,82%);display:flex;flex-direction:column;gap:4px}
@@ -450,7 +488,7 @@
   @media (max-width:1360px){ #chatview{padding:0 28px;gap:18px;grid-template-columns:264px minmax(0,1fr) 296px} }
   @media (max-width:1180px){ #chatview{padding:0 40px;gap:22px;grid-template-columns:300px minmax(0,1fr);max-width:1240px} #progress{display:none} }
   @media (prefers-reduced-motion: reduce){
-    .agrp .talk i,.note.enter,.note.out,.orb.ping::after,.stopask{animation:none}
+    .agrp .talk i,.note.enter,.note.out,.orb.ping::after,.stopask,.actcard.enter{animation:none}
     #progress,.pgap,.plan .track i,.plan .track.long i.fill,.plan .track.long b{transition:none}
   }
 
@@ -508,6 +546,7 @@
   <section id="pane">
     <div id="panehead"></div>
     <div id="goals"></div>
+    <div id="tapact"></div>
     <div id="msgs"></div>
     <div id="tray"></div>
     <form id="composer">
@@ -921,7 +960,7 @@ function setTab(name, instant){
 }
 tabs.addEventListener('click', e => { const b = e.target.closest('.tab'); if (b) setTab(b.dataset.tab); });
 
-const msgsEl = $('#msgs'), head = $('#panehead'), goalsEl = $('#goals');
+const msgsEl = $('#msgs'), head = $('#panehead'), goalsEl = $('#goals'), tapactEl = $('#tapact');
 const ta = $('#composer textarea'), sendBtn = $('#sendbtn');
 const tray = $('#tray'), attachBtn = $('#attach'), filepick = $('#filepick'), pane = $('#pane');
 let pending = [];   // [{file, url}] images waiting to send
@@ -1016,6 +1055,9 @@ const agentOf = k => k.slice(6);
 let taps = {items: [], me: '', fetched: 0, error: ''};
 let rendered = {key: null, sig: '', count: 0};
 const sending = [];       // optimistic tap messages: {key, body, ts}
+const flyAsked = {}, acceptAt = {};   // tap key -> ms of this page's own Fly / Accept (shown until the server's read has it, 2 min cap)
+let actState = {key: '', confirm: false, busy: false};   // the open tap's action card: Accept confirm open, a request in flight
+let focusedAsk = '';      // the question the composer was last focused for (key|at), so a poll never steals focus again
 
 function esc(t){ return t.replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 function md(src){
@@ -1045,11 +1087,23 @@ function when(ts){
 }
 const STATUS = {'needs-you':'Needs you', flying:'Flying', boarding:'Boarding', landed:'Landed'};
 const MASTER = {thinking:'Thinking', here:'Here', away:'Away', switching:'Switching car', starting:'Starting'};
+// a tap's phase (proposed, en route, holding, landed, done, closed); a tap without one renders by its status, as before
+const PHASES = new Set(['proposed', 'enroute', 'holding', 'landed', 'done', 'closed']);
+const PHASE_WORD = {proposed:'Proposed', enroute:'Flying', holding:'Needs you', landed:'Landed', done:'Done', closed:'Closed'};
+const hasPhase = t => PHASES.has(t.phase);
+const tapCls = t => hasPhase(t) ? 'p-' + t.phase : t.status;
+function tapWord(t){
+  if (typeof t.phase_word === 'string' && t.phase_word.trim()) return t.phase_word.trim();
+  return (hasPhase(t) ? PHASE_WORD[t.phase] : STATUS[t.status]) || '';
+}
+const isHolding = t => hasPhase(t) ? t.phase === 'holding' : t.status === 'needs-you';
+const tms = ts => typeof ts === 'number' ? ts * 1000 : Date.parse(ts);
 function tapName(t){ return t.title.replace(/^\[[^\]]*\]\s*/, ''); }
 function tapAvatar(t){
-  return `<span class="tapav ${t.status}${t.replying ? ' working' : ''}"><svg viewBox="0 0 38 38"><circle class="trk" cx="19" cy="19" r="17"/>
-    <circle class="arc" cx="19" cy="19" r="17"${t.status === 'landed' || t.status === 'needs-you' ? '' : ''}/></svg>
-    <span class="num">${t.status === 'landed' ? '✓' : ''}</span></span>`;
+  const check = hasPhase(t) ? t.phase === 'done' : t.status === 'landed';
+  return `<span class="tapav ${tapCls(t)}${t.replying ? ' working' : ''}"><svg viewBox="0 0 38 38"><circle class="trk" cx="19" cy="19" r="17"/>
+    <circle class="arc" cx="19" cy="19" r="17"/></svg>
+    <span class="num">${check ? '✓' : ''}</span></span>`;
 }
 
 /* unread = the other side said something after you last looked at that thread */
@@ -1113,6 +1167,13 @@ function syncNotes(box, key, notes){
   if (more){ if (!m){ m = document.createElement('div'); m.className = 'more'; box.appendChild(m); } m.textContent = '+' + more + ' more'; }
   else if (m) m.remove();
 }
+// the lead first, then the masters under it, then the rest; each block keeps the server's order (working first, then newest)
+function railOrder(list){
+  const lead = list.find(a => a.role === 'lead');
+  if (!lead) return list;
+  const under = a => a !== lead && a.parent === lead.name;
+  return [lead, ...list.filter(under), ...list.filter(a => a !== lead && !under(a))];
+}
 function syncAgents(){
   const box = $('#agentlist');
   if (!agents.length){ box.innerHTML = `<div class="railempty">No agents in the space yet. Any agent joins with tap.py listen --as NAME.</div>`; return; }
@@ -1122,7 +1183,8 @@ function syncAgents(){
   const keys = new Set(agents.map(a => agentKey(a.name)));
   const have = new Map();
   [...box.children].forEach(el => keys.has(el.dataset.key) ? have.set(el.dataset.key, el) : el.remove());
-  agents.forEach((a, i) => {
+  const order = railOrder(agents), lead = order[0] && order[0].role === 'lead' ? order[0] : null;
+  order.forEach((a, i) => {
     const key = agentKey(a.name);
     let g = have.get(key);
     if (!g){
@@ -1139,6 +1201,8 @@ function syncAgents(){
       g.append(b, talk, notes, stop);
     }
     const [b, talk, notes] = g.children;
+    g.classList.toggle('lead', a === lead);
+    g.classList.toggle('child', !!lead && a !== lead && a.parent === lead.name);
     const sig = a.state + '|' + a.title + '|' + a.count;
     if (b.dataset.sig !== sig){ b.dataset.sig = sig;
       b.innerHTML = `<span class="orb ${a.state}"></span><span class="tx"><div class="nm">${esc(a.title || 'Claude')}</div>
@@ -1182,12 +1246,13 @@ function syncList(box, items, keyOf, sigOf, html, emptyText){
 function renderRail(){
   syncAgents();
 
-  syncList(taplist, taps.items, t => t.key, t => t.status + '|' + t.title + '|' + t.messages.length, t => {
+  syncList(taplist, taps.items, t => t.key, t => [t.status, t.phase, t.phase_word, t.replying, t.title, t.messages.length].join('|'), t => {
       const last = t.messages.filter(m => m.who === 'tap').pop();
-      return tapAvatar(t) + `<span class="tx"><div class="nm">${esc(tapName(t))}</div>
-        <div class="sub">${STATUS[t.status]} · ${esc(t.repo.split('/')[1])}${last ? ' · ' + when(last.ts) : ''}</div></span><span class="unread"></span>`;
+      const sub = [esc(tapWord(t)), esc(t.repo.split('/')[1]), last ? when(last.ts) : ''].filter(Boolean).join(' · ');
+      return tapAvatar(t) + `<span class="tx${t.phase === 'closed' ? ' dim' : ''}"><div class="nm">${esc(tapName(t))}</div>
+        <div class="sub">${sub}</div></span><span class="unread"></span>`;
     }, taps.fetched ? 'No taps flying under your name.' : (taps.error ? 'Couldn’t reach GitHub: ' + esc(taps.error) : 'Looking for your taps…'));
-  const needs = taps.items.filter(t => t.status === 'needs-you').length;
+  const needs = taps.items.filter(isHolding).length;
   const unread = [...agents.map(a => agentKey(a.name)), ...taps.items.map(t => t.key)].filter(isUnread).length;
   const bc = $('#badge-chat'); const n = Math.max(needs, unread);
   bc.textContent = n; bc.classList.toggle('show', n > 0);
@@ -1218,10 +1283,10 @@ function renderHead(d){
       <span class="chip ${a.state}"><i></i>${MASTER[a.state]}</span>`;
   } else {
     const t = d.tap;
-    sig = t.key + '|' + t.status + '|' + t.title;
+    sig = [t.key, t.status, t.phase, t.phase_word, t.replying, t.title].join('|');
     html = tapAvatar(t) + `<span class="tx"><div class="nm">${esc(tapName(t))}</div>
       <div class="sub">${esc(t.repo.split('/')[1] || t.repo)} · <a href="${esc(t.url)}" target="_blank" rel="noopener">open issue</a></div></span>
-      <span class="chip ${t.status}"><i></i>${STATUS[t.status]}</span>`;
+      <span class="chip ${tapCls(t)}${hasPhase(t) && t.replying ? ' working' : ''}"><i></i>${esc(tapWord(t))}</span>`;
   }
   if (head.dataset.sig !== sig){
     const swap = head.dataset.key !== current;
@@ -1236,6 +1301,100 @@ function renderHead(d){
   }
 }
 
+/* ---- a tap's action card, above its messages: a holding tap's question, a landed tap's proof and Accept, a proposed tap's Fly ---- */
+const fresh = at => !!at && Date.now() - at < 120000;
+function proofShots(t){          // only the TapSpace proof route; a raw # would end the URL at a fragment
+  return (Array.isArray(t.proof) ? t.proof : []).map(p => ({
+    src: p && typeof p.url === 'string' ? p.url.replace(/#/g, '%23') : '',
+    alt: p && typeof p.alt === 'string' ? p.alt : ''})).filter(p => p.src.startsWith('/api/taps/proof?'));
+}
+function askOf(t){ const a = t.ask; return a && typeof a === 'object' && typeof a.text === 'string' && a.text.trim() ? a : null; }
+function answered(d, ask){       // a reply of yours (sent or still sending) newer than the question
+  const at = ask ? tms(ask.at) : NaN;
+  if (!Number.isFinite(at)){ const last = d.msgs[d.msgs.length - 1]; return !!last && last.who === 'you'; }
+  return d.msgs.some(m => m.who === 'you' && tms(m.ts) > at);
+}
+function setPart(el, sig, html){ if (el.dataset.sig === sig) return false; el.dataset.sig = sig; el.innerHTML = html; return true; }
+function renderAct(d){           // true while a holding tap's question waits on you
+  const t = d && d.tap, ph = t && hasPhase(t) ? t.phase : '';
+  if (actState.key !== current) actState = {key: current, confirm: false, busy: false};
+  if (ph !== 'landed') actState.confirm = false;
+  if (ph !== 'holding' && ph !== 'landed' && ph !== 'proposed'){
+    if (tapactEl.firstChild) tapactEl.innerHTML = '';
+    tapactEl.dataset.sig = ''; return false;
+  }
+  if (tapactEl.dataset.sig !== current + '|' + ph){
+    tapactEl.dataset.sig = current + '|' + ph;
+    tapactEl.innerHTML = `<div class="actcard enter ${ph}"><div></div><div></div></div>`;
+  }
+  const card = tapactEl.firstChild, [top, foot] = card.children;
+  if (ph === 'holding'){
+    const ask = askOf(t), done = answered(d, ask), at = ask ? tms(ask.at) : NaN;
+    card.classList.toggle('answered', done);
+    setPart(top, [done, ask && ask.text, ask && ask.at].join('|'),
+      `<div class="actlabel">${done ? 'Answered' : 'Needs you'}${Number.isFinite(at) ? '<em></em>' : ''}</div>` +
+      `<div class="acttext ask">${ask ? esc(ask.text.trim()) : 'It’s waiting on your reply.'}</div>`);
+    const em = top.querySelector('em'); if (em) em.textContent = when(ask.at);
+    setPart(foot, '', '');
+    const fk = current + '|' + (ask ? ask.at : '');
+    if (!done && focusedAsk !== fk && document.body.classList.contains('chatmode')){
+      focusedAsk = fk;
+      const ae = document.activeElement;     // never take the caret from another field
+      if (!ae || ae === ta || !/^(INPUT|TEXTAREA)$/.test(ae.tagName)) ta.focus();
+    }
+    return !done;
+  }
+  if (ph === 'landed'){
+    const shots = proofShots(t);
+    if (setPart(top, shots.map(s => s.src + ' ' + s.alt).join('|'), `<div class="actlabel">Landed</div>` + (shots.length
+        ? `<div class="proof">${shots.map(s => `<img src="${esc(s.src)}" alt="${esc(s.alt)}" title="${esc(s.alt)}" loading="lazy" decoding="async">`).join('')}</div>`
+        : `<div class="acttext">No pictures in the issue yet.</div>`))){
+      top.querySelectorAll('.proof img').forEach(im => im.addEventListener('error', () => {
+        const g = im.parentElement; im.remove();
+        if (g && !g.children.length) g.outerHTML = '<div class="acttext">No pictures in the issue yet.</div>';
+      }, {once: true}));
+    }
+    const goals = Array.isArray(t.goals) ? t.goals : [];
+    const all = goals.length > 0 && goals.every(g => g.done), acc = fresh(acceptAt[current]);
+    setPart(foot, [all, acc, actState.confirm, tapName(t)].join('|'), acc
+      ? `<div class="acttext">Accepted. It shows as Done in a moment.</div>`
+      : actState.confirm
+      ? `<div class="stopask"><div>Accept <b>${esc(tapName(t))}</b>? It closes on GitHub as done.</div>
+          <div class="row"><button type="button" class="rbtn clear" data-act="cancel">Cancel</button><button type="button" class="rbtn go" data-act="accept">Accept</button></div></div>`
+      : `<div class="actline"><span>${all ? 'Every goal is checked.' : ''}</span><button type="button" class="rbtn go" data-act="confirm">Accept</button></div>`);
+    const yes = foot.querySelector('[data-act=accept]');
+    if (yes) yes.textContent = actState.busy ? 'Accepting…' : 'Accept';
+  } else {
+    const asked = t.fly_requested === true || fresh(flyAsked[current]);
+    setPart(top, 'proposed', `<div class="actlabel">Proposed</div>`);
+    setPart(foot, String(asked), `<div class="actline"><span>${asked ? 'Waiting to fly.' : 'Not flying yet.'}</span>` +
+      (asked ? '' : `<button type="button" class="rbtn go" data-act="fly">Fly</button>`) + `</div>`);
+  }
+  foot.querySelectorAll('button').forEach(b => { b.disabled = actState.busy; });
+  return false;
+}
+tapactEl.addEventListener('click', async e => {
+  const im = e.target.closest('.proof img');
+  if (im){ openImage(im.src); lbcap.textContent = im.alt; return; }
+  const b = e.target.closest('button[data-act]'), key = current;
+  if (!b || b.disabled || !taps.items.some(x => x.key === key)) return;
+  const act = b.dataset.act, redraw = () => renderAct(threadData());
+  if (act === 'confirm' || act === 'cancel'){
+    actState.confirm = act === 'confirm'; redraw();
+    tapactEl.querySelector(actState.confirm ? '[data-act=cancel]' : '[data-act=confirm]')?.focus();
+    return;
+  }
+  actState.busy = true; redraw();
+  const r = await postJ(act === 'fly' ? '/api/taps/fly' : '/api/taps/accept', {key});
+  if (actState.key === key){ actState.busy = false; actState.confirm = false; }
+  if (!r.ok){ redraw(); toast((act === 'fly' ? 'Couldn’t fly it: ' : 'Couldn’t accept it: ') + (r.error || 'TapSpace said no')); return; }
+  (act === 'fly' ? flyAsked : acceptAt)[key] = Date.now(); redraw();
+  setTimeout(pollTaps, 2500); setTimeout(pollTaps, 6000);
+});
+tapactEl.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && actState.confirm && !actState.busy){ actState.confirm = false; renderAct(threadData()); }
+});
+
 function nearEnd(){ return msgsEl.scrollHeight - msgsEl.scrollTop - msgsEl.clientHeight < 120; }
 function scrollEnd(instant){
   if (instant){ msgsEl.style.scrollBehavior = 'auto'; msgsEl.scrollTop = msgsEl.scrollHeight; msgsEl.style.scrollBehavior = ''; }
@@ -1245,17 +1404,20 @@ function scrollEnd(instant){
 function renderThread(){
   const d = threadData();
   if (!d){
-    const fall = agents[0] ? agentKey(agents[0].name) : (taps.items[0] ? taps.items[0].key : '');
+    const first = railOrder(agents)[0];   // a fresh page opens on the lead (taps only once the agents have answered)
+    const fall = first ? agentKey(first.name) : (agentsLoaded && taps.items[0] ? taps.items[0].key : '');
     if (fall && fall !== current){ current = fall; return renderThread(); }
-    head.innerHTML = ''; goalsEl.innerHTML = ''; head.dataset.sig = '';
+    head.innerHTML = ''; goalsEl.innerHTML = ''; head.dataset.sig = ''; renderAct(null);
     msgsEl.innerHTML = `<div class="hello"><div class="big">The space is open.</div>Agents join with <code>tap.py listen --as NAME</code>. Your taps show up here on their own.</div>`;
     rendered = {key: '', sig: ''}; return;
   }
   renderHead(d);
-  ta.placeholder = d.agent ? 'Message ' + (d.agent.title || 'Claude') + '…' : 'Message this tap…';
+  const asking = renderAct(d);
+  ta.placeholder = d.agent ? 'Message ' + (d.agent.title || 'Claude') + '…' : asking ? 'Answer this tap…' : 'Message this tap…';
   attachBtn.classList.toggle('hide', !d.agent);
   syncSend();
-  const sig = current + '|' + d.msgs.map(m => m.id + (m.seen ? 's' : '') + (m.pending ? 'p' : '') + ((m.images || []).length)).join(',') + '|' + d.typing + '|' + d.switching;
+  const sig = current + '|' + d.msgs.map(m => m.id + (m.seen ? 's' : '') + (m.pending ? 'p' : '') + ((m.images || []).length) + (m.via ? '@' + titleOf(m.via) : '')).join(',') + '|' + d.typing + '|' + d.switching +
+    (d.tap && hasPhase(d.tap) ? '|' + tapWord(d.tap) : '');
   if (sig === rendered.sig) return;
   const switched = rendered.key !== current;
   const stick = switched || nearEnd();
@@ -1264,6 +1426,8 @@ function renderThread(){
   if (!d.msgs.length){
     msgsEl.innerHTML = d.agent
       ? `<div class="hello"><div class="big">Hey.</div>A direct line to ${esc(d.agent.title || 'Claude')}. Say anything.</div>`
+      : hasPhase(d.tap)
+      ? `<div class="hello"><div class="big">${esc(tapWord(d.tap))}.</div>${d.tap.phase === 'proposed' ? 'This tap hasn’t flown yet.' : 'This tap hasn’t said anything yet. It posts its plan here when it takes off.'}</div>`
       : `<div class="hello"><div class="big">Boarding.</div>This tap hasn’t said anything yet. It posts its plan here when it takes off.</div>`;
   }
   for (const m of d.msgs){
@@ -1271,7 +1435,8 @@ function renderThread(){
     el.className = 'msg ' + m.who + (known && !known.has(m.id) ? ' new' : '');
     el.dataset.id = m.id;
     let meta = when(m.ts);
-    if (m.who === 'you' && !d.agent) meta += (m.via ? ' · via ' + esc(m.via) : '') + (m.pending ? ' · sending' : (m.seen ? ' · <span class="seen">seen 👀</span>' : ' · delivered'));
+    const via = m.via ? titleOf(m.via) : '';   // the sender's title; never its hidden name
+    if (m.who === 'you' && !d.agent) meta += (via ? ' · via ' + esc(via) : '') + (m.pending ? ' · sending' : (m.seen ? ' · <span class="seen">seen 👀</span>' : ' · delivered'));
     const imgs = m.images || [];
     const grid = imgs.length ? `<div class="imgs ${imgs.length > 4 ? 'nmany' : 'n' + imgs.length}">${imgs.map(u => `<img src="${esc(u)}" alt="" loading="lazy">`).join('')}</div>` : '';
     el.innerHTML = grid + (m.body ? `<div class="bub">${md(m.body)}</div>` : '') + `<div class="meta2">${meta}</div>`;
@@ -1606,6 +1771,7 @@ function byFirst(x, y){
 }
 function board(list, links, now){
   const live = (Array.isArray(list) ? list : []).filter(a => a && a.name && isLive(a, now)).sort(byFirst);
+  const li = live.findIndex(a => a.role === 'lead'); if (li > 0) live.unshift(live.splice(li, 1)[0]);   // the lead's card first
   const names = new Set(live.map(a => a.name));
   const best = new Map();                          // one link per pair, the newest
   for (const l of Array.isArray(links) ? links : []){

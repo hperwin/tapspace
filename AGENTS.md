@@ -69,6 +69,16 @@ You don't need an orchestrator: a solo agent can post and `wait`. But if one pro
    ```
    The goal is one line under 90 characters; steps are 3 to 7 phases of one or two words, in order, and scope rows roll up into the note. The card lives under your NAME, so a relay keeps it: the next car reads it with `tap.py progress --as "NAME"` and keeps moving it. Lanes never publish one.
 
+7. **One lead over the masters (optional).** When one master runs the others, it marks itself the lead, and every client shows it first with the other masters under it. There is one lead at a time: the newest replaces the old one. These calls work from this Mac only:
+   ```bash
+   python3 /path/to/tapspace/tap.py lead --as "LEAD"
+   python3 /path/to/tapspace/tap.py new --as "LEAD" --dir ~/Developer/app --order-file order.md
+   python3 /path/to/tapspace/tap.py adopt --as "LEAD" "CHILD"
+   ```
+   `new` starts a fresh master in that folder, headless in tmux, the way the space's New session button does. The master is born under the lead, and the order file's text is added to its first prompt. `new` prints the server's answer, which names the child (`agent`, its chat NAME) and its tmux session (`tmux`). Address the child by that NAME from then on: the NAME survives its relays, the session does not. `adopt` puts a master that is already running under the lead. Lanes never run these.
+
+8. **Taps: read the phase; the buttons are the human's.** `tap.py taps` prints each tap's phase as the one word every client shows: Proposed, Flying, Needs you, Landed, Done or Closed. A Proposed tap that has been asked to fly adds "waiting to fly". When the human gives you the answer to a Needs you tap, post it with `tap.py tap-say` (an issue comment as the human, signed with your NAME). Flying a Proposed tap (`POST /api/taps/fly`) and accepting a Landed one (`POST /api/taps/accept`, which closes the issue as completed, the human's sign-off) are the human's buttons in the space page, the Mac app and Glint. Agents never call these two routes, and tap.py has no command for them, the same way `/api/decide` belongs to the space page alone.
+
 ---
 
 ## Protocol reference
@@ -82,6 +92,10 @@ You don't need an orchestrator: a solo agent can post and `wait`. But if one pro
 | Agent | read decision | `tap.py wait` (blocking) / `tap.py status` (instant) |
 | Orchestrator | wake + truth | tail on INBOX -> relay verbatim + append to the agent's brief |
 | Master | goal card | `tap.py goal` once, then `tap.py step` as each step lands |
+| Lead | lead mark | `tap.py lead` once at boot; the newest lead replaces the old one |
+| Lead | child master | `tap.py new` (prints the child's NAME and tmux session) or `tap.py adopt` |
+| Agent | read taps | `tap.py taps`: key, phase word, title, last message |
+| Human | fly or accept a tap | space page, Mac app, Glint (`/api/taps/fly`, `/api/taps/accept`); never an agent |
 
 Decision JSON, as returned by `tap.py wait` (and stored per-version in the ticket's `decisions` array):
 
@@ -102,7 +116,7 @@ The `INBOX.jsonl` event carries a richer shape, and it is what names the owning 
 
 ## Notes that keep the loop honest
 
-- **The presence HUD is automatic.** Do not build status reporting into agent prompts; the server derives presence from its own request stream. The HUD sees traffic, not claims. Card owners and agent-to-agent links are detected the same way, so lanes never report them. The one thing a master publishes on purpose is its goal card (Orchestrator duty 6).
+- **The presence HUD is automatic.** Do not build status reporting into agent prompts; the server derives presence from its own request stream. The HUD sees traffic, not claims. Card owners and agent-to-agent links are detected the same way, so lanes never report them. A master publishes only its goal card on purpose (Orchestrator duty 6), plus, if it is the lead, its lead mark and children (duty 7).
 - **On v2+ the space pixel-diffs the new capture against the previous version** and highlights changed regions. This only works when captures are same-surface, same-device renders, which is one more reason they must be.
 - **Campaign tags keep wraps clean** when several fleets share one space. Keep agent names unique within a campaign (presence rows are keyed by campaign + agent).
 - **The human views the space in their own browser.** If you verify the page with an automation browser, close it when done; never leave a script-pinned viewport open as the human's viewer.
