@@ -506,7 +506,10 @@ def _agents_watch():
 
 def _chat_clear():
     """Clear all: every thread's history and every agent that is not live moves to
-    data/archive/ (nothing is deleted). Live agents stay, with empty threads."""
+    data/archive/ (nothing is deleted). Live agents stay, with empty threads: listening, starting,
+    switching cars, or busy between listens (a Claude session registered to it still runs), so a
+    master answering keeps its goal card and its read mark."""
+    running = _running_names()         # runs ps: before _lock
     with _lock:
         arch = DATA / "archive"
         arch.mkdir(exist_ok=True)
@@ -524,7 +527,7 @@ def _chat_clear():
         now = time.time()
         keep = {n: i for n, i in a.items()
                 if now - i.get("listen", 0) < 30 or i.get("spawned", 0) > i.get("listen", 0)
-                or i.get("switching", 0) > i.get("listen", 0)}
+                or i.get("switching", 0) > i.get("listen", 0) or n in running}
         tmp = AGENTS.with_suffix(".tmp")
         tmp.write_text(json.dumps(keep, indent=1))
         tmp.replace(AGENTS)
@@ -536,11 +539,14 @@ def _chat_clear():
 # tap.py sends the Claude session it runs in (X-Claude-Session, X-Claude-Pid), only when that
 # Claude process is its own ancestor, so a stale inherited id is never sent. listen, reply, title
 # and relay record session -> NAME here; a card posted from that session, or by a lane inside it,
-# belongs to that NAME. A relay car adds its own session under the same NAME, so cards from either
-# car keep one owner. Cards without a provable owner fall back at read time.
+# belongs to that NAME, and a lane speaking under another NAME never moves it (_claim_moves). A relay
+# car adds its own session under the same NAME, so cards from either car keep one owner. Cards
+# without a provable owner fall back at read time.
 CLAIMS = DATA / "sessions.json"     # {"sessions": {sid: {name, pid, pid_start, first, seen, how}},
                                     #  "campaigns": {campaign: [NAME, ...]}}
 CLAIM_KEEP = 14 * 86400             # a session nobody spoke for in this long is forgotten
+CLAIM_MOVE = 30                     # a claimed session goes to another NAME only after its own NAME has
+                                    # not listened this long (the rail's Here window)
 
 
 def _claims():
@@ -568,9 +574,36 @@ def _proc_start(pid):
         return ""
 
 
+def _running_names():
+    """NAMEs with a registered Claude session whose process still runs: the same process that
+    claimed it, since pids are reused. One ps call; never under _lock."""
+    rows = [s for s in _claims()["sessions"].values() if s.get("pid") and s.get("pid_start") and s.get("name")]
+    if not rows:
+        return set()
+    try:
+        out = subprocess.run(["ps", "-o", "pid=", "-o", "lstart=", "-p", ",".join(sorted({str(int(s["pid"])) for s in rows}))],
+                             capture_output=True, text=True, timeout=5).stdout
+    except Exception:
+        return set()
+    starts = {int(f[0]): " ".join(f[1].split()) for f in (line.split(None, 1) for line in out.splitlines())
+              if len(f) == 2 and f[0].isdigit()}
+    return {s["name"] for s in rows if starts.get(int(s["pid"])) == " ".join(str(s["pid_start"]).split())}
+
+
+def _claim_moves(cur, name, how, now):
+    """Whether a session claimed by cur may now speak as name. An agent inside a master shares the
+    master's session, so its listen, reply or title under another NAME must not take that session:
+    a claim moves only through the new NAME's listen once cur has not listened for CLAIM_MOVE
+    seconds, or through a relay."""
+    if not cur or cur == name or how == "relay":
+        return True
+    return how == "listen" and now - (_agents().get(cur) or {}).get("listen", 0) > CLAIM_MOVE
+
+
 def _claim(who, name, how):
-    """This call's Claude session speaks as NAME; the newest claim wins per session. Listen polls
-    every 2 s, so nothing is written unless the claim is new, moved, or 10 minutes old."""
+    """This call's Claude session speaks as NAME: the first claim takes the session, a later one
+    only as _claim_moves allows. Listen polls every 2 s, so nothing is written unless the claim is
+    new, moved, or 10 minutes old."""
     sid, pid = who.get("session"), who.get("pid") or 0
     if not sid:
         return
@@ -578,10 +611,14 @@ def _claim(who, name, how):
     now = time.time()
     if old.get("name") == name and old.get("pid") == pid and now - old.get("seen", 0) < 600:
         return
+    if not _claim_moves(old.get("name"), name, how, now):
+        return
     start = old.get("pid_start", "") if old.get("pid") == pid else (_proc_start(pid) if pid else "")
     with _lock:
         c = _claims()
         row = c["sessions"].get(sid) or {"first": now}
+        if not _claim_moves(row.get("name"), name, how, now):
+            return
         row.update(name=name, pid=pid, pid_start=start, seen=now, how=how)
         c["sessions"][sid] = row
         c["sessions"] = {k: v for k, v in c["sessions"].items() if now - v.get("seen", 0) < CLAIM_KEEP}
@@ -1763,6 +1800,6 @@ if __name__ == "__main__":
     threading.Thread(target=_scan_sessions, daemon=True).start()
     threading.Thread(target=_taps_loop, daemon=True).start()
     threading.Thread(target=_watch_loop, daemon=True).start()
-    links.start(DATA, _bump)
+    links.start(DATA, _bump, titles=lambda: {n: _title(i) for n, i in _agents().items()})
     print(f"TapSpace serving on http://127.0.0.1:{PORT}")
     ThreadingHTTPServer(("127.0.0.1", PORT), H).serve_forever()

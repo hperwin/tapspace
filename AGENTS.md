@@ -22,7 +22,7 @@ It assumes the server is at `http://127.0.0.1:4747` and `tap.py` is reachable at
    ```bash
    python3 /path/to/tapspace/tap.py post --agent T2-cards --title "Combined stat card" --image shot.png --campaign <campaign>
    ```
-   Save the printed TICKET_ID in your report. One card per coherent unit; a stream with five units posts five cards over its life. The card lands under your master by itself (`tap.py` tells the server which Claude Code session it runs in); outside Claude Code, add `--owner "<master's chat NAME>"`.
+   Save the printed TICKET_ID in your report. One card per coherent unit; a stream with five units posts five cards over its life. A lane that runs inside its master's own Claude Code process (a workflow agent or an in-process teammate) lands under that master by itself (`tap.py` tells the server which Claude Code session it runs in). A lane in its OWN process (`claude -p`, Codex, a separate tmux session) or outside Claude Code must add `--owner "<master's chat NAME>"`.
 
 4. **Do not park on the card.** Keep working your next unit. Check decisions at natural boundaries (`tap.py status TICKET`), or block with `tap.py wait TICKET --timeout 900` only when the decision truly gates your next edit. Exit codes: 0 = approved, 3 = changes (the reviewer's message is on stdout), 4 = timeout (note it in your report and continue other work; your orchestrator will wake you when the decision lands).
 
