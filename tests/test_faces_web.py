@@ -86,6 +86,7 @@ class WebFaceDrawTests(unittest.TestCase):
     def test_tones_and_defaults(self):
         self.assertEqual(js("[orbCls({}), orbCls({look: 2, state: 'here'}), orbCls({look: 3, state: 'thinking'})]"),
                          ["orb t0 away", "orb t1 here", "orb t2 thinking"])
+        self.assertEqual(js("orbCls({state: 'x\" onmouseover=\"1'})"), "orb t0 away")   # a state is a class name, never markup
         # a missing, wrong or out-of-range look draws as look 0
         self.assertEqual(js("[faceLook(undefined), faceLook(-1), faceLook(18), faceLook('4'), faceLook(4)]"),
                          [[0, 0], [0, 0], [0, 0], [0, 0], [0, 2]])

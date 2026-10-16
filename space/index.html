@@ -1247,7 +1247,8 @@ function faceArt(look, state){
   return `<svg class="fa" viewBox="0 0 88 88" aria-hidden="true"><path d="${FACE_EYES[x]}"/><path class="ln" d="${FACE_MOUTH[x]}"/>` +
     (ln ? `<path class="ln" d="${ln}"/>` : '') + (dot ? `<path d="${dot}"/>` : '') + '</svg>';
 }
-const orbCls = a => `orb t${faceLook(a.look)[0]} ${a.state || 'away'}`;
+const FACE_STATES = new Set(['here', 'thinking', 'starting', 'switching', 'away']);   // a state lands in a class name: only these
+const orbCls = a => `orb t${faceLook(a.look)[0]} ${FACE_STATES.has(a.state) ? a.state : 'away'}`;
 function masterFace(a, st = ''){ return `<span class="${orbCls(a)}"${st}>${faceArt(a.look, a.state)}</span>`; }
 // a repo's or project's letter, the server's _initial rule: the first letter or digit after the last '/', upper case
 function initialOf(name){
