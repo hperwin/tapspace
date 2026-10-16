@@ -41,14 +41,16 @@ enum ChatProgressBoard {
     static func onBoard(_ a: Agent, now: Double) -> Bool { progress(a) != nil || isLive(a, now: now) }
 
     /// The column: cards in a stable order (when each master joined, then its
-    /// name; never by state or recency), each talking pair pulled together
-    /// under its earlier member, the link on the upper row. A pair needs the
-    /// server's `active`, a newest message within `linkWindow`, two different
-    /// masters that both hold a card, and at most one partner per master (the
-    /// newest link wins), so every drawn pair is adjacent.
+    /// name; never by state or recency), the lead's card (Muddi) first, each
+    /// talking pair pulled together under its earlier member, the link on the
+    /// upper row. A pair needs the server's `active`, a newest message within
+    /// `linkWindow`, two different masters that both hold a card, and at most
+    /// one partner per master (the newest link wins), so every drawn pair is
+    /// adjacent.
     static func rows(agents: [Agent], links: [AgentLink], now: Double) -> [Row] {
-        let cards = agents.filter { onBoard($0, now: now) }
+        var cards = agents.filter { onBoard($0, now: now) }
             .sorted { ($0.first ?? 0, $0.name) < ($1.first ?? 0, $1.name) }
+        if let i = cards.firstIndex(where: \.isLead), i > 0 { cards.insert(cards.remove(at: i), at: 0) }
         let names = Set(cards.map(\.name))
         let talking = links
             .filter { $0.active && now - $0.last < linkWindow && $0.a != $0.b && names.contains($0.a) && names.contains($0.b) }
