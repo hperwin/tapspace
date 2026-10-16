@@ -475,7 +475,7 @@ struct PaneHeader: View {
                 VStack(alignment: .leading, spacing: 2) {
                     HeaderTitle(text: tap.name)
                     HStack(spacing: 4) {
-                        Text(tap.key + " ·")
+                        Text(tap.repoName + " ·")
                         if let url = URL(string: tap.url) { IssueLink(url: url) }
                     }
                     .font(.system(size: 11.5))
