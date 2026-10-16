@@ -38,10 +38,11 @@
                                             prompt; prints its NAME and tmux session
   tap.py adopt --as LEAD CHILD           -> puts CHILD, a master already running, under LEAD
   Taps (the reviewer's GitHub agent issues; every agent can talk to all of them):
-  tap.py taps                            -> list them: key, status, title, last message
+  tap.py taps                            -> list them: key, phase (Proposed, Flying, Needs you, Landed, Done,
+                                            Closed), title, last message
   tap.py tap-read KEY                    -> the whole thread of one tap (KEY = owner/repo#n)
   tap.py tap-say --as NAME KEY "text"    -> message a tap as the reviewer (signed "Sent by NAME")
-  tap.py tap-watch [--timeout 3600]      -> blocks until any tap posts something new or changes status
+  tap.py tap-watch [--timeout 3600]      -> blocks until any tap posts something new or changes state
   tap.py relay --as NAME                 -> this session is handing off to its next car: the thread
                                             shows "Switching car" until the new car listens --as NAME
   tap.py reply --as NAME "text" [--image a.png ...]
@@ -436,11 +437,16 @@ def main():
     if a.cmd in ("taps", "tap-read", "tap-watch"):
         def snap():
             return {t["key"]: t for t in _call("/api/taps")["items"]}
+        def word(t):                    # the one plain word every client shows; status on an older server
+            return t.get("phase_word") or t["status"]
+        def sig(t):
+            return (len(t["messages"]), t["status"], t.get("phase"))
         if a.cmd == "taps":
             for t in snap().values():
                 last = [m for m in t["messages"] if m["who"] == "tap"]
                 tail = (last[-1]["body"].splitlines() or [""])[0][:90] if last else ""
-                print(f"{t['key']}  [{t['status']}{', replying' if t.get('replying') else ''}]  {t['title']}")
+                fly = ", waiting to fly" if t.get("phase") == "proposed" and t.get("fly_requested") else ""
+                print(f"{t['key']}  [{word(t)}{fly}{', replying' if t.get('replying') else ''}]  {t['title']}")
                 if tail:
                     print(f"    last: {tail}")
             return 0
@@ -449,14 +455,14 @@ def main():
             t = snap().get(a.key)
             if not t:
                 print(json.dumps({"error": "no such tap of yours"})); return 1
-            print(f"{t['key']}  [{t['status']}]  {t['title']}\n{t['url']}")
+            print(f"{t['key']}  [{word(t)}]  {t['title']}\n{t['url']}")
             for g in t["goals"]:
                 print(f"  [{'x' if g['done'] else ' '}] {g['text']}")
             for m in t["messages"]:
                 who = "tap" if m["who"] == "tap" else ("you" + (f" (via {m['via']})" if m.get("via") else ""))
                 print(f"\n--- {who} · {m['ts']}{' · seen' if m.get('seen') else ''}\n{m['body']}")
             return 0
-        base = {k: (len(t["messages"]), t["status"]) for k, t in snap().items()}
+        base = {k: sig(t) for k, t in snap().items()}
         deadline = time.time() + a.timeout
         while time.time() < deadline:
             time.sleep(5)
@@ -465,16 +471,16 @@ def main():
             except Exception:
                 continue
             news = [t for k, t in now.items()
-                    if k not in base or (len(t["messages"]), t["status"]) != base[k]]
+                    if k not in base or sig(t) != base[k]]
             news = [t for t in news if t["messages"] and t["messages"][-1]["who"] == "tap"
-                    or (t["key"] in base and t["status"] != base[t["key"]][1])]
+                    or (t["key"] in base and sig(t)[1:] != base[t["key"]][1:])]
             if news:
                 for t in news:
-                    print(f"== {t['key']} [{t['status']}] {t['title']}")
+                    print(f"== {t['key']} [{word(t)}] {t['title']}")
                     if t["messages"]:
                         print(t["messages"][-1]["body"])
                 return 0
-            base = {k: (len(t["messages"]), t["status"]) for k, t in now.items()}
+            base = {k: sig(t) for k, t in now.items()}
         print(json.dumps({"timeout": True}))
         return 4
 
