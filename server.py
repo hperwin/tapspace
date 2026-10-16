@@ -491,7 +491,62 @@ def _agent_rows():
     rank = {"thinking": 0, "switching": 0, "starting": 0, "here": 1, "away": 2}
     out.sort(key=lambda r: -r["last"])
     out.sort(key=lambda r: rank[r["state"]])
+    # the lead (Muddi, the master over masters): live only while its row is served. Every other row's
+    # parent is the NAME stored on it, else the live lead's; the lead comes first, then its children.
+    lead = next((r for r in out if agents[r["name"]].get("role") == "lead"), None)
+    for r in out:
+        stored = agents[r["name"]].get("parent")
+        r["parent"] = stored if isinstance(stored, str) and stored else \
+            (lead["name"] if lead and r is not lead else None)
+    if lead:
+        lead["role"] = "lead"
+        out = [lead] + [r for r in out if r is not lead and r["parent"] == lead["name"]] + \
+              [r for r in out if r is not lead and r["parent"] != lead["name"]]
     return out
+
+
+def _set_lead(name):
+    """NAME becomes the one lead (the newest call wins). A NAME that has not joined yet gets a bare row,
+    off the rail until it listens. The lead reports to no one."""
+    with _lock:
+        a = _agents()
+        for n, row in a.items():
+            if n != name:
+                row.pop("role", None)
+        row = a.get(name) or {"name": name, "first": time.time()}
+        row["role"] = "lead"
+        row.pop("parent", None)
+        a[name] = row
+        _agents_write(a)
+    _bump("agents")
+
+
+def _adopt(lead, child):
+    """Stores parent=lead on child (an empty lead clears it, back to the live lead) -> (code, answer).
+    A mark the reviewer's lead makes, not the child's activity, so seen is left alone."""
+    with _lock:
+        a = _agents()
+        if child not in a:
+            return 404, {"error": "no agent by that name has joined"}
+        if lead and lead not in a:
+            return 404, {"error": "no lead by that name has joined"}
+        if lead and lead == child:
+            return 400, {"error": "an agent cannot lead itself"}
+        if lead and a[child].get("role") == "lead":
+            return 400, {"error": "the lead reports to no one"}
+        up, seen = lead, set()
+        while up and up not in seen:
+            if up == child:
+                return 400, {"error": "that would make a loop"}
+            seen.add(up)
+            up = (a.get(up) or {}).get("parent")
+        if lead:
+            a[child]["parent"] = lead
+        else:
+            a[child].pop("parent", None)
+        _agents_write(a)
+    _bump("agents")
+    return 200, {"ok": True, "child": child, "parent": lead or None}
 
 
 def _agents_watch():
@@ -502,7 +557,8 @@ def _agents_watch():
         try:
             rows = _agent_rows()
             sig = ([(r["name"], r["state"], r["where"], r["title"], (r["progress"] or {}).get("updated"),
-                     r["notes_read"], [(n["ticket"], n["version"], n["ts"]) for n in r["notes"]])
+                     r["notes_read"], [(n["ticket"], n["version"], n["ts"]) for n in r["notes"]],
+                     r.get("role"), r["parent"])
                     for r in rows],
                    links.rows({r["name"] for r in rows}))
             if sig != last:
@@ -1842,7 +1898,7 @@ class H(BaseHTTPRequestHandler):
         if self.path in ("/api/chat", "/api/chat/reply", "/api/taps/say", "/api/chat/import",
                          "/api/agents/new", "/api/chat/clear", "/api/devices",
                          "/api/agents/progress", "/api/agents/read", "/api/agents/stop",
-                         "/api/taps/fly", "/api/taps/accept"):
+                         "/api/taps/fly", "/api/taps/accept", "/api/agents/lead", "/api/agents/adopt"):
             # these speak for the reviewer or write agent state: same-origin JSON only, so no
             # other page can drive them through the browser
             origin = self.headers.get("Origin")
@@ -1936,6 +1992,26 @@ class H(BaseHTTPRequestHandler):
                     self._json({"error": "accept is Hayden's own sign-off"}, 403)
                     return
                 code, out = _tap_act(p.get("key"), self.path.rsplit("/", 1)[1])
+                self._json(out, code)
+                return
+            if self.path in ("/api/agents/lead", "/api/agents/adopt"):
+                # Muddi takes the lead, or puts a master under a lead (local only)
+                if not self._local():
+                    self._json({"error": "only from this Mac"}, 403)
+                    return
+                if self.path == "/api/agents/lead":
+                    name = str(p.get("name") or p.get("agent") or "").strip()
+                    if not _NAME.match(name):
+                        self._json({"error": "bad agent name"}, 400)
+                        return
+                    _set_lead(name)
+                    self._json({"ok": True, "lead": name})
+                    return
+                lead, child = str(p.get("lead") or "").strip(), str(p.get("child") or "").strip()
+                if not _NAME.match(child) or (lead and not _NAME.match(lead)):
+                    self._json({"error": "bad agent name"}, 400)
+                    return
+                code, out = _adopt(lead, child)
                 self._json(out, code)
                 return
             body = (p.get("body") or (str(p.get("text") or "") if self.path == "/api/taps/say" else "")
