@@ -284,6 +284,18 @@
   .tapav.landed{background:rgba(48,161,78,.09)}
   .tapav.landed .arc{stroke:var(--green)}
   .tapav.landed .num{color:var(--green)}
+  /* tap phases: the same rings under p-* classes (the status rules above stay for taps without a phase) */
+  .tapav.p-proposed .arc,.tapav.p-enroute .arc,.tapav.p-holding .arc,.tapav.p-landed .arc,.tapav.p-done .arc,.tapav.p-closed .arc{transform-origin:19px 19px}
+  .tapav.p-enroute .arc{stroke-dasharray:30 80}
+  .tapav.p-proposed .arc{stroke:var(--faint);stroke-dasharray:3 6}
+  .tapav.p-holding{background:rgba(var(--hl),.08)}
+  .tapav.p-holding .arc{stroke:rgb(var(--hl));animation:breathe 1.5s ease-in-out infinite}
+  .tapav.p-holding .num{color:rgb(var(--hl))}
+  .tapav.p-landed,.tapav.p-done{background:rgba(48,161,78,.09)}
+  .tapav.p-landed .arc,.tapav.p-done .arc{stroke:var(--green)}
+  .tapav.p-landed .num,.tapav.p-done .num{color:var(--green)}
+  .tapav.p-closed .arc{stroke:var(--faint)}
+  .thread .tx.dim{opacity:.55}
   @keyframes spin{to{transform:rotate(360deg)}}
 
   .chip{display:inline-flex;align-items:center;gap:6px;font-size:10.5px;font-weight:600;letter-spacing:.06em;
@@ -292,6 +304,10 @@
   .chip.flying{color:var(--ink)} .chip.flying i{animation:breathe 1.2s ease-in-out infinite}
   .chip.needs-you{background:rgba(var(--hl),.1);color:rgb(var(--hl))} .chip.needs-you i{animation:breathe 1s ease-in-out infinite}
   .chip.landed{background:rgba(48,161,78,.1);color:var(--green)}
+  .chip.p-enroute{color:var(--ink)} .chip.p-enroute.working i{animation:breathe 1.2s ease-in-out infinite}
+  .chip.p-holding{background:rgba(var(--hl),.1);color:rgb(var(--hl))} .chip.p-holding i{animation:breathe 1s ease-in-out infinite}
+  .chip.p-landed,.chip.p-done{background:rgba(48,161,78,.1);color:var(--green)}
+  .chip.p-closed{color:var(--faint)}
   .chip.thinking{background:rgba(var(--hl),.1);color:rgb(var(--hl))} .chip.thinking i{animation:breathe 1s ease-in-out infinite}
   .chip.here{color:var(--green)} .chip.away{color:var(--faint)}
   .chip.switching{background:rgba(var(--hl),.1);color:rgb(var(--hl))} .chip.switching i{animation:breathe .9s ease-in-out infinite}
