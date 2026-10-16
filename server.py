@@ -1651,33 +1651,41 @@ def _holds(t, raw):
         return False
 
 
+PROOF_RETRY = 600          # seconds before an image GitHub did not hand over is asked for again
+_PROOF_MISS = {}           # (tap key, v) -> when fetching that image last failed
+
+
 def _proof_cards():
     """Each proof image of a landed tap becomes a Visuals card, stored the way /api/post stores one and
-    waiting for the reviewer: one card per image (tap key, index), and the pilot replacing an image (a new
-    v) adds a version to that card, never a second card. A card that already shows the same bytes (posted
-    by hand) is adopted instead. An image GitHub does not hand over is tried again on the next refresh."""
+    waiting for the reviewer. An image is known by its v (a hash of its address), so a refresh or a move
+    in the body never makes a second card. A new image where a carded one disappeared (the pilot replaced
+    it) adds a version to that card; one with the same bytes as a card that proves no other image (posted
+    by hand, or re-uploaded) is taken over instead. Archived cards are left alone."""
     todo = [(t, i, p["url"].rsplit("&v=", 1)[1]) for t in TAPS["items"] if t["phase"] == "landed"
             for i, p in enumerate(t["proof"])]
     if not todo:
         return
     with _lock:
-        have = {(c["proof"]["key"], c["proof"]["i"]): c["proof"]["v"] for c in _load()["tickets"] if c.get("proof")}
+        have = {(c["proof"]["key"], c["proof"]["v"]) for c in _load()["tickets"] if c.get("proof")}
     for t, i, v in todo:
-        if have.get((t["key"], i)) == v:
+        if (t["key"], v) in have or time.time() - _PROOF_MISS.get((t["key"], v), 0) < PROOF_RETRY:
             continue
         try:
             raw, ctype, _ = _proof_image(t["key"], i)
         except Exception:
+            _PROOF_MISS[(t["key"], v)] = time.time()
             continue
+        vs = {p["url"].rsplit("&v=", 1)[1] for p in t["proof"]}
         with _lock:
             state = _load()
-            card = next((c for c in state["tickets"] if c.get("proof", {}).get("key") == t["key"]
-                         and c["proof"]["i"] == i), None) or \
-                next((c for c in state["tickets"] if not c.get("proof") and _holds(c, raw)), None)
+            live = [c for c in state["tickets"] if not c.get("archived")]
+            gone = [c for c in live if c.get("proof", {}).get("key") == t["key"] and c["proof"]["v"] not in vs]
+            card = next((c for c in gone if c["proof"]["i"] == i), None) or \
+                next((c for c in gone + [c for c in live if not c.get("proof")] if _holds(c, raw)), None)
             if card is None:
                 card = {"id": uuid.uuid4().hex[:10], "agent": t["key"].split("/", 1)[1], "title": "",
                         "campaign": t["key"], "created": time.time(), "version": 0, "versions": [],
-                        "status": "waiting", "decisions": [], "owner": None, "owner_how": None, "session": None}
+                        "status": "waiting", "decisions": []}
                 state["tickets"].append(card)
             new = not _holds(card, raw)
             if new:
@@ -1690,6 +1698,7 @@ def _proof_cards():
                 card["title"], card["status"] = t["proof"][i]["alt"] or t["title"], "waiting"
             card["proof"] = {"key": t["key"], "i": i, "v": v}
             _save(state)
+        have.add((t["key"], v))
         if new:
             _push("New visual", card["title"], kind="needs_you", id=card["id"])
 

@@ -570,7 +570,7 @@ const space = document.getElementById('space');
 const empty = document.getElementById('empty');
 const clearall = document.getElementById('clearall');
 const cards = new Map();     // id -> {el, version, status}
-const settled = new Set();
+const settled = new Map();   // id -> the version approved here, so a newer version shows again
 let stagger = 0;
 
 function timeago(ts){
@@ -791,7 +791,7 @@ function buildCard(t){
 
   el.querySelector('.shot').addEventListener('click', () => {
     const cur = cards.get(t.id);
-    openLightbox({...t, version: cur ? cur.version : t.version});
+    openLightbox(cur ? cur.t : t);
   });
   el.querySelector('.approve').addEventListener('click', () => {
     decide(t.id, 'approve').then(() => settle(el, t.id));
@@ -817,7 +817,7 @@ function buildCard(t){
 }
 
 function settle(el, id){
-  settled.add(id); noteDraft(id, '');
+  settled.set(id, (cards.get(id) || {}).version); noteDraft(id, '');
   el.querySelector('.checkveil').classList.add('show');
   setTimeout(() => {
     el.classList.add('out');
@@ -902,14 +902,14 @@ async function tick(){
   if (data.rig && RIG !== '__' + 'RIG__' && data.rig !== RIG){ location.reload(); return; }
   const seen = new Set();
   for (const t of data.tickets){
-    if (t.status === 'approved' || settled.has(t.id)) continue;
+    if (t.status === 'approved' || settled.get(t.id) === t.version) continue;
     seen.add(t.id);
     let c = cards.get(t.id);
     if (!c){
       const el = buildCard(t);
       fill(el, t, false);
       space.appendChild(el);
-      cards.set(t.id, {el, version:t.version, status:t.status});
+      cards.set(t.id, {el, version:t.version, status:t.status, t});
       const delay = 120 * (stagger++);
       requestAnimationFrame(() => setTimeout(() => el.classList.add('in'), 30 + delay));
       setTimeout(() => { stagger = Math.max(0, stagger-1); }, 1200);
@@ -917,7 +917,7 @@ async function tick(){
       const newVersion = t.version !== c.version;
       if (newVersion || t.status !== c.status){
         fill(c.el, t, newVersion);
-        c.version = t.version; c.status = t.status;
+        c.version = t.version; c.status = t.status; c.t = t;
       } else {
         c.el.querySelector('.ver').textContent = 'v' + t.version + ' · ' + timeago(t.versions[t.versions.length-1].ts);
         if (t.status === 'changes') setState(c.el, t, t.status);   // the owner's title arrives with the agents poll

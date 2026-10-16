@@ -111,11 +111,13 @@ Older cards fall back to the master already known for their campaign, or to an e
 master's title. A lane in its own process (`claude -p`, Codex, a separate tmux session) or outside Claude Code (a plain
 terminal, a background job) adds `--owner "NAME"`; only lanes inside the master's own Claude Code process land by themselves.
 
-**A tap's proof.** When a tap lands, the server turns each picture in its issue body into a card by itself, stored like a
-posted one: one card per picture (the tap key and the picture's place in the body), labeled with the tap (`snapp-ios#1583`),
-titled with the picture's alt text, campaign = the tap key, the tap's title as the note. It waits for you like any card. A
-pilot replacing a picture adds a version to that card, never a second card, and a card already posted with the same bytes is
-taken over instead of repeated. Its owner is the lead (`owner_how` `lead`), which files the taps and passes your notes on.
+**A tap's proof.** While a tap is Landed, the server turns each GitHub image in its issue body into a card by itself, stored
+like a posted one and waiting for you: labeled with the tap (`snapp-ios#1583`), titled with the image's alt text (else the
+tap's title), campaign = the tap key, the tap's title as the note. An image is known by its address, so refreshes and moves
+never repeat it; a new image where a carded one disappeared (the pilot replaced it) adds a version to that card. A live card
+already posted with the same bytes is taken over instead (it keeps its own label and title). Archived cards are left alone.
+With no other owner, a proof card belongs to the lead (`owner_how` `lead`), so a change note lands with the master that
+files the taps.
 
 ## HTTP API (for agents that aren't Python)
 

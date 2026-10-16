@@ -831,18 +831,18 @@ class TapButtonTests(unittest.TestCase):
 class ProofCardTests(unittest.TestCase):
     """A landed tap's proof images become Visuals cards on their own (_proof_cards, run after every tap
     refresh): one card per image, never a second one, a replaced image is a new version, and a card
-    already posted with the same bytes is adopted. The proof proxy is a fake that records each fetch."""
+    already posted with the same bytes is taken over. The proof proxy is a fake that records each fetch."""
 
     def setUp(self):
         self.saved = (S._proof_image, S.TAPS["items"])
         self.key = f"Org/repo-{uuid.uuid4().hex[:6]}#12"
-        self.images, self.fetches = {}, []
+        self.images, self.types, self.fetches = {}, {}, []
 
         def image(key, i):
             self.fetches.append(i)
             if self.images.get(i) is None:
                 raise RuntimeError("GitHub did not hand it over")
-            return self.images[i], "image/png", f"https://github.com/user-attachments/assets/{i}"
+            return self.images[i], self.types.get(i, "image/png"), f"https://github.com/user-attachments/assets/{i}"
         S._proof_image = image
 
     def tearDown(self):
@@ -850,17 +850,17 @@ class ProofCardTests(unittest.TestCase):
 
     def tap(self, phase, *proof):
         """Serves one tap whose proof is [(alt, v, bytes)], the way _tap and _proof shape it."""
-        self.images.update({i: raw for i, (_, _, raw) in enumerate(proof)})
+        self.images = {i: raw for i, (_, _, raw) in enumerate(proof)}
         S.TAPS["items"] = [{"key": self.key, "title": "Lineup cards read Lineup: Team", "phase": phase,
                             "proof": [{"url": f"/api/taps/proof?key=k&i={i}&v={v}", "alt": alt}
                                       for i, (alt, v, _) in enumerate(proof)]}]
 
     def cards(self):
         live = [t for t in call("/api/state")[1]["tickets"] if (t.get("proof") or {}).get("key") == self.key]
-        return sorted(live, key=lambda t: t["proof"]["i"])
+        return sorted(live, key=lambda t: t["created"])
 
-    def shot(self, t, v):
-        return (S.SHOTS / t["id"] / f"{v}.png").read_bytes()
+    def shot(self, t, v, ext="png"):
+        return (S.SHOTS / t["id"] / f"{v}.{ext}").read_bytes()
 
     def test_each_image_once_however_many_refreshes(self):
         a, b = os.urandom(64), os.urandom(64)
@@ -889,21 +889,49 @@ class ProofCardTests(unittest.TestCase):
         self.assertEqual([(t["version"], t["status"]) for t in c], [(1, "waiting"), (2, "waiting")])
         self.assertEqual((c[1]["title"], self.shot(c[1], 1), self.shot(c[1], 2)), ("two, retaken", b, b2))
 
+    def test_adding_moving_or_dropping_images_never_repeats_one(self):
+        a, b, c = os.urandom(64), os.urandom(64), os.urandom(64)
+        A, B, C = ("A", "aaaaaaaa", a), ("B", "bbbbbbbb", b), ("C", "cccccccc", c)
+        for body in [(A, B), (C, A, B), (B, C, A), (B,)]:
+            self.tap("landed", *body)
+            S._proof_cards()
+        self.assertEqual([(t["title"], t["version"]) for t in self.cards()], [("A", 1), ("B", 1), ("C", 1)])
+        self.assertEqual(self.fetches, [0, 1, 0])
+
+    def test_the_same_bytes_at_a_new_address_keep_their_card(self):
+        a = os.urandom(64)
+        self.tap("landed", ("one", "11111111", a))
+        S._proof_cards()
+        self.tap("landed", ("one", "99999999", a))
+        S._proof_cards()
+        c = self.cards()
+        self.assertEqual([(t["version"], t["proof"]["v"]) for t in c], [(1, "99999999")])
+
+    def test_a_jpeg_keeps_its_type(self):
+        a = os.urandom(64)
+        self.tap("landed", ("one", "11111111", a))
+        self.types[0] = "image/jpeg"
+        S._proof_cards()
+        t = self.cards()[0]
+        self.assertEqual((t["versions"][0]["ext"], self.shot(t, 1, "jpg")), ("jpg", a))
+
     def test_only_a_landed_tap(self):
         for phase in ("proposed", "enroute", "holding", "done", "closed"):
             self.tap(phase, ("one", "11111111", os.urandom(64)))
             S._proof_cards()
         self.assertEqual((self.cards(), self.fetches), ([], []))
 
-    def test_an_image_github_does_not_hand_over_is_tried_again(self):
+    def test_an_image_github_does_not_hand_over_waits_before_it_is_asked_again(self):
         self.tap("landed", ("one", "11111111", None))
         S._proof_cards()
-        self.assertEqual(self.cards(), [])
         self.images[0] = os.urandom(64)
         S._proof_cards()
-        self.assertEqual(len(self.cards()), 1)
+        self.assertEqual((self.cards(), self.fetches), ([], [0]))
+        S._PROOF_MISS[(self.key, "11111111")] -= S.PROOF_RETRY
+        S._proof_cards()
+        self.assertEqual((len(self.cards()), self.fetches), (1, [0, 0]))
 
-    def test_a_card_posted_by_hand_with_the_same_bytes_is_adopted(self):
+    def test_a_card_posted_by_hand_with_the_same_bytes_is_taken_over(self):
         a = os.urandom(64)
         code, r = call("/api/post", {"agent": "Lineup titles tap", "title": "MLB lineup card", "campaign": "Simulator tap",
                                      "image_b64": base64.b64encode(a).decode()})
@@ -915,6 +943,21 @@ class ProofCardTests(unittest.TestCase):
         self.assertEqual([(t["id"], t["title"], t["version"]) for t in c][0], (r["id"], "MLB lineup card", 1))
         self.assertEqual(len(c), 2)
         self.assertEqual(stored(r["id"])["proof"], {"key": self.key, "i": 0, "v": "11111111"})
+
+    def test_archived_cards_are_left_alone(self):
+        a, a2 = os.urandom(64), os.urandom(64)
+        hand = call("/api/post", {"agent": "Lineup titles tap", "title": "t", "image_b64": base64.b64encode(a).decode()})[1]["id"]
+        call("/api/archive", {"id": hand})                         # archived before anyone judged it
+        self.tap("landed", ("one", "11111111", a))
+        S._proof_cards()
+        first = self.cards()
+        self.assertEqual((len(first), "proof" in stored(hand)), (1, False))
+        call("/api/archive", {"id": first[0]["id"]})
+        self.tap("landed", ("one, retaken", "22222222", a2))
+        S._proof_cards()
+        c = self.cards()
+        self.assertEqual([(t["title"], t["version"]) for t in c], [("one, retaken", 1)])
+        self.assertEqual(stored(first[0]["id"])["version"], 1)
 
     def test_the_lead_owns_it_and_hears_the_notes(self):
         self.tap("landed", ("one", "11111111", os.urandom(64)))
