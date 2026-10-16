@@ -181,7 +181,7 @@ struct ChatProgressPanel: View {
                         store.open(a.key)
                     }
                     .modifier(ChatNod(step: plan?.current, pinged: pings[a.name] ?? 0, still: still))
-                    ChatProgressGap(link: r.linkBelow, upper: a.name, titles: titles, motion: pulse)
+                    ChatProgressGap(link: r.linkBelow, upper: a.name, titles: titles, motion: pulse, now: now)
                 }
                 .modifier(RailArrival(index: i))
                 .transition(.asymmetric(insertion: .identity, removal: .opacity))
@@ -251,7 +251,7 @@ struct ChatProgressCard: View {
                     } else if progress == nil {
                         Text("No goal yet")
                             .font(.system(size: 12))
-                            .foregroundStyle(Color.faint)
+                            .foregroundStyle(Color.dim)
                             .padding(.top, 1)
                     }
                     if let p = progress, !p.steps.isEmpty {

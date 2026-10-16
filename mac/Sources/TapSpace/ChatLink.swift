@@ -4,7 +4,8 @@ import SwiftUI
 
 // Two masters messaging each other: their cards sit together in the progress
 // column (ChatProgressBoard pairs them) and the opened gap between them holds
-// a line in the face column plus one line of words. The line draws in from
+// a line in the face column, "A → B · 2m" and, under it, what was said (two
+// lines at most). The line draws in from
 // the sender toward the receiver, then TapSpace's chasing draw runs along it,
 // on the render server, while anyone can see it. A new message restarts the
 // chase from its sender, and the receiving card nods (ChatNod).
@@ -21,7 +22,9 @@ enum ChatLinkMotion: Equatable {
 
 @MainActor
 enum ChatLinkBoard {
-    /// "Glint app → TapSpace · Is the feed live?": titles in ink, the rest dim.
+    /// The whole pair in one line, "Glint app → TapSpace · Is the feed live?":
+    /// titles in ink, the rest dim. The gap draws it on two lines instead
+    /// (`ChatLinkWords`); the link-frames check reads this one.
     /// Titles only; a missing title (never expected: both ends hold cards) is blank.
     static func label(_ l: AgentLink, titles: [String: String]) -> AttributedString {
         var line = AttributedString(short(titles[l.from] ?? ""))
@@ -34,14 +37,17 @@ enum ChatLinkBoard {
         to.font = .system(size: 11, weight: .semibold)
         line.append(arrow)
         line.append(to)
-        let words = ChatProgressBoard.oneLine(l.summary)
-        if !words.isEmpty {
-            var rest = AttributedString(" · " + words)
+        let said = words(l)
+        if !said.isEmpty {
+            var rest = AttributedString(" · " + said)
             rest.foregroundColor = Color.dim
             line.append(rest)
         }
         return line
     }
+
+    /// What was said, as plain words on one line (the gap wraps it to two).
+    static func words(_ l: AgentLink) -> String { ChatProgressBoard.oneLine(l.summary) }
 
     /// A long title is cut short in the line so the message's own words still show
     /// (both cards, with their full titles, sit right beside it).
@@ -51,27 +57,77 @@ enum ChatLinkBoard {
 
     /// VoiceOver: "Glint app is talking to TapSpace: Is the feed live?".
     static func spoken(_ l: AgentLink, titles: [String: String]) -> String {
-        let words = ChatProgressBoard.oneLine(l.summary)
-        return "\(titles[l.from] ?? "") is talking to \(titles[l.to] ?? "")" + (words.isEmpty ? "" : ": " + words)
+        let said = words(l)
+        return "\(titles[l.from] ?? "") is talking to \(titles[l.to] ?? "")" + (said.isEmpty ? "" : ": " + said)
+    }
+}
+
+/// The gap's two lines: "Glint app → TapSpace · 2m" (titles in ink, the rest
+/// dim; a long title gives up its end first, the time always shows), then what
+/// was said in dim, wrapping to two lines.
+struct ChatLinkWords: View {
+    let link: AgentLink
+    let titles: [String: String]
+    let now: Double
+
+    var body: some View {
+        let said = ChatLinkBoard.words(link)
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 0) {
+                title(link.from)
+                Text(" → ").foregroundStyle(Color.dim).fixedSize()
+                title(link.to)
+                Text(" · " + when(link.last, now: now))
+                    .foregroundStyle(Color.faint)
+                    .monospacedDigit()
+                    .fixedSize()
+            }
+            if !said.isEmpty {
+                Text(said)
+                    .foregroundStyle(Color.dim)
+                    .lineLimit(2)
+                    .truncationMode(.tail)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .font(.system(size: 11))
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func title(_ name: String) -> some View {
+        Text(titles[name] ?? "")
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(Color.ink)
+            .lineLimit(1)
+            .truncationMode(.tail)
     }
 }
 
 /// The space under a card: plain (10 pt) between cards that are not talking.
 /// Under the upper card of a talking pair it opens (after the cards' glide
-/// lands) and holds the connector and the pair's line. It belongs to the upper
-/// card's element, so it moves with the layout and never tracks frames.
+/// lands) to fit its two lines and holds the connector and the pair's words. It
+/// belongs to the upper card's element, so it moves with the layout and never
+/// tracks frames.
 struct ChatProgressGap: View {
     let link: AgentLink?
     /// The upper card's agent NAME (a hidden key): the line runs down when it sent the newest message.
     let upper: String
     let titles: [String: String]
     let motion: ChatLinkMotion
+    /// The column's clock (its 15 s tick), for "· 2m".
+    var now: Double = Date().timeIntervalSince1970
     @State private var open = SpringBox(0, .smooth)
     /// The last link shown, kept while the gap closes so its words fade instead of vanishing.
     @State private var shown: AgentLink?
+    /// The words' own height at this width (a second summary line makes it taller).
+    /// Read from the words, which never size to the gap, so it cannot feed back.
+    @State private var wordsHeight: CGFloat = 0
 
     static let plain: CGFloat = 10
+    /// An open gap never gets shorter than this (room for the connector).
     static let joined: CGFloat = 44
+    /// Room above and below the words in an open gap.
+    static let pad: CGFloat = 9
     /// The face column's center: card padding 14 + half the 26 pt face.
     static let lineX: CGFloat = 27
     /// The words start on the card's text column: padding 14 + face 26 + spacing 10.
@@ -79,7 +135,7 @@ struct ChatProgressGap: View {
 
     var body: some View {
         let p = open.value
-        let h = lerp(Self.plain, Self.joined, p)
+        let h = lerp(Self.plain, max(Self.joined, wordsHeight + 2 * Self.pad), p)
         ZStack(alignment: .topLeading) {
             if let l = link ?? shown, p > 0.001 {
                 let draw = smoothstep(0.35, 1, p)
@@ -88,21 +144,21 @@ struct ChatProgressGap: View {
                              motion: link != nil && draw > 0.95 ? motion : .off, beat: l.last)
                     .frame(width: 6, height: h)
                     .offset(x: Self.lineX - 3)
-                Text(ChatLinkBoard.label(l, titles: titles))
-                    .font(.system(size: 11))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .frame(height: h)
+                ChatLinkWords(link: l, titles: titles, now: now)
                     .padding(.leading, Self.textX)
                     .padding(.trailing, 14)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { wordsHeight = $0 }
+                    .padding(.top, Self.pad)
                     .opacity(words)
                     .offset(y: 4 * (1 - words))
-                    .help(ChatProgressBoard.oneLine(l.summary))
+                    .help(ChatLinkBoard.spoken(l, titles: titles))
+                    .accessibilityElement(children: .ignore)
                     .accessibilityLabel(ChatLinkBoard.spoken(l, titles: titles))
             }
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
-        .frame(height: h)
+        .frame(height: h, alignment: .top)
         .onChange(of: link, initial: true) { _, l in
             if let l {
                 shown = l

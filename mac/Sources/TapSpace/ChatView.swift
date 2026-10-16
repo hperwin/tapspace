@@ -476,7 +476,7 @@ struct PaneHeader: View {
                 VStack(alignment: .leading, spacing: 2) {
                     HeaderTitle(text: tap.name)
                     HStack(spacing: 4) {
-                        Text(tap.key + " ·")
+                        Text(tap.repoName + " ·")
                         if let url = URL(string: tap.url) { IssueLink(url: url) }
                     }
                     .font(.system(size: 11.5))
@@ -648,6 +648,9 @@ struct MessageList: View {
     @State private var nearBottom = true
     @State private var lastThread = ""
     @State private var earlier = EarlierPages()
+    /// The row that topped the list when "Show earlier messages" was pressed,
+    /// until the one scroll back to it (onChange of the window) has run.
+    @State private var keepTop: String?
     /// Rows laid out: the newest 40, and 40 more per "Show earlier messages".
     static let page = 40
 
@@ -706,71 +709,87 @@ struct MessageList: View {
         let limit = Self.page * (1 + earlier.count(in: store.thread))
         GeometryReader { box in
             let maxW = min(620, box.size.width * 0.82)
-            ScrollView(.vertical) {
-                // Eager, over the newest rows only: the content height is exact, so
-                // the bottom anchor holds the end through every size change. A lazy
-                // stack estimated the rows it had not placed, and with one bubble
-                // taller than the pane that estimate never settled under the anchor:
-                // layout looped inside one run-loop pass and the app froze.
-                VStack(spacing: 12) {
-                    if msgs.isEmpty {
-                        Hello(agent: agent, tap: tap)
-                            .frame(minHeight: box.size.height - 60)
-                    }
-                    if rows.count > limit {
-                        EarlierButton { earlier.open(in: store.thread) }
-                    }
-                    ForEach(ProcessInfo.processInfo.environment["CHATEXP_NOLIST"] == nil ? Array(rows.suffix(limit)) : [], id: \.1) { m, k in
-                        BubbleRow(m: m, box: animator.box(k), maxWidth: maxW, geo: geo)
-                    }
-                    // The dots' spring is scoped to the dots: on the list it would also
-                    // fade in the bubble Hayden just sent (the same update flips typing
-                    // on), washing out its flight out of the composer.
-                    // Session relay: the thread stays put while the next car takes over.
-                    if let s = agent?.state, s == "switching" || s == "starting" {
-                        SwitchingCar(label: agentLabel[s, default: s]).transition(.scale(scale: 0.8).combined(with: .opacity))
-                    }
-                    ZStack(alignment: .leading) {
-                        if typing {
-                            TypingBubble(caption: tap != nil ? "working on a reply" : nil)
-                                .transition(.asymmetric(
-                                    insertion: .scale(scale: 0.4, anchor: .bottomLeading).combined(with: .opacity),
-                                    removal: .scale(scale: 0.8, anchor: .bottomLeading).combined(with: .opacity)))
+            ScrollViewReader { reader in
+                ScrollView(.vertical) {
+                    // Eager, over the newest rows only: the content height is exact, so
+                    // the bottom anchor holds the end through every size change. A lazy
+                    // stack estimated the rows it had not placed, and with one bubble
+                    // taller than the pane that estimate never settled under the anchor:
+                    // layout looped inside one run-loop pass and the app froze.
+                    VStack(spacing: 12) {
+                        if msgs.isEmpty {
+                            Hello(agent: agent, tap: tap)
+                                .frame(minHeight: box.size.height - 60)
                         }
+                        if rows.count > limit {
+                            EarlierButton {
+                                keepTop = rows.suffix(limit).first?.1
+                                earlier.open(in: store.thread)
+                            }
+                        }
+                        ForEach(ProcessInfo.processInfo.environment["CHATEXP_NOLIST"] == nil ? Array(rows.suffix(limit)) : [], id: \.1) { m, k in
+                            BubbleRow(m: m, box: animator.box(k), maxWidth: maxW, geo: geo)
+                                .id(k)
+                        }
+                        // The dots' spring is scoped to the dots: on the list it would also
+                        // fade in the bubble Hayden just sent (the same update flips typing
+                        // on), washing out its flight out of the composer.
+                        // Session relay: the thread stays put while the next car takes over.
+                        if let s = agent?.state, s == "switching" || s == "starting" {
+                            SwitchingCar(label: agentLabel[s, default: s]).transition(.scale(scale: 0.8).combined(with: .opacity))
+                        }
+                        ZStack(alignment: .leading) {
+                            if typing {
+                                TypingBubble(caption: tap != nil ? "working on a reply" : nil)
+                                    .transition(.asymmetric(
+                                        insertion: .scale(scale: 0.4, anchor: .bottomLeading).combined(with: .opacity),
+                                        removal: .scale(scale: 0.8, anchor: .bottomLeading).combined(with: .opacity)))
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .animation(.spring(response: 0.42, dampingFraction: 0.66), value: typing)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .animation(.spring(response: 0.42, dampingFraction: 0.66), value: typing)
+                    .padding(.horizontal, 22)
+                    .padding(.top, 22)
+                    .padding(.bottom, 12)
                 }
-                .padding(.horizontal, 22)
-                .padding(.top, 22)
-                .padding(.bottom, 12)
-            }
-            // Clipped by the scroll view itself (a plain clip, no offscreen
-            // pass), except while a sent bubble lifts out of the composer below.
-            // A mask here re-rendered the whole list offscreen every frame.
-            .scrollClipDisabled(geo.flights > 0)
-            .modifier(ExpPos(position: $position))
-            // A fresh scroll view per thread opens at the bottom in the frame
-            // that builds it; scrolling the old one there afterwards cost a
-            // second full layout of the thread a frame later, mid-glide.
-            .id(ProcessInfo.processInfo.environment["CHATEXP_NOID"] == nil ? store.thread : "one")
-            // Near the end, a new message brings the list down to it. A size change
-            // (markdown settling, goals appearing, the composer growing) scrolls
-            // nothing here: the bottom anchor keeps the end in place on its own.
-            .onScrollGeometryChange(for: Bool.self, of: { g in
-                g.contentSize.height - (g.contentOffset.y + g.containerSize.height) < 120
-            }, action: { _, near in nearBottom = near })
-            .onChange(of: sig, initial: true) {
-                let switched = lastThread != store.thread
-                lastThread = store.thread
-                // A thread opens on its newest page.
-                if switched { earlier = EarlierPages() }
-                if store.isViewingCandidate { store.markRead(store.thread) }
-                if agent != nil { ChatOutbox.shared.prune(Set(msgs.map(\.id))) }
-                // A switched thread is a fresh scroll view already at its bottom.
-                guard !switched, nearBottom else { return }
-                DispatchQueue.main.async {
-                    withAnimation(.spring(response: 0.45, dampingFraction: 0.9)) { position.scrollTo(edge: .bottom) }
+                // Clipped by the scroll view itself (a plain clip, no offscreen
+                // pass), except while a sent bubble lifts out of the composer below.
+                // A mask here re-rendered the whole list offscreen every frame.
+                .scrollClipDisabled(geo.flights > 0)
+                .modifier(ExpPos(position: $position))
+                // A fresh scroll view per thread opens at the bottom in the frame
+                // that builds it; scrolling the old one there afterwards cost a
+                // second full layout of the thread a frame later, mid-glide.
+                .id(ProcessInfo.processInfo.environment["CHATEXP_NOID"] == nil ? store.thread : "one")
+                // Near the end, a new message brings the list down to it. A size change
+                // (markdown settling, goals appearing, the composer growing) scrolls
+                // nothing here: the bottom anchor keeps the end in place on its own.
+                .onScrollGeometryChange(for: Bool.self, of: { g in
+                    g.contentSize.height - (g.contentOffset.y + g.containerSize.height) < 120
+                }, action: { _, near in nearBottom = near })
+                .onChange(of: sig, initial: true) {
+                    let switched = lastThread != store.thread
+                    lastThread = store.thread
+                    // A thread opens on its newest page.
+                    if switched { earlier = EarlierPages() }
+                    if store.isViewingCandidate { store.markRead(store.thread) }
+                    if agent != nil { ChatOutbox.shared.prune(Set(msgs.map(\.id))) }
+                    // A switched thread is a fresh scroll view already at its bottom.
+                    guard !switched, nearBottom else { return }
+                    DispatchQueue.main.async {
+                        withAnimation(.spring(response: 0.45, dampingFraction: 0.9)) { position.scrollTo(edge: .bottom) }
+                    }
+                }
+                // "Show earlier messages" grew the window: the new page sits above, and
+                // SwiftUI holds the top edge, so it would show the new page from its
+                // oldest message. ONE scroll, once that layout is done, back to the
+                // message that topped the list before the press. Only a press sets
+                // keepTop: a size change never scrolls here.
+                .onChange(of: limit) {
+                    guard let k = keepTop else { return }
+                    keepTop = nil
+                    DispatchQueue.main.async { reader.scrollTo(k, anchor: .top) }
                 }
             }
         }
@@ -787,7 +806,8 @@ struct EarlierPages: Equatable {
 }
 
 /// The next page of earlier messages, in the meta line's voice. Its rows go in
-/// above what is on screen, and the bottom anchor keeps that in place.
+/// above what is on screen, and MessageList scrolls once back to the message
+/// that topped the list, so the reader stays where they were.
 struct EarlierButton: View {
     let action: () -> Void
     @State private var hover = false
