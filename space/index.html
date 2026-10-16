@@ -1416,7 +1416,8 @@ function renderThread(){
   ta.placeholder = d.agent ? 'Message ' + (d.agent.title || 'Claude') + '…' : asking ? 'Answer this tap…' : 'Message this tap…';
   attachBtn.classList.toggle('hide', !d.agent);
   syncSend();
-  const sig = current + '|' + d.msgs.map(m => m.id + (m.seen ? 's' : '') + (m.pending ? 'p' : '') + ((m.images || []).length)).join(',') + '|' + d.typing + '|' + d.switching;
+  const sig = current + '|' + d.msgs.map(m => m.id + (m.seen ? 's' : '') + (m.pending ? 'p' : '') + ((m.images || []).length)).join(',') + '|' + d.typing + '|' + d.switching +
+    (d.tap && hasPhase(d.tap) ? '|' + tapWord(d.tap) : '');
   if (sig === rendered.sig) return;
   const switched = rendered.key !== current;
   const stick = switched || nearEnd();
@@ -1425,6 +1426,8 @@ function renderThread(){
   if (!d.msgs.length){
     msgsEl.innerHTML = d.agent
       ? `<div class="hello"><div class="big">Hey.</div>A direct line to ${esc(d.agent.title || 'Claude')}. Say anything.</div>`
+      : hasPhase(d.tap)
+      ? `<div class="hello"><div class="big">${esc(tapWord(d.tap))}.</div>${d.tap.phase === 'proposed' ? 'This tap hasn’t flown yet.' : 'This tap hasn’t said anything yet. It posts its plan here when it takes off.'}</div>`
       : `<div class="hello"><div class="big">Boarding.</div>This tap hasn’t said anything yet. It posts its plan here when it takes off.</div>`;
   }
   for (const m of d.msgs){
