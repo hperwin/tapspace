@@ -1473,6 +1473,56 @@ def _refresh_hot():
     _publish(items)
 
 
+TAP_FLY_LABEL = {"color": "0e8a16", "description": "Flightdeck: fly this journey without a tap (capped, never auto-accepted)"}
+
+
+def _tap_act(key, act):
+    """POST /api/taps/fly | accept -> (http code, answer), through gh as the reviewer. fly adds the
+    fly label (creating it in that repo when missing); accept closes the issue as completed, the
+    reviewer's sign-off. A repeat answers already and writes nothing."""
+    m = re.match(r"^([\w.-]+/[\w.-]+)#(\d+)$", str(key or ""))
+    if not m:
+        return 400, {"error": "bad tap key"}
+    repo, n = m.group(1), m.group(2)
+    try:
+        iss = _issue(repo, n)
+        if not _is_mine(iss):
+            return 403, {"error": "not one of your taps"}
+        closed = iss["state"] != "OPEN"
+        if act == "fly":
+            if closed:
+                return 409, {"error": "this tap is closed"}
+            if _has([l["name"] for l in iss["labels"]], TAP_FLY):
+                return 200, {"ok": True, "already": True}
+        elif closed:
+            if str(iss.get("stateReason") or "").upper() == "COMPLETED":
+                return 200, {"ok": True, "already": True}
+            return 409, {"error": "this tap was closed another way"}
+        who = _gh("api", "user", "--jq", ".login").strip()
+        if who.casefold() != _me().casefold():
+            return 409, {"error": f"gh is signed in as {who}, not {_me()}"}
+        if act == "fly":
+            try:
+                _gh("api", f"repos/{repo}/labels/{TAP_FLY[0]}", "--jq", ".name")
+            except RuntimeError as e:
+                if "404" not in str(e):
+                    raise
+                try:
+                    _gh("label", "create", TAP_FLY[0], "--repo", repo, "--color", TAP_FLY_LABEL["color"],
+                        "--description", TAP_FLY_LABEL["description"])
+                except RuntimeError as e2:
+                    if "already exists" not in str(e2).lower():
+                        raise
+            _gh("issue", "edit", n, "--repo", repo, "--add-label", TAP_FLY[0])
+        else:
+            _gh("issue", "close", n, "--repo", repo, "--reason", "completed")
+    except Exception as e:
+        return 502, {"error": str(e)}
+    _inbox({"kind": f"tapspace-tap-{act}", "tap": key})
+    _hot(key, 0.15)
+    return 200, {"ok": True}
+
+
 # ---- near real-time: GitHub conditional requests ----
 # GitHub has no push to localhost (webhooks need a public URL and repo admin),
 # but a conditional GET with If-None-Match that comes back 304 costs no rate
@@ -1791,7 +1841,8 @@ class H(BaseHTTPRequestHandler):
 
         if self.path in ("/api/chat", "/api/chat/reply", "/api/taps/say", "/api/chat/import",
                          "/api/agents/new", "/api/chat/clear", "/api/devices",
-                         "/api/agents/progress", "/api/agents/read", "/api/agents/stop"):
+                         "/api/agents/progress", "/api/agents/read", "/api/agents/stop",
+                         "/api/taps/fly", "/api/taps/accept"):
             # these speak for the reviewer or write agent state: same-origin JSON only, so no
             # other page can drive them through the browser
             origin = self.headers.get("Origin")
@@ -1877,7 +1928,18 @@ class H(BaseHTTPRequestHandler):
                 code, out = _stop_master(str(p.get("name") or p.get("agent") or "").strip())
                 self._json(out, code)
                 return
-            body = (p.get("body") or "").strip()
+            if self.path in ("/api/taps/fly", "/api/taps/accept"):
+                # the reviewer flies a proposed tap or signs a landed one off; the phone may (bearer), like say.
+                # A tap.py call from inside a Claude session is an agent, and accept is never an agent's.
+                w = self._who()
+                if self.path == "/api/taps/accept" and (w.get("session") or w.get("pid")):
+                    self._json({"error": "accept is Hayden's own sign-off"}, 403)
+                    return
+                code, out = _tap_act(p.get("key"), self.path.rsplit("/", 1)[1])
+                self._json(out, code)
+                return
+            body = (p.get("body") or (str(p.get("text") or "") if self.path == "/api/taps/say" else "")
+                    or "").strip()
             chatting = self.path in ("/api/chat", "/api/chat/reply")
             if not body and not (chatting and p.get("images")):
                 self._json({"error": "empty"}, 400)
