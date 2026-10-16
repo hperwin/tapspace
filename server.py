@@ -1071,7 +1071,14 @@ def _projects():
             for c in seen[:40]]
 
 
-def _spawn_master(folder, name):
+ORDER_MAX = 65536                    # bytes of a first order appended to a new master's prompt
+
+
+def _spawn_master(folder, name, parent="", order=""):
+    """Starts a master in folder under name (new-master.sh, detached) -> {agent, session, tmux, parent}.
+    The server picks the session id and the tmux name, so the answer names them before the child exists.
+    parent (a joined NAME) is stored on the row first, so the child is born under its lead; order is
+    kept under data/orders/ and appended to its first prompt."""
     home = pathlib.Path.home().resolve()
     f = pathlib.Path(folder).expanduser().resolve()
     if not f.is_dir() or not (str(f) + "/").startswith(str(home) + "/"):
@@ -1081,14 +1088,35 @@ def _spawn_master(folder, name):
         raise ValueError("bad name")
     if name in _agents() and _agent_state(_agents()[name], []) in ("here", "starting"):
         raise ValueError("an agent with that name is already running")
+    if parent:
+        if not _NAME.match(parent):
+            raise ValueError("bad parent name")
+        if parent not in _agents():
+            raise ValueError("no lead by that name has joined")
+        if parent == name:
+            raise ValueError("an agent cannot lead itself")
+    if len(order.encode()) > ORDER_MAX:
+        raise ValueError("order: up to 64 KB")
+    sid = str(uuid.uuid4())
+    ts = "master-" + re.sub(r"[^A-Za-z0-9_-]", "-", f.name) + "-" + sid[:6]   # new-master.sh's own rule
     where = "~/" + str(f.relative_to(home)) if f != home else "~"
-    _agent_touch(name, spawned=time.time(), where=where)
+    _agent_touch(name, spawned=time.time(), where=where, **({"parent": parent} if parent else {}))
+    extra = [parent] if parent else []
+    if order:
+        orders = DATA / "orders"
+        orders.mkdir(mode=0o700, exist_ok=True)
+        path = orders / f"{sid}.md"
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as fh:
+            fh.write(order)
+        extra = [parent, str(path)]
     log = DATA / "spawn.log"
     with log.open("a") as fh:
-        subprocess.Popen(["bash", str(ROOT / "new-master.sh"), str(f), name],
+        subprocess.Popen(["bash", str(ROOT / "new-master.sh"), str(f), name] + extra,
                          stdout=fh, stderr=subprocess.STDOUT, start_new_session=True,
-                         env={**os.environ, "TAPSPACE_URL": f"http://127.0.0.1:{PORT}"})
-    return name
+                         env={**os.environ, "TAPSPACE_URL": f"http://127.0.0.1:{PORT}",
+                              "TAPSPACE_MASTER_UUID": sid, "TAPSPACE_MASTER_TMUX": ts})
+    return {"agent": name, "session": sid, "tmux": ts, "parent": parent or None}
 
 
 # ---- taps (the reviewer's own pilot issues, read through gh) ----
@@ -1907,12 +1935,18 @@ class H(BaseHTTPRequestHandler):
                 self._json({"error": "forbidden"}, 403)
                 return
             if self.path == "/api/agents/new":
+                # parent and order come only from this Mac (tap.py new): the phone starts plain masters
+                parent, order = str(p.get("parent") or "").strip(), str(p.get("order") or "")
+                if (parent or order) and not self._local():
+                    self._json({"error": "parent and order only from this Mac"}, 403)
+                    return
                 try:
-                    name = _spawn_master(str(p.get("folder") or ""), str(p.get("name") or "").strip())
+                    out = _spawn_master(str(p.get("folder") or ""), str(p.get("name") or "").strip(),
+                                        parent=parent, order=order)
                 except Exception as e:
                     self._json({"error": str(e)}, 400)
                     return
-                self._json({"ok": True, "agent": name})
+                self._json({"ok": True, **out})
                 return
             if self.path == "/api/chat/clear":
                 msgs, agents = _chat_clear()
