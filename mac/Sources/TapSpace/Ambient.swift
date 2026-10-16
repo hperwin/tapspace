@@ -71,6 +71,58 @@ private func loop(_ key: String, from: Any, to: Any, duration: Double, autorever
     return a
 }
 
+// MARK: - Chase (a stroke that draws itself, then chases its own tail)
+
+/// How the chase eases: over the whole cycle (the working ring: the head
+/// whips through the turn), or over each half (the agent link: the head draws
+/// in, then the tail follows, each easing in and out).
+enum ChaseEase {
+    case whole(CAMediaTimingFunction)
+    case eachHalf(CAMediaTimingFunction)
+}
+
+extension CAMediaTimingFunction {
+    /// easeInOutSine, the chase curve of the web page (anime.js) and Glint.
+    static var inOutSine: CAMediaTimingFunction { CAMediaTimingFunction(controlPoints: 0.37, 0, 0.63, 1) }
+}
+
+/// TapSpace's chasing draw for a CAShapeLayer: the head (strokeEnd) runs to
+/// the end over the first half, then the tail (strokeStart) follows over the
+/// second, forever. One recipe for RingView's `.chase` and the agent link.
+func chaseDraw(duration: Double = 1.9,
+               ease: ChaseEase = .whole(CAMediaTimingFunction(name: .easeInEaseOut))) -> CAAnimationGroup {
+    let head = CAKeyframeAnimation(keyPath: "strokeEnd")
+    head.values = [0, 1, 1]
+    head.keyTimes = [0, 0.5, 1]
+    let tail = CAKeyframeAnimation(keyPath: "strokeStart")
+    tail.values = [0, 0, 1]
+    tail.keyTimes = [0, 0.5, 1]
+    head.duration = duration
+    tail.duration = duration
+    let g = CAAnimationGroup()
+    g.animations = [head, tail]
+    g.duration = duration
+    g.repeatCount = .infinity
+    switch ease {
+    case .whole(let f):
+        g.timingFunction = f
+    case .eachHalf(let f):
+        let hold = CAMediaTimingFunction(name: .linear)
+        head.timingFunctions = [f, hold]
+        tail.timingFunctions = [hold, f]
+    }
+    return g
+}
+
+/// The chase's stroke window at phase `p` (0..<1, wraps) with inOutSine on
+/// each half: model values for offline frames, which draw models, not
+/// running animations (HarnessLink).
+func chaseStroke(at p: Double) -> (start: Double, end: Double) {
+    let x = p - p.rounded(.down)
+    let ease = { (t: Double) -> Double in -(cos(Double.pi * t) - 1) / 2 }
+    return x < 0.5 ? (0, ease(2 * x)) : (ease(2 * x - 1), 1)
+}
+
 // MARK: - Ring (presence rows, tap avatars)
 
 enum RingStyle: Equatable {
@@ -141,18 +193,7 @@ struct RingView: NSViewRepresentable {
         case .chase(let color):
             arc.strokeColor = color.cgColor
             arc.opacity = 0.75
-            let head = CAKeyframeAnimation(keyPath: "strokeEnd")
-            head.values = [0, 1, 1]
-            head.keyTimes = [0, 0.5, 1]
-            let tail = CAKeyframeAnimation(keyPath: "strokeStart")
-            tail.values = [0, 0, 1]
-            tail.keyTimes = [0, 0.5, 1]
-            let g = CAAnimationGroup()
-            g.animations = [head, tail]
-            g.duration = 1.9
-            g.repeatCount = .infinity
-            g.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            arc.add(g, forKey: "draw")
+            arc.add(chaseDraw(), forKey: "draw")
             arc.strokeStart = 0
             arc.strokeEnd = 0.62
             arc.add(loop("transform.rotation.z", from: 0, to: 2 * Double.pi, duration: 2.4, timing: .linear), forKey: "spin")

@@ -1,19 +1,34 @@
 #!/usr/bin/env python3
-"""tap — the agent's hand into TapSpace (see README.md and AGENTS.md).
+"""tap: the agent's hand into TapSpace (see README.md and AGENTS.md).
 
   tap.py post   --agent T2-cards --title "Combined stat card" --image shot.png
-                [--note "..."] [--campaign my-feature]        -> prints TICKET_ID
+                [--note "..."] [--campaign my-feature] [--owner NAME]
+                                                              -> prints TICKET_ID
   tap.py update TICKET --image shot2.png [--note "v2: ..."]   -> new version, back to waiting
   tap.py wait   TICKET [--timeout 900]   -> blocks until the reviewer decides on the CURRENT version
                                             exit 0 = approved, 3 = changes (message on stdout), 4 = timeout
   tap.py status TICKET                   -> prints ticket JSON now, never blocks
   tap.py up                              -> ensure the whole rig is running (idempotent);
                                             starts the server if the port is quiet, health-checks it
-  tap.py doctor                          -> one-look health: server, tickets, live activity, sessions
+  tap.py doctor                          -> one-look health: server, cards and their owners, goal
+                                            cards, notes, links, claimed sessions, live activity
   tap.py listen --as NAME [--timeout 3600]
                                          -> a master agent joins the space under NAME (its own Chat
                                             thread) and blocks until the reviewer writes to it; prints his
                                             unanswered messages. exit 0 = message, 4 = timeout
+  tap.py title --as NAME "Stat card redesign"
+                                         -> names the agent after its work (2 to 4 plain words; the
+                                            only name the reviewer sees)
+  tap.py goal --as NAME "the outcome, one plain line" --steps "Audit|Spec|Build|Review|PR open"
+              [--current N]              -> a master publishes its run's goal card (the Chat tab and
+                                            Glint show it); the goal or --steps alone changes just that
+  tap.py step --as NAME next|done|N|"step name" [--note "14 of 20 builders done"]
+                                         -> moves the goal card (N counts from 1, as the card shows it);
+                                            --note alone changes only the note
+  tap.py progress --as NAME              -> prints the goal card as stored (a relay car reads it here)
+  tap.py stop --as NAME                  -> spins that master down, as the Chat rail's Spin down does: its
+                                            Claude Code session ends and it leaves the list (--as is required)
+                                            exit 0 = stopped, 1 = refused (nothing was ended)
   Taps (the reviewer's GitHub agent issues; every agent can talk to all of them):
   tap.py taps                            -> list them: key, status, title, last message
   tap.py tap-read KEY                    -> the whole thread of one tap (KEY = owner/repo#n)
@@ -29,14 +44,21 @@
                                             logged in, else an ngrok tunnel) and prints the Glint
                                             pairing link and QR code; --off closes the ngrok tunnel
 
+Cards land under their master by themselves: inside Claude Code every call names the session it
+runs in (only when that Claude process is an ancestor of this one, so an id inherited through tmux
+or a launcher is never sent). A lane in its own process (claude -p, Codex, a separate tmux session)
+or outside Claude Code posts with --owner NAME.
+
 Server default http://127.0.0.1:4747 (override: TAPSPACE_URL).
-Screenshots must be REAL renders of the running surface — never generated images.
+Screenshots must be REAL renders of the running surface, never generated images.
 """
 import argparse
 import base64
+import functools
 import json
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 import sys
@@ -49,15 +71,55 @@ BASE = os.environ.get("TAPSPACE_URL", "http://127.0.0.1:4747")
 DATA = pathlib.Path(os.environ.get("TAPSPACE_DATA") or pathlib.Path(__file__).resolve().parent / "data")
 TAILSCALE = shutil.which("tailscale") or "/Applications/Tailscale.app/Contents/MacOS/Tailscale"
 NGROK = shutil.which("ngrok") or "/opt/homebrew/bin/ngrok"
+_SID = re.compile(r"^[0-9A-Fa-f-]{8,64}$")
+# one Claude Code session's identity; a process that outlives the session must not carry it
+SESSION_ENV = ("CLAUDE_CODE_SESSION_ID", "CLAUDE_PID", "CLAUDE_CODE_MESSAGING_SOCKET",
+               "CLAUDE_CODE_MESSAGING_TOKEN", "CODEX_COMPANION_SESSION_ID",
+               "CODEX_COMPANION_TRANSCRIPT_PATH")
+
+
+def _ancestors():
+    """The pids above this process, nearest first (one ps call; empty when ps is unavailable)."""
+    try:
+        out = subprocess.run(["ps", "-A", "-o", "pid=", "-o", "ppid="], capture_output=True,
+                             text=True, timeout=5).stdout
+    except Exception:
+        return []
+    up = {}
+    for line in out.splitlines():
+        f = line.split()
+        if len(f) == 2 and f[0].isdigit() and f[1].isdigit():
+            up[int(f[0])] = int(f[1])
+    chain, p = [], os.getppid()
+    while p > 1 and p not in chain:
+        chain.append(p)
+        p = up.get(p, 0)
+    return chain
+
+
+@functools.lru_cache(maxsize=None)
+def _who():
+    """Headers naming the Claude Code session this tap.py runs in, so the server can file cards
+    under their master. Sent only when CLAUDE_PID is one of our ancestors: tmux and launchers
+    hand stale ids of other sessions to processes that are not theirs."""
+    pid = os.environ.get("CLAUDE_PID", "")
+    if not pid.isdigit() or int(pid) not in _ancestors():
+        return {}
+    sid = os.environ.get("CLAUDE_CODE_SESSION_ID") or os.environ.get("CODEX_COMPANION_SESSION_ID") or ""
+    return {"X-Claude-Pid": pid, **({"X-Claude-Session": sid} if _SID.match(sid) else {})}
+
+
+def _daemon_env(env):
+    """env without any Claude Code session's identity (for the server, which outlives its starter)."""
+    return {k: v for k, v in env.items() if k not in SESSION_ENV}
 
 
 def _call(path, payload=None):
-    if payload is None:
-        req = urllib.request.Request(BASE + path)
-    else:
-        req = urllib.request.Request(
-            BASE + path, data=json.dumps(payload).encode(),
-            headers={"content-type": "application/json"})
+    headers = dict(_who())
+    if payload is not None:
+        headers["content-type"] = "application/json"
+    req = urllib.request.Request(BASE + path, headers=headers,
+                                 data=None if payload is None else json.dumps(payload).encode())
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
             return json.loads(r.read().decode())
@@ -178,6 +240,31 @@ def _media(a):
     return {"video_b64": _b64(a.video), "video_ext": ext}
 
 
+def _to_step(to):
+    """A step as the card shows it (1 = first), a step's name, next or done -> the wire fields."""
+    to = to.strip()
+    return {"current": int(to) - 1} if to.isdigit() else {"step": to}
+
+
+def _progress(name, body):
+    """One change to NAME's goal card; prints the server's answer. Exit 0 on ok, 1 otherwise."""
+    r = _call("/api/agents/progress", {"name": name, **body})
+    print(json.dumps(r))
+    return 0 if r.get("ok") else 1
+
+
+def _claimed():
+    """How many Claude Code sessions the server has tied to how many agent NAMEs
+    (data/sessions.json), or None when this tap.py cannot read the server's data folder."""
+    try:
+        d = json.loads((DATA / "sessions.json").read_text())
+        d = d["sessions"] if isinstance(d.get("sessions"), dict) else d
+        names = [v["name"] for v in d.values() if isinstance(v, dict) and isinstance(v.get("name"), str)]
+    except Exception:
+        return None
+    return {"sessions": len(names), "agents": len(set(names))}
+
+
 def main():
     ap = argparse.ArgumentParser(prog="tap.py")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -189,6 +276,8 @@ def main():
     p.add_argument("--video", help="short screen recording (.mp4/.mov); scrubbable in the space")
     p.add_argument("--note", default="")
     p.add_argument("--campaign", default="")
+    p.add_argument("--owner", default="",
+                   help="the master's chat NAME; only for callers outside Claude Code, where it is automatic")
 
     u = sub.add_parser("update")
     u.add_argument("ticket")
@@ -219,6 +308,23 @@ def main():
 
     rl = sub.add_parser("relay")
     rl.add_argument("--as", dest="name", default=me, required=not me)
+
+    go = sub.add_parser("goal")
+    go.add_argument("--as", dest="name", default=me, required=not me)
+    go.add_argument("goal", nargs="?", help="the run's north star: the outcome the reviewer will see, one plain line")
+    go.add_argument("--steps", help='the run\'s steps in order, e.g. "Audit|Spec|Build|Review|PR open"')
+    go.add_argument("--current", help="where the run is now: a step number (1 = first), a step's name, or done")
+
+    st = sub.add_parser("step")
+    st.add_argument("--as", dest="name", default=me, required=not me)
+    st.add_argument("to", nargs="?", help="a step number (1 = first), a step's name, next, or done")
+    st.add_argument("--note", help='where inside the step, one short plain line ("" clears it)')
+
+    pg = sub.add_parser("progress")
+    pg.add_argument("--as", dest="name", default=me, required=not me)
+
+    sp = sub.add_parser("stop")
+    sp.add_argument("--as", dest="name", required=True, help="the master to spin down (never defaults to yourself)")
 
     sub.add_parser("taps")
     tr = sub.add_parser("tap-read")
@@ -251,7 +357,8 @@ def main():
         root = os.path.dirname(os.path.abspath(__file__))
         with open(os.path.join(root, "server.log"), "ab") as log:
             subprocess.Popen([sys.executable, os.path.join(root, "server.py")],
-                             stdout=log, stderr=log, start_new_session=True)
+                             stdout=log, stderr=log, start_new_session=True,
+                             env=_daemon_env(os.environ))
         for _ in range(25):
             time.sleep(0.3)
             try:
@@ -267,14 +374,26 @@ def main():
         try:
             st = _call("/api/state")
             act = _call("/api/activity")
+            ag = _call("/api/agents")
         except Exception as e:
             print(json.dumps({"server": "DOWN", "url": BASE, "error": str(e),
                               "fix": "tap.py up"}))
             return 1
+        rows, links = ag.get("agents") or [], ag.get("links") or []
         print(json.dumps({
             "server": "UP", "url": BASE,
             "live_cards": len(st["tickets"]),
             "waiting_on_you": sum(1 for t in st["tickets"] if t["status"] == "waiting"),
+            "cards_with_owner": sum(1 for t in st["tickets"] if t.get("owner")),
+            "agents": len(rows),
+            "goal_cards": sum(1 for r in rows if r.get("progress")),
+            "notes": sum(len(r.get("notes") or []) for r in rows),
+            "links": len(links),
+            "links_active": sum(1 for x in links if x.get("active")),
+            "claimed_sessions": _claimed(),
+            # the link scanner's own counters (null on a server without it); zero heard and claimed
+            # with masters live means Claude Code's transcript format changed
+            "link_scanner": act.get("links"),
             "activity": act["rows"],
             "claude_sessions": act["sessions"],
         }, indent=1))
@@ -282,8 +401,8 @@ def main():
 
     if a.cmd == "post":
         r = _call("/api/post", {
-            "agent": a.agent, "title": a.title, "note": a.note,
-            "campaign": a.campaign, **_media(a)})
+            "agent": a.agent, "title": a.title, "note": a.note, "campaign": a.campaign,
+            **({"owner": a.owner} if a.owner else {}), **_media(a)})
         print(r["id"])
         return 0
 
@@ -344,6 +463,39 @@ def main():
 
     if a.cmd == "relay":
         r = _call("/api/agents/relay", {"agent": a.name})
+        print(json.dumps(r))
+        return 0 if r.get("ok") else 1
+
+    if a.cmd == "goal":
+        body = {}
+        if a.goal is not None:
+            body["goal"] = a.goal
+        if a.steps is not None:
+            body["steps"] = [s.strip() for s in a.steps.split("|") if s.strip()]
+        if a.current is not None:
+            body.update(_to_step(a.current))
+        if not body:
+            sys.exit('give the goal and/or --steps: tap.py goal --as NAME "goal" --steps "a|b|c"')
+        return _progress(a.name, body)
+
+    if a.cmd == "step":
+        body = _to_step(a.to) if a.to else {}
+        if a.note is not None:
+            body["note"] = a.note
+        if not body:
+            sys.exit("give a step (a number, a step's name, next or done) and/or --note")
+        return _progress(a.name, body)
+
+    if a.cmd == "progress":
+        row = next((r for r in _call("/api/agents").get("agents") or [] if r.get("name") == a.name), None)
+        if row is None:
+            print(json.dumps({"error": "no agent by that name is in the space"}))
+            return 1
+        print(json.dumps(row.get("progress"), indent=1))
+        return 0
+
+    if a.cmd == "stop":
+        r = _call("/api/agents/stop", {"name": a.name})
         print(json.dumps(r))
         return 0 if r.get("ok") else 1
 

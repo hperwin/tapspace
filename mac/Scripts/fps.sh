@@ -1,15 +1,21 @@
 #!/bin/bash
-# Runs the app with --demo --fps for N seconds against a server and summarizes
-# the display link while animating (also the crash check: the app must still
-# be alive at the end), then runs it 12 s with --fps alone to prove the link
-# sleeps when nothing moves (frames per second once settled).
+# Runs the app with --demo --fps for N seconds against a SCRATCH server and
+# summarizes the display link while animating (also the crash check: the app
+# must still be alive at the end), then runs it 12 s with --fps alone to prove
+# the link sleeps when nothing moves (frames per second once settled).
+# It runs ON SCREEN (a window, plus a second pill by the notch) and takes focus:
+# run it only with the go of whoever is using this Mac. It refuses the live server.
 #
 #   Scripts/fps.sh <server-url> [seconds=30] [binary]
-#   (binary defaults to the debug build in .build. --demo never writes, but
-#    prefer a scratch server: see seed.sh.)
+#   (binary defaults to the debug build in .build; see seed.sh for a scratch server)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 URL="${1:?usage: fps.sh <server-url> [seconds] [binary]}"
+case "$URL" in
+    *://127.0.0.1:4747 | *://127.0.0.1:4747/* | *://localhost:4747 | *://localhost:4747/*)
+        echo "refusing: $URL is the live server. Use a scratch one (Scripts/seed.sh)." >&2
+        exit 2 ;;
+esac
 SECS="${2:-30}"
 BIN="${3:-.build/debug/TapSpace}"
 [[ -x "$BIN" ]] || { echo "no binary at $BIN (swift build first)" >&2; exit 1; }
