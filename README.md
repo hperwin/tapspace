@@ -309,7 +309,7 @@ Python 3.8+. No packages. Any modern browser.
 
 On the Chat tab, a window wide enough for it gets a third column: one card per live master with its goal, its steps and the step it is on (masters publish these with `tap.py goal` and `tap.py step`). Under each master in the rail sit the cards you sent back with notes that went to that master, newest first, with a blue dot on the master. A row leaves when the master posts a new version, and they all clear when you open that master's thread (the web page and Glint clear too). When two masters message each other, their cards sit together, joined by a line that draws and pulses, and the rail says who each one is talking with.
 
-Install (release build, bundled as `TapSpace.app` with its icon, ad-hoc signed, copied to `/Applications`). Installing never quits, relaunches or brings forward a TapSpace that is running: it keeps its build until you next open it.
+Install (release build, bundled as `TapSpace.app` with its icon, ad-hoc signed, copied to `/Applications`). Installing never quits, relaunches or brings forward a TapSpace that is running: it keeps its build and shows Update ready beside the wordmark, and clicking that restarts it on the new one.
 
 ```bash
 mac/Scripts/install.sh                                            # build and install

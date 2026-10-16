@@ -26,7 +26,7 @@ Hayden loves this widget. Mirror its feel EVERYWHERE, as much as possible:
 ## The app
 SwiftPM executable like SnappWAU (swift-tools 6.0, platforms .macOS("26.0"), swiftLanguageMode .v5), bundled into TapSpace.app by
 mac/Scripts/install.sh (release build, Info.plist, icon, ad-hoc codesign, rsync to /Applications/TapSpace.app; a running copy is
-never quit, relaunched or brought forward, and picks up the new build when it is next opened).
+never quit, relaunched or brought forward; it shows Update ready in the top bar, and only that click restarts it on the new build).
 Bundle id com.hayden.tapspace. A regular app (Dock icon) PLUS a menu-bar liquid pill (below). App icon: Resources/TapSpace.icon
 (Icon Composer format: a white tile with one flat blue dot), compiled by actool at install. Server URL: env
 TAPSPACE_URL, default http://127.0.0.1:4747. If the server is down at launch, start it with

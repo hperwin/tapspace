@@ -89,6 +89,7 @@ struct TopBar: View {
     let store: Store
     let visual: VisualModel
     var chrome = ShellChrome.shared
+    var update = ShellUpdate.shared
 
     var body: some View {
         let mid = chrome.lightsMidY
@@ -108,6 +109,12 @@ struct TopBar: View {
                     .padding(.leading, chrome.lightsMaxX + 22)
                     .padding(.top, pixel(mid - 8))
                     .allowsHitTesting(false)
+                if update.ready {
+                    UpdateButton(update: update)
+                        .padding(.leading, 16)
+                        .padding(.top, pixel(mid - ClearSpaceButton.height / 2))
+                        .transition(.opacity.combined(with: .scale(scale: 0.9)))
+                }
                 ClearSpaceButton(store: store, visual: visual)
                     .padding(.leading, 16)
                     .padding(.top, pixel(mid - ClearSpaceButton.height / 2))

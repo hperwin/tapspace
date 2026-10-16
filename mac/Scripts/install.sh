@@ -1,7 +1,7 @@
 #!/bin/bash
 # Builds TapSpace (release), bundles TapSpace.app with its Info.plist and icon, ad-hoc signs it and
 # installs it to /Applications/TapSpace.app. It never quits, relaunches or brings forward a running
-# TapSpace: that copy keeps its build until it is next opened, and then opens the new one.
+# TapSpace: that copy keeps its build and shows Update ready; clicking it restarts on the new one.
 #
 #   Scripts/install.sh                  build and install
 #   BUNDLE_ONLY=1 Scripts/install.sh    build and sign .build/TapSpace.app only; /Applications untouched
@@ -14,7 +14,10 @@ export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Develope
 NAME=TapSpace
 BUNDLE_ID=com.hayden.tapspace
 DEST="/Applications/$NAME.app"
+# Absolute paths throughout: actool hands its work to a long-lived ibtoold, which resolves relative
+# paths against the folder it was first started from (another checkout's, after an earlier install).
 SCRATCH="${SCRATCH:-.build}"
+mkdir -p "$SCRATCH" && SCRATCH="$(cd "$SCRATCH" && pwd)"
 
 # 1. Icon: Resources/TapSpace.icon (Icon Composer format: a white fill, white in
 #    dark mode too, and one flat blue dot) compiled by actool into Assets.car plus
@@ -24,7 +27,7 @@ echo "==> Compiling the icon"
 ICON="$SCRATCH/icon"
 rm -rf "${ICON:?}"
 mkdir -p "$ICON"
-xcrun actool "Resources/$NAME.icon" --compile "$ICON" --output-partial-info-plist "$ICON/partial.plist" \
+xcrun actool "$PWD/Resources/$NAME.icon" --compile "$ICON" --output-partial-info-plist "$ICON/partial.plist" \
     --app-icon "$NAME" --include-all-app-icons --enable-on-demand-resources NO \
     --target-device mac --platform macosx --minimum-deployment-target 26.0 >/dev/null
 
@@ -44,7 +47,7 @@ printf 'APPL????' > "$APP/Contents/PkgInfo"
 codesign --force --deep --sign - "$APP"
 codesign --verify --strict "$APP"
 if [[ "${BUNDLE_ONLY:-0}" == "1" ]]; then
-    echo "Bundled: $PWD/$APP (not installed)"
+    echo "Bundled: $APP (not installed)"
     exit 0
 fi
 
@@ -60,7 +63,7 @@ touch "$DEST"
 # 5. Open only when asked and nothing is running: behind the front app (open -g), and the app does
 #    not activate itself either (TAPSPACE_BACKGROUND=1).
 if [[ -n "$RUNNING" ]]; then
-    echo "TapSpace is running (PID $(echo $RUNNING)): it keeps its build until it is next opened."
+    echo "TapSpace is running (PID $(echo $RUNNING)): it shows Update ready and keeps its build until that is clicked."
 elif [[ "${OPEN:-0}" == "1" ]]; then
     if [[ -n "${TAPSPACE_URL:-}" ]]; then
         open -g --env TAPSPACE_BACKGROUND=1 --env "TAPSPACE_URL=$TAPSPACE_URL" "$DEST"
