@@ -29,6 +29,14 @@
   tap.py stop --as NAME                  -> spins that master down, as the Chat rail's Spin down does: its
                                             Claude Code session ends and it leaves the list (--as is required)
                                             exit 0 = stopped, 1 = refused (nothing was ended)
+  tap.py lead --as NAME                  -> marks NAME the lead, the master over all masters: every client
+                                            shows it first and the other masters under it (one lead at a time;
+                                            the newest replaces the old one; --as is required)
+  tap.py new --as LEAD --dir DIR [--order-file FILE]
+                                         -> starts a new master in DIR (headless tmux, as the space's New
+                                            session does), born under LEAD, FILE's text added to its first
+                                            prompt; prints its NAME and tmux session
+  tap.py adopt --as LEAD CHILD           -> puts CHILD, a master already running, under LEAD
   Taps (the reviewer's GitHub agent issues; every agent can talk to all of them):
   tap.py taps                            -> list them: key, status, title, last message
   tap.py tap-read KEY                    -> the whole thread of one tap (KEY = owner/repo#n)
@@ -326,6 +334,20 @@ def main():
     sp = sub.add_parser("stop")
     sp.add_argument("--as", dest="name", required=True, help="the master to spin down (never defaults to yourself)")
 
+    ld = sub.add_parser("lead")
+    ld.add_argument("--as", dest="name", required=True,
+                    help="the master to mark as the lead over all masters (never defaults to yourself)")
+
+    ad = sub.add_parser("adopt")
+    ad.add_argument("--as", dest="name", default=me, required=not me, help="the lead's chat NAME")
+    ad.add_argument("child", help="the chat NAME of a running master to put under the lead")
+
+    nw = sub.add_parser("new")
+    nw.add_argument("--as", dest="name", default=me, required=not me,
+                    help="the lead's chat NAME; the new master is born under it")
+    nw.add_argument("--dir", required=True, help="the folder the new master starts in (inside your home folder)")
+    nw.add_argument("--order-file", help="a text file whose words are added to the new master's first prompt")
+
     sub.add_parser("taps")
     tr = sub.add_parser("tap-read")
     tr.add_argument("key")
@@ -496,6 +518,30 @@ def main():
 
     if a.cmd == "stop":
         r = _call("/api/agents/stop", {"name": a.name})
+        print(json.dumps(r))
+        return 0 if r.get("ok") else 1
+
+    if a.cmd == "lead":
+        r = _call("/api/agents/lead", {"name": a.name})
+        print(json.dumps(r))
+        return 0 if r.get("ok") else 1
+
+    if a.cmd == "adopt":
+        r = _call("/api/agents/adopt", {"lead": a.name, "child": a.child})
+        print(json.dumps(r))
+        return 0 if r.get("ok") else 1
+
+    if a.cmd == "new":
+        body = {"folder": os.path.abspath(os.path.expanduser(a.dir)), "parent": a.name}
+        if a.order_file is not None:
+            try:
+                order = pathlib.Path(a.order_file).read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError) as e:
+                sys.exit(f"cannot read --order-file: {e}")
+            if not order.strip():
+                sys.exit(f"--order-file {a.order_file} is empty")
+            body["order"] = order
+        r = _call("/api/agents/new", body)
         print(json.dumps(r))
         return 0 if r.get("ok") else 1
 
