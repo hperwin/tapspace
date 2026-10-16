@@ -191,6 +191,8 @@ workspace where any number of agents can be connected at once:
   tap.py step --as "NAME" next --note "14 of 20 builders done"   # or a number (1 = first), a step's name, done
   tap.py progress --as "NAME"                                   # prints the card as stored
   ```
+  A script spins a master down with `tap.py stop --as "NAME"` (the same
+  route as the rail's Spin down; exit 0 when it stopped, 1 when refused).
 - **Notes per master.** Under each master in the rail: the cards you sent a
   change note on that belong to that master, newest first, with a blue dot on
   the agent. A row clears when the master posts a new version of that card;
@@ -200,6 +202,13 @@ workspace where any number of agents can be connected at once:
   Code messages between sessions on this Mac), the server reads it from the
   session transcripts and shows a live link between their cards. Agents
   report nothing.
+- **Spin down.** Every master row in the rail can spin that master down
+  (on the page, the small control on the row; in the Mac app, the same
+  control or the row's right-click menu). After you confirm, its Claude
+  Code sessions end (the tmux session it runs in, else SIGTERM and then
+  SIGKILL on the claude process) and it leaves the list; its thread moves
+  to `data/archive/`. Only processes named `claude` are ever signalled.
+  A new session that listens under the same NAME brings it back.
 - **Taps.** GitHub issues you authored with the tap label
   (`TAPSPACE_TAP_LABEL`, default `nava`), read through your `gh` login. Each
   tap shows its goals, its comments, and whether your messages were seen
@@ -218,7 +227,9 @@ Endpoints: `GET /api/agents` (`{agents, links}`), `GET /api/chat?agent=NAME`,
 `POST /api/agents/title {agent, title}`, `POST /api/agents/relay {agent}`,
 `POST /api/agents/progress {name, goal?, steps?, current?, step?, note?, clear?}`
 (this Mac only; `clear: true` removes the card),
-`POST /api/agents/read {name}`, `GET /api/taps`,
+`POST /api/agents/read {name}`,
+`POST /api/agents/stop {name}` (`{ok, stopped: [pids], tmux: [sessions]}`; an unknown NAME or one with no
+live Claude session answers `{ok: false, error}` and ends nothing), `GET /api/taps`,
 `POST /api/taps/say {key: "owner/repo#n", body}`, `POST /api/taps/refresh`.
 The endpoints that speak for you accept same-origin JSON only.
 `GET /api/chat?agent=NAME&after=ID` returns only the rows after that id.

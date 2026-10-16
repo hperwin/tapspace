@@ -241,6 +241,23 @@
   .note.out{animation:noteout .34s ease forwards;pointer-events:none}
   @keyframes noteout{to{opacity:0;filter:blur(6px);max-height:0;padding-top:0;padding-bottom:0}}
   .notes .more{font-size:10.5px;color:var(--faint);padding:2px 8px 4px}
+  /* spin down: a small control on a master's row (on hover or keyboard focus), then a confirm right under the row */
+  .agrp{position:relative}
+  .agrp .stopask{order:1} .agrp .talk,.agrp .notes{order:2}
+  .stopbtn{position:absolute;top:19px;right:30px;width:24px;height:24px;border:0;border-radius:8px;cursor:pointer;
+    display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.05);color:var(--dim);
+    opacity:0;pointer-events:none;transition:opacity .2s ease,background .2s ease,color .2s ease}
+  .agrp:hover .stopbtn,.stopbtn:focus-visible,.agrp.asking .stopbtn{opacity:1;pointer-events:auto}
+  .agrp:hover .thread .tx,.agrp.asking .thread .tx{padding-right:30px}
+  .stopbtn:hover,.agrp.asking .stopbtn{background:rgba(255,59,48,.1);color:#ff3b30}
+  .stopbtn svg{width:12px;height:12px}
+  .stopask{margin:0 6px 6px 54px;padding:10px 12px;border-radius:12px;background:rgba(0,0,0,.035);font-size:12px;
+    line-height:1.45;color:var(--dim);animation:railin .45s cubic-bezier(.22,.9,.24,1) both}
+  .stopask b{color:var(--ink);font-weight:600}
+  .stopask .row{display:flex;gap:6px;justify-content:flex-end;margin-top:8px}
+  .stopask .rbtn{padding:7px 11px;font-size:12px}
+  .rbtn.danger{background:#ff3b30;color:#fff}
+  .rbtn:disabled{opacity:.6;cursor:default}
 
   .orb{width:38px;height:38px;border-radius:50%;flex:none;position:relative;
     background:rgb(var(--hl))}
@@ -429,7 +446,7 @@
   @media (max-width:1360px){ #chatview{padding:0 28px;gap:18px;grid-template-columns:264px minmax(0,1fr) 296px} }
   @media (max-width:1180px){ #chatview{padding:0 40px;gap:22px;grid-template-columns:300px minmax(0,1fr);max-width:1240px} #progress{display:none} }
   @media (prefers-reduced-motion: reduce){
-    .agrp .talk i,.note.enter,.note.out,.orb.ping::after{animation:none}
+    .agrp .talk i,.note.enter,.note.out,.orb.ping::after,.stopask{animation:none}
     #progress,.pgap,.plan .track i,.plan .track.long i.fill,.plan .track.long b{transition:none}
   }
 
@@ -447,7 +464,7 @@
     #pane{border-radius:18px}
     .msg{max-width:90%}
     .agrp{display:contents}
-    .agrp .talk,.notes{display:none}
+    .agrp .talk,.notes,.agrp .stopbtn,.agrp .stopask{display:none}
   }
 
   @media (max-width:900px){
@@ -1096,7 +1113,11 @@ function syncAgents(){
   const box = $('#agentlist');
   if (!agents.length){ box.innerHTML = `<div class="railempty">No agents in the space yet. Any agent joins with tap.py listen --as NAME.</div>`; return; }
   if (box.querySelector('.railempty')) box.innerHTML = '';
-  const have = new Map([...box.children].map(el => [el.dataset.key, el]));
+  // agents that left go first, so the rows that stay are already in order and never get re-inserted
+  // (a re-inserted row replays its entrance)
+  const keys = new Set(agents.map(a => agentKey(a.name)));
+  const have = new Map();
+  [...box.children].forEach(el => keys.has(el.dataset.key) ? have.set(el.dataset.key, el) : el.remove());
   agents.forEach((a, i) => {
     const key = agentKey(a.name);
     let g = have.get(key);
@@ -1107,7 +1128,11 @@ function syncAgents(){
       b.addEventListener('click', () => openThread(key));
       const talk = document.createElement('div'); talk.className = 'talk'; talk.hidden = true; talk.innerHTML = '<i></i><span></span>';
       const notes = document.createElement('div'); notes.className = 'notes';
-      g.append(b, talk, notes);
+      const stop = document.createElement('button'); stop.type = 'button'; stop.className = 'stopbtn';
+      stop.title = 'Spin down'; stop.setAttribute('aria-label', 'Spin down');
+      stop.innerHTML = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 2.5v5"/><path d="M4.7 4.6a5 5 0 1 0 6.6 0"/></svg>';
+      stop.addEventListener('click', () => askStop(g));
+      g.append(b, talk, notes, stop);
     }
     const [b, talk, notes] = g.children;
     const sig = a.state + '|' + a.title + '|' + a.count;
@@ -1318,6 +1343,29 @@ $('#newsession').addEventListener('click', async () => {
   toast('Starting a new session');
   await pollAgents(); openThread(agentKey(r.agent));
 });
+
+// ---- Spin down: a master's Claude session ends and it leaves the list (POST /api/agents/stop) ----
+function askStop(g){
+  const a = agents.find(x => agentKey(x.name) === g.dataset.key);
+  let ask = g.querySelector('.stopask');
+  if (ask || !a){ if (ask) ask.remove(); g.classList.remove('asking'); return; }     // the control toggles it
+  ask = document.createElement('div'); ask.className = 'stopask';
+  ask.innerHTML = `<div>Spin down <b>${esc(a.title || 'Claude')}</b>? Its session ends and it leaves the list.</div>
+    <div class="row"><button type="button" class="rbtn clear">Cancel</button><button type="button" class="rbtn danger">Spin down</button></div>`;
+  const [no, yes] = ask.querySelectorAll('button');
+  const close = () => { ask.remove(); g.classList.remove('asking'); };
+  no.addEventListener('click', close);
+  ask.addEventListener('keydown', e => { if (e.key === 'Escape') close(); });
+  yes.addEventListener('click', async () => {
+    no.disabled = yes.disabled = true; yes.textContent = 'Spinning down…';
+    const r = await postJ('/api/agents/stop', {name: a.name});
+    close();
+    if (!r.ok){ toast('Couldn’t spin it down: ' + (r.error || 'TapSpace said no')); return; }
+    toast('Spun down ' + (a.title || 'Claude') + '.');
+    pollAgents();
+  });
+  g.classList.add('asking'); g.appendChild(ask); no.focus();
+}
 
 // ---- Clear all (Visual): two taps archive every card on the space ----
 $('#pairphone').addEventListener('click', () => window.open('/pair', '_blank', 'noopener'));

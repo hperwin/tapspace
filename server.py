@@ -17,7 +17,8 @@ author, so nobody else's taps ever show up here.
 A master can publish its run (tap.py goal / step: a north star, the steps, the current one).
 Cards know the master that owns them from the Claude session tap.py runs in; a change note
 shows under that master until it posts a new version or its thread is opened. Agent-to-agent
-messages show as links (links.py).
+messages show as links (links.py). Spin down (POST /api/agents/stop) ends a master's Claude
+session and takes it off the list.
 
 Run:  python3 server.py     (or: python3 tap.py up)
 URL:  http://127.0.0.1:4747
@@ -29,6 +30,7 @@ import json
 import os
 import secrets
 import shutil
+import signal
 import subprocess
 import pathlib
 import re
@@ -459,6 +461,8 @@ def _agent_rows():
         state = _load()
     notes = _notes_by_owner(state, _owner_index(agents))
     for name, info in agents.items():
+        if info.get("stopped"):
+            continue            # spun down; a new session under that NAME brings it back
         rows = [r for r in allrows if r.get("agent") == name]
         last = rows[-1]["ts"] if rows else info.get("seen", 0)
         quiet = time.time() - max(last, info.get("seen", 0))
@@ -747,6 +751,209 @@ def _notes_by_owner(state, ix):
     for notes in out.values():
         notes.sort(key=lambda n: -n["ts"])
     return out
+
+
+# ---- spin down a master from the Chat rail (POST /api/agents/stop) ----
+# Ends every Claude Code session registered to a NAME in sessions.json: the tmux session it runs in
+# (only its pane when that session holds other panes), else SIGTERM and, 5 s later, SIGKILL. It only
+# ever signals a process named claude that is still the process the session claimed, never this
+# server, a process above it or one below it. The row stays in agents.json marked stopped, so a
+# stale heartbeat never brings it back; a listen from a Claude session the stop did not end does.
+TMUX = shutil.which("tmux") or "/opt/homebrew/bin/tmux"
+STOP_GRACE = 5.0                     # seconds from SIGTERM (or the tmux kill) to SIGKILL
+STOP_LINE = "Spun down from TapSpace. Its session has ended."
+
+
+def _norm(s):
+    return " ".join(str(s or "").split())
+
+
+def _procs():
+    """{pid: (ppid, start, comm, stat)} for every process, one ps call; {} when ps fails."""
+    try:
+        out = subprocess.run(["ps", "-A", "-o", "pid=", "-o", "ppid=", "-o", "stat=", "-o", "lstart=", "-o", "comm="],
+                             capture_output=True, text=True, timeout=10).stdout
+    except Exception:
+        return {}
+    procs = {}
+    for line in out.splitlines():
+        f = line.split(None, 8)          # lstart is five words; comm (a path) may hold spaces
+        if len(f) == 9 and f[0].isdigit() and f[1].isdigit():
+            procs[int(f[0])] = (int(f[1]), " ".join(f[3:8]), f[8].strip(), f[2])
+    return procs
+
+
+def _tmux_panes():
+    """[(session_id, session_name, pane_id, pane_pid)] for every tmux pane; [] without tmux."""
+    try:
+        out = subprocess.run([TMUX, "list-panes", "-a", "-F",
+                              "#{session_id}\t#{session_name}\t#{pane_id}\t#{pane_pid}"],
+                             capture_output=True, text=True, timeout=10).stdout
+    except Exception:
+        return []
+    return [(f[0], f[1], f[2], int(f[3])) for f in (line.split("\t") for line in out.splitlines())
+            if len(f) == 4 and f[3].isdigit()]
+
+
+def _kill_pid(pid, sig):
+    """Signals one process; False when it is already gone."""
+    try:
+        os.kill(pid, sig)
+        return True
+    except ProcessLookupError:
+        return False
+
+
+def _kill_tmux(*args):
+    """tmux kill-session -t $id or kill-pane -t %id; True when tmux did it."""
+    try:
+        return subprocess.run([TMUX, *args], capture_output=True, timeout=10).returncode == 0
+    except Exception:
+        return False
+
+
+def _chain(pid, procs):
+    """pid and every process above it, nearest first."""
+    out = []
+    while pid > 1 and pid in procs and pid not in out:
+        out.append(pid)
+        pid = procs[pid][0]
+    return out
+
+
+def _stop_plan(name):
+    """What spinning NAME down would end: (targets, refused). A target is the claude process behind
+    one or more of its sessions, with its tmux pane when it runs in one. A session whose process is
+    gone (or whose pid another process holds now) is skipped; a live one that is not a claude
+    process, or is this server or above or below it, is refused and never signalled."""
+    procs, panes, me = _procs(), _tmux_panes(), os.getpid()
+    own = set(_chain(me, procs)) | {p for p in procs if me in _chain(p, procs)} | {me}
+    found = {}
+    for sid, s in _claims()["sessions"].items():
+        if s.get("name") == name and s.get("pid"):
+            key = (s["pid"], _norm(s.get("pid_start")))
+            found.setdefault(key, {"pid": s["pid"], "start": key[1], "sessions": []})["sessions"].append(sid)
+    targets, refused = [], []
+    for t in found.values():
+        p = procs.get(t["pid"])
+        if not p or p[3].startswith("Z") or not t["start"] or _norm(p[1]) != t["start"]:
+            continue
+        hit = next((x for x in panes if x[3] in _chain(t["pid"], procs)), None)
+        why = ("not a claude process" if os.path.basename(p[2]) != "claude" else
+               "this server's own process tree" if t["pid"] in own or (hit and hit[3] in own) else "")
+        if why:
+            refused.append({"pid": t["pid"], "why": why, "sessions": t["sessions"]})
+            continue
+        if hit:
+            t["tmux"] = {"id": hit[0], "session": hit[1], "pane": hit[2],
+                         "alone": sum(1 for x in panes if x[0] == hit[0]) == 1}
+        targets.append(t)
+    return targets, refused
+
+
+def _gone(t, wait):
+    """True once target t's process has exited, polling for up to wait seconds."""
+    end = time.time() + wait
+    while True:
+        p = _procs().get(t["pid"])
+        if not p or p[3].startswith("Z") or _norm(p[1]) != t["start"]:
+            return True
+        if time.time() >= end:
+            return False
+        time.sleep(0.2)
+
+
+def _stop_record(name, sessions):
+    """NAME leaves the list the way Clear all drops an agent that is not live: its thread and its row
+    are copied to data/archive/ and the thread leaves chat.jsonl (nothing is deleted). The row stays,
+    marked stopped, with the sessions the stop ended. The caller does not hold _lock."""
+    with _lock:
+        arch = DATA / "archive"
+        arch.mkdir(exist_ok=True)
+        tag = time.strftime("%Y%m%d-%H%M%S") + "-" + (re.sub(r"[^A-Za-z0-9]+", "-", name).strip("-")[:40] or "agent")
+        keep, mine, top = [], [], 0
+        for line in (CHAT.read_text().splitlines() if CHAT.exists() else []):
+            try:
+                r = json.loads(line)
+            except Exception:
+                keep.append(line)
+                continue
+            top = max(top, r.get("id") or 0)
+            (mine if r.get("agent") == name else keep).append(line)
+        (arch / f"chat-{tag}.jsonl").write_text("".join(x + "\n" for x in mine))
+        if mine:
+            try:
+                seq = int(CHAT_SEQ.read_text())
+            except Exception:
+                seq = 0
+            CHAT_SEQ.write_text(str(max(seq, top)))      # ids stay unique after the rows leave
+            tmp = CHAT.with_suffix(".tmp")
+            tmp.write_text("".join(x + "\n" for x in keep))
+            tmp.replace(CHAT)
+        a = _agents()
+        row = a.get(name) or {"name": name, "first": time.time()}
+        (arch / f"agents-{tag}.json").write_text(json.dumps({name: row}, indent=1))
+        row.update(stopped=time.time(), stopped_sessions=sessions)
+        a[name] = row
+        _agents_write(a)
+
+
+def _stop_master(name):
+    """POST /api/agents/stop -> (http code, answer). An unknown NAME, or one with no live Claude session
+    to end, is refused and nothing is signalled. Each stop is logged to server.log (stdout)."""
+    info = _agents().get(name) if _NAME.match(name) else None
+    if not info or info.get("stopped"):
+        return 404, {"ok": False, "error": "no agent by that name is in the list"}
+    targets, refused = _stop_plan(name)
+    stopped, tmux, failed = [], [], []
+    for t in targets:
+        pane = t.get("tmux")
+        if pane and _kill_tmux(*(("kill-session", "-t", pane["id"]) if pane["alone"] else ("kill-pane", "-t", pane["pane"]))):
+            tmux.append(pane["session"])
+        else:
+            _kill_pid(t["pid"], signal.SIGTERM)
+        if not _gone(t, STOP_GRACE):
+            _kill_pid(t["pid"], signal.SIGKILL)      # _gone just saw that same claude process still running
+            if not _gone(t, 2.0):
+                failed.append(t["pid"])
+                continue
+        stopped.append(t["pid"])
+    print(time.strftime("%Y-%m-%d %H:%M:%S"), "stop", json.dumps(name, ensure_ascii=False),
+          json.dumps({"stopped": stopped, "tmux": tmux, "failed": failed,
+                      "refused": [{k: r[k] for k in ("pid", "why")} for r in refused]}), flush=True)
+    if not stopped:
+        return 409, {"ok": False, "error": "could not end its session" if failed else
+                     "no live Claude session to end for this agent",
+                     "refused": [r["pid"] for r in refused], "failed": failed}
+    # every session of NAME counts as ended except a refused one, which is still running
+    alive = {s for r in refused for s in r["sessions"]}
+    ended = sorted(s for s, c in _claims()["sessions"].items() if c.get("name") == name and s not in alive)
+    _chat_add(name, "system", STOP_LINE)
+    _stop_record(name, ended)
+    _bump("chat", "agents")
+    out = {"ok": True, "stopped": stopped, "tmux": tmux}
+    if refused or failed:
+        out.update(refused=[r["pid"] for r in refused], failed=failed)
+    return 200, out
+
+
+def _unstop(name, who):
+    """A listen from a Claude session the spin-down did not end is a new session under that NAME: the
+    agent is back on the list. A stale heartbeat (a leftover listener of an ended session, or a call
+    that names no session) changes nothing."""
+    sid = who.get("session")
+    row = _agents().get(name) or {}
+    if not sid or not row.get("stopped") or sid in (row.get("stopped_sessions") or []):
+        return
+    with _lock:
+        a = _agents()
+        row = a.get(name)
+        if not row or sid in (row.get("stopped_sessions") or []):
+            return
+        row.pop("stopped", None)
+        row.pop("stopped_sessions", None)
+        _agents_write(a)
+    _bump("agents")
 
 
 def _projects():
@@ -1132,6 +1339,7 @@ class H(BaseHTTPRequestHandler):
             if not _NAME.match(name):
                 self._json({"error": "bad agent name"}, 400)
                 return
+            _unstop(name, self._who())
             _agent_touch(name, listen=time.time(), where=self._q("where")[:80])
             _claim(self._who(), name, "listen")
             pend = _chat_pending(_chat_rows(name))
@@ -1218,7 +1426,7 @@ class H(BaseHTTPRequestHandler):
 
         if self.path in ("/api/chat", "/api/chat/reply", "/api/taps/say", "/api/chat/import",
                          "/api/agents/new", "/api/chat/clear", "/api/devices",
-                         "/api/agents/progress", "/api/agents/read"):
+                         "/api/agents/progress", "/api/agents/read", "/api/agents/stop"):
             # these speak for the reviewer or write agent state: same-origin JSON only, so no
             # other page can drive them through the browser
             origin = self.headers.get("Origin")
@@ -1299,6 +1507,11 @@ class H(BaseHTTPRequestHandler):
                 _bump("agents")
                 self._json({"ok": True, "notes_read": now})
                 return
+            if self.path == "/api/agents/stop":
+                # the reviewer spins a master down: its Claude session ends and it leaves the list
+                code, out = _stop_master(str(p.get("name") or p.get("agent") or "").strip())
+                self._json(out, code)
+                return
             body = (p.get("body") or "").strip()
             chatting = self.path in ("/api/chat", "/api/chat/reply")
             if not body and not (chatting and p.get("images")):
@@ -1311,6 +1524,9 @@ class H(BaseHTTPRequestHandler):
                     return
                 if self.path == "/api/chat" and name not in _agents():
                     self._json({"error": "no agent by that name has joined"}, 404)
+                    return
+                if self.path == "/api/chat" and (_agents().get(name) or {}).get("stopped"):
+                    self._json({"error": "that agent was spun down"}, 404)
                     return
                 try:
                     images = _chat_images(p)

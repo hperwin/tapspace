@@ -6,9 +6,11 @@ live data, never a real push. Stdlib only.
     python3 tests/test_agents_api.py -v        (or: python3 -m unittest discover -s tests -v)
 """
 import importlib.util
+import io
 import json
 import os
 import pathlib
+import re
 import sys
 import tempfile
 import threading
@@ -421,6 +423,189 @@ class NotesTests(unittest.TestCase):
             seen.update(r["changed"])
             cur = r["cursor"]
         self.assertIn("agents", seen)
+
+
+class StopTests(unittest.TestCase):
+    """POST /api/agents/stop over a fake registry: a fake process table and tmux, and kill functions
+    that only record. Fake pids sit above macOS's highest pid (99999), so nothing real is ever named."""
+    START = "Thu Oct 15 17:00:00 2026"
+
+    def setUp(self):
+        self.saved = {k: getattr(S, k) for k in ("_procs", "_tmux_panes", "_kill_pid", "_kill_tmux", "STOP_GRACE")}
+        me = os.getpid()
+        self.table = {me: (1, self.START, "python3", "S")}     # this server, at the top of its own tree
+        self.panes, self.calls, self.stubborn = [], [], set()
+        S._procs = lambda: dict(self.table)
+        S._tmux_panes = lambda: list(self.panes)
+        S._kill_pid = self.kill_pid
+        S._kill_tmux = self.kill_tmux
+        S.STOP_GRACE = 0.3
+        self.log, self.stdout = io.StringIO(), sys.stdout       # the server logs each stop to stdout (server.log)
+        sys.stdout = self.log
+
+    def tearDown(self):
+        sys.stdout = self.stdout
+        for k, v in self.saved.items():
+            setattr(S, k, v)
+
+    def kill_pid(self, pid, sig):
+        self.calls.append(("signal", pid, sig))
+        if pid not in self.table:
+            return False
+        if sig == S.signal.SIGKILL or pid not in self.stubborn:
+            self.table.pop(pid)
+        return True
+
+    def kill_tmux(self, *args):
+        self.calls.append(("tmux",) + args)
+        target = args[-1]
+        gone = [p for p in self.panes if (p[0] if args[0] == "kill-session" else p[2]) == target]
+        for p in gone:
+            self.panes.remove(p)
+            for pid in [x for x in self.table if self.table[x][0] == p[3]] + [p[3]]:
+                self.table.pop(pid, None)
+        return bool(gone)
+
+    def master(self, tag, pid, comm="claude", ppid=1, sessions=1):
+        """A joined agent whose sessions claim pid, and that pid in the process table."""
+        a = name(tag)
+        join(a)
+        call("/api/chat", {"agent": a, "body": "hello"})
+        call("/api/chat/reply", {"agent": a, "body": "hi"})
+        self.table[pid] = (ppid, self.START, comm, "S")
+        sids = [sid() for _ in range(sessions)]
+        with S._lock:
+            c = S._claims()
+            for s in sids:
+                c["sessions"][s] = {"name": a, "pid": pid, "pid_start": self.START, "first": time.time(),
+                                    "seen": time.time(), "how": "listen"}
+            S._claims_write(c)
+        return a, sids
+
+    def names(self):
+        return {r["name"] for r in call("/api/agents")[1]["agents"]}
+
+    def stop(self, who, **kw):
+        return call("/api/agents/stop", {"name": who}, **kw)
+
+    def test_sigterm_path_ends_it_archives_the_thread_and_marks_the_row(self):
+        a, sids = self.master("term", 990001, sessions=2)
+        self.assertIn(a, self.names())
+        code, r = self.stop(a)
+        self.assertEqual((code, r), (200, {"ok": True, "stopped": [990001], "tmux": []}))
+        self.assertEqual(self.calls, [("signal", 990001, S.signal.SIGTERM)])
+        self.assertNotIn(a, self.names())
+        self.assertEqual(call("/api/chat?agent=" + urllib.parse.quote(a))[1]["messages"], [])
+        stored_row = json.loads(S.AGENTS.read_text())[a]
+        self.assertIsInstance(stored_row["stopped"], float)
+        self.assertEqual(sorted(stored_row["stopped_sessions"]), sorted(sids))
+        slug = re.sub(r"[^A-Za-z0-9]+", "-", a).strip("-")
+        chat_arch = [f for f in (S.DATA / "archive").glob("chat-*.jsonl") if slug in f.name]
+        agent_arch = [f for f in (S.DATA / "archive").glob("agents-*.json") if slug in f.name]
+        self.assertEqual((len(chat_arch), len(agent_arch)), (1, 1))
+        rows = [json.loads(x) for x in chat_arch[0].read_text().splitlines()]
+        self.assertEqual([(x["role"], x["body"]) for x in rows],
+                         [("you", "hello"), ("master", "hi"), ("system", S.STOP_LINE)])
+        self.assertNotIn("stopped", json.loads(agent_arch[0].read_text())[a])
+        line = self.log.getvalue().strip().splitlines()[-1]
+        self.assertIn(" stop " + json.dumps(a, ensure_ascii=False), line)
+        self.assertIn('"stopped": [990001]', line)
+
+    def test_tmux_session_is_killed_when_it_holds_only_that_pane(self):
+        a, _ = self.master("tmux", 990002, ppid=990003)
+        self.table[990003] = (1, self.START, "tmux", "S")
+        self.panes.append(("$41", "ts5-unit-1", "%41", 990002))
+        code, r = self.stop(a)
+        self.assertEqual((code, r["stopped"], r["tmux"]), (200, [990002], ["ts5-unit-1"]))
+        self.assertEqual(self.calls, [("tmux", "kill-session", "-t", "$41")])
+        self.assertNotIn(a, self.names())
+
+    def test_a_shared_tmux_session_loses_only_that_pane(self):
+        a, _ = self.master("pane", 990004)
+        self.table[990005] = (1, self.START, "zsh", "S")
+        self.panes += [("$42", "shared", "%42", 990004), ("$42", "shared", "%43", 990005)]
+        code, r = self.stop(a)
+        self.assertEqual((code, r["stopped"]), (200, [990004]))
+        self.assertEqual(self.calls, [("tmux", "kill-pane", "-t", "%42")])
+        self.assertIn(990005, self.table)
+
+    def test_sigkill_follows_when_sigterm_is_ignored(self):
+        a, _ = self.master("stubborn", 990006)
+        self.stubborn.add(990006)
+        code, r = self.stop(a)
+        self.assertEqual((code, r["stopped"]), (200, [990006]))
+        self.assertEqual(self.calls, [("signal", 990006, S.signal.SIGTERM), ("signal", 990006, S.signal.SIGKILL)])
+
+    def test_a_process_that_is_not_claude_is_refused_and_never_signalled(self):
+        a, _ = self.master("sleep", 990007, comm="/bin/sleep")
+        code, r = self.stop(a)
+        self.assertEqual((code, r["ok"], r["refused"]), (409, False, [990007]))
+        self.assertIn("no live Claude session", r["error"])
+        self.assertEqual(self.calls, [])
+        self.assertIn(a, self.names())
+        self.assertIsNone(json.loads(S.AGENTS.read_text())[a].get("stopped"))
+        self.assertIn('"why": "not a claude process"', self.log.getvalue())
+
+    def test_the_servers_own_tree_is_refused(self):
+        me = os.getpid()
+        a, _ = self.master("above", 990008)
+        self.table[me] = (990008, self.START, "python3", "S")         # the server runs under that claude
+        self.assertEqual(self.stop(a)[0], 409)
+        b, _ = self.master("below", 990009, ppid=me)                   # a claude the server itself started
+        self.assertEqual(self.stop(b)[0], 409)
+        c, _ = self.master("pane", 990010)
+        self.panes.append(("$44", "server-pane", "%44", 990008))       # the server's own tmux pane
+        self.table[990010] = (990008, self.START, "claude", "S")
+        self.assertEqual(self.stop(c)[0], 409)
+        self.assertEqual(self.calls, [])
+
+    def test_unknown_gone_or_reused_pids_end_nothing(self):
+        self.assertEqual(self.stop("Claude · nobody here"), (404, {"ok": False, "error": "no agent by that name is in the list"}))
+        a = name("nosession")
+        join(a)
+        self.assertEqual(self.stop(a)[0], 409)
+        b, _ = self.master("gone", 990011)
+        self.table.pop(990011)
+        self.assertEqual(self.stop(b)[0], 409)
+        c, _ = self.master("reused", 990012)
+        self.table[990012] = (1, "Fri Oct 16 09:00:00 2026", "claude", "S")    # another claude holds the pid now
+        self.assertEqual(self.stop(c)[0], 409)
+        self.assertEqual(self.calls, [])
+        self.assertTrue({a, b, c} <= self.names())
+
+    def test_a_stopped_agent_is_not_stopped_twice_and_takes_no_messages(self):
+        a, _ = self.master("twice", 990013)
+        self.assertEqual(self.stop(a)[0], 200)
+        self.assertEqual(self.stop(a)[0], 404)
+        self.assertEqual(call("/api/chat", {"agent": a, "body": "are you there"}),
+                         (404, {"error": "that agent was spun down"}))
+
+    def test_route_guard(self):
+        a, _ = self.master("guard", 990014)
+        self.assertEqual(self.stop(a, ctype="text/plain")[0], 403)
+        self.assertEqual(self.stop(a, headers={"Origin": "https://example.com"})[0], 403)
+        self.assertEqual(self.stop(a, headers={"X-Forwarded-For": "203.0.113.7"})[0], 401)
+        self.assertEqual(self.stop("bad\nname")[0], 404)
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.stop(a, headers=REMOTE)[0], 200)        # the phone, with the token
+
+    def test_stale_heartbeats_keep_it_off_and_a_new_session_brings_it_back(self):
+        a, sids = self.master("back", 990015)
+        self.stop(a)
+        join(a, session=sids[0], pid=990015)        # the ended session's leftover listener
+        join(a)                                     # a listen that names no session
+        self.assertNotIn(a, self.names())
+        join(a, session=sid())                      # a genuinely new session under that NAME
+        self.assertIn(a, self.names())
+        self.assertNotIn("stopped", json.loads(S.AGENTS.read_text())[a])
+        self.assertEqual(call("/api/chat?agent=" + urllib.parse.quote(a))[1]["messages"], [])
+
+    def test_wait_wakes_agents_and_chat(self):
+        a, _ = self.master("wake", 990016)
+        cur = call("/api/wait?since=0&timeout=0")[1]["cursor"]
+        self.stop(a)
+        r = call(f"/api/wait?since={cur}&timeout=0")[1]
+        self.assertLessEqual({"agents", "chat"}, set(r["changed"]))
 
 
 class LinksSeamTests(unittest.TestCase):
