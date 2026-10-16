@@ -502,7 +502,10 @@ def _agents_watch():
 
 def _chat_clear():
     """Clear all: every thread's history and every agent that is not live moves to
-    data/archive/ (nothing is deleted). Live agents stay, with empty threads."""
+    data/archive/ (nothing is deleted). Live agents stay, with empty threads: listening, starting,
+    switching cars, or busy between listens (a Claude session registered to it still runs), so a
+    master answering keeps its goal card and its read mark."""
+    running = _running_names()         # runs ps: before _lock
     with _lock:
         arch = DATA / "archive"
         arch.mkdir(exist_ok=True)
@@ -520,7 +523,7 @@ def _chat_clear():
         now = time.time()
         keep = {n: i for n, i in a.items()
                 if now - i.get("listen", 0) < 30 or i.get("spawned", 0) > i.get("listen", 0)
-                or i.get("switching", 0) > i.get("listen", 0)}
+                or i.get("switching", 0) > i.get("listen", 0) or n in running}
         tmp = AGENTS.with_suffix(".tmp")
         tmp.write_text(json.dumps(keep, indent=1))
         tmp.replace(AGENTS)
@@ -565,6 +568,22 @@ def _proc_start(pid):
                               text=True, timeout=5).stdout.strip()
     except Exception:
         return ""
+
+
+def _running_names():
+    """NAMEs with a registered Claude session whose process still runs: the same process that
+    claimed it, since pids are reused. One ps call; never under _lock."""
+    rows = [s for s in _claims()["sessions"].values() if s.get("pid") and s.get("pid_start") and s.get("name")]
+    if not rows:
+        return set()
+    try:
+        out = subprocess.run(["ps", "-o", "pid=", "-o", "lstart=", "-p", ",".join(sorted({str(int(s["pid"])) for s in rows}))],
+                             capture_output=True, text=True, timeout=5).stdout
+    except Exception:
+        return set()
+    starts = {int(f[0]): " ".join(f[1].split()) for f in (line.split(None, 1) for line in out.splitlines())
+              if len(f) == 2 and f[0].isdigit()}
+    return {s["name"] for s in rows if starts.get(int(s["pid"])) == " ".join(str(s["pid_start"]).split())}
 
 
 def _claim_moves(cur, name, how, now):

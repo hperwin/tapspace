@@ -381,6 +381,31 @@ class OwnerTests(unittest.TestCase):
         self.assertEqual((last["ticket"], last["owner"]), (tid, a))
 
 
+class ClearAllTests(unittest.TestCase):
+
+    def test_a_master_whose_claude_still_runs_keeps_its_row(self):
+        busy, ended, idle = name("busy"), name("ended"), name("idle")
+        join(busy, session=sid(), pid=os.getpid())        # this process stands in for its claude
+        join(ended, session=sid(), pid=os.getpid())
+        join(idle)
+        with S._lock:                                     # ended's claude exited; its pid is someone else's now
+            c = S._claims()
+            for v in c["sessions"].values():
+                if v["name"] == ended:
+                    v["pid_start"] = "Mon Jan  1 00:00:00 2001"
+            S._claims_write(c)
+        progress(busy, goal="Ship the rail", steps=["Build", "Review"])
+        call("/api/agents/read", {"name": busy})
+        for who in (busy, ended, idle):
+            quiet(who, 120)                               # none listened in the last 30 s
+        self.assertEqual(call("/api/chat/clear", {})[0], 200)
+        kept = S._agents()
+        self.assertEqual((kept[busy]["progress"]["goal"], bool(kept[busy]["notes_read"])), ("Ship the rail", True))
+        self.assertNotIn(ended, kept)
+        self.assertNotIn(idle, kept)
+        self.assertEqual(row(busy)["progress"]["steps"], ["Build", "Review"])
+
+
 class NotesTests(unittest.TestCase):
 
     def owned(self):
