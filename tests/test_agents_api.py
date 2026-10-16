@@ -699,6 +699,134 @@ class LinksSeamTests(unittest.TestCase):
         self.assertIsInstance(d["links"], dict)
 
 
+GH_SHIM = '''#!%s
+"""Fake gh for TapButtonTests: one open tap of hperwin's; records every call; never reaches GitHub."""
+import json, os, sys
+a = sys.argv[1:]
+with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "gh-argv.jsonl"), "a") as f:
+    f.write(json.dumps(a) + "\\n")
+if a[:2] == ["issue", "view"]:
+    print(json.dumps({"author": {"login": "hperwin"}, "title": "A tap", "body": "- [x] it works",
+                      "labels": [{"name": "flightdeck"}], "state": "OPEN", "comments": [],
+                      "url": "https://github.com/hperwin/fu-fixture/issues/7", "createdAt": "2026-10-16T19:00:00Z",
+                      "closedAt": None, "stateReason": None}))
+elif a[:2] == ["api", "user"]:
+    print("hperwin")
+elif a[:1] == ["api"] and "/labels/" in a[1]:
+    print("flightdeck:fly")
+elif a[:2] not in (["issue", "close"], ["issue", "edit"]):
+    sys.exit("fake gh: unexpected call " + " ".join(a))
+''' % sys.executable
+
+
+class TapButtonTests(unittest.TestCase):
+    """POST /api/taps/fly and /api/taps/accept are Hayden's buttons: the server names the caller by the
+    process that owns the other end of its socket (a fake lsof answer and a fake process table here) and
+    refuses any caller under a claude or codex process. gh is a fake that only records."""
+    START = "Fri Oct 16 13:00:00 2026"
+    KEY = "hperwin/fu-fixture#7"
+
+    def setUp(self):
+        self.saved = {k: getattr(S, k) for k in ("_socket_owners", "_procs", "GH")}
+        self.saved_me = S.TAPS["me"]
+        shim = pathlib.Path(TMP.name) / "gh-shim"
+        shim.mkdir(exist_ok=True)
+        (shim / "gh").write_text(GH_SHIM)
+        (shim / "gh").chmod(0o755)
+        self.log = shim / "gh-argv.jsonl"
+        self.log.unlink(missing_ok=True)
+        S.GH, S.TAPS["me"] = str(shim / "gh"), ""
+        self.owners, self.table = set(), {}
+        S._socket_owners = lambda host, port: None if self.owners is None else set(self.owners)
+        S._procs = lambda: dict(self.table)
+
+    def tearDown(self):
+        for k, v in self.saved.items():
+            setattr(S, k, v)
+        S.TAPS["me"] = self.saved_me
+        S.HOT.pop(self.KEY, None)
+
+    def peer(self, *chain):
+        """The socket's owner and the processes above it, nearest first, each a comm path; launchd on top."""
+        pids = [990100 + i for i in range(len(chain))]
+        for i, (pid, comm) in enumerate(zip(pids, chain)):
+            self.table[pid] = (pids[i + 1] if i + 1 < len(pids) else 1, self.START, comm, "S")
+        self.owners = {pids[0]}
+
+    def writes(self):
+        rows = [json.loads(x) for x in self.log.read_text().splitlines()] if self.log.exists() else []
+        return [r[:2] for r in rows if r[:2] in (["issue", "close"], ["issue", "edit"])]
+
+    def press(self, act, headers=None):
+        return call("/api/taps/" + act, {"key": self.KEY}, headers=headers)
+
+    def test_a_caller_under_claude_or_codex_is_refused_and_nothing_is_written(self):
+        self.peer("/usr/bin/curl", "/bin/zsh", "claude", "/Applications/Ghostty.app/Contents/MacOS/ghostty")
+        code, r = self.press("accept")
+        self.assertEqual(code, 403)
+        self.assertIn("inside claude (pid 990102)", r["error"])
+        self.assertEqual(self.press("fly")[0], 403)
+        self.table.clear()
+        self.peer("/usr/bin/curl", "/bin/bash", "/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex")
+        code, r = self.press("accept", headers={"Origin": BASE})
+        self.assertEqual(code, 403)
+        self.assertIn("inside codex", r["error"])
+        self.assertEqual(self.writes(), [])
+
+    def test_the_page_and_the_mac_app_are_allowed(self):
+        self.peer("/Applications/Dia.app/Contents/Frameworks/ArcCore.framework/Helpers/Browser Helper.app/"
+                  "Contents/MacOS/Browser Helper", "/Applications/Dia.app/Contents/MacOS/Dia")
+        self.assertEqual(self.press("accept", headers={"Origin": BASE}), (200, {"ok": True}))
+        self.table.clear()
+        self.peer("/Applications/TapSpace.app/Contents/MacOS/TapSpace")
+        self.assertEqual(self.press("fly"), (200, {"ok": True}))
+        self.assertEqual(self.writes(), [["issue", "close"], ["issue", "edit"]])
+
+    def test_the_phone_route_is_allowed(self):
+        self.peer("/opt/homebrew/bin/ngrok")
+        self.assertEqual(self.press("accept", headers=REMOTE), (200, {"ok": True}))
+        self.assertEqual(self.press("fly", headers={"X-Forwarded-For": "203.0.113.7"})[0], 401)   # no bearer
+        self.owners = set()      # tailscaled running as root: lsof cannot list it, the connection stays open
+        self.assertEqual(self.press("fly", headers=REMOTE), (200, {"ok": True}))
+        self.assertEqual(self.writes(), [["issue", "close"], ["issue", "edit"]])
+
+    def test_the_claude_session_headers_are_still_refused(self):
+        self.peer("/Applications/TapSpace.app/Contents/MacOS/TapSpace")
+        for act in ("accept", "fly"):
+            code, r = self.press(act, headers=ident(sid(), 990999))
+            self.assertEqual(code, 403)
+            self.assertIn("tap.py inside a Claude session", r["error"])
+        self.assertEqual(self.writes(), [])
+
+    def test_an_unknown_caller_is_refused(self):
+        self.owners = None                                         # lsof failed
+        self.assertIn("could not tell", self.press("accept")[1]["error"])
+        self.owners = {990500}                                     # the owner exited before ps read the table
+        self.assertIn("could not tell", self.press("accept")[1]["error"])
+        self.assertEqual(self.writes(), [])
+
+    def test_a_client_that_hung_up_is_refused(self):
+        import socket
+        srv = socket.create_server(("127.0.0.1", 0))
+        with srv, socket.create_connection(srv.getsockname()) as c:
+            a, _ = srv.accept()
+            with a:
+                peer = c.getsockname()
+                self.assertEqual(S._agent_caller(a, peer), "")                  # still open: another user's
+                c.close()
+                time.sleep(0.05)
+                self.assertIn("hung up", S._agent_caller(a, peer))
+
+    def test_lsof_names_the_owner_of_a_real_connection(self):
+        import socket
+        S._socket_owners = self.saved["_socket_owners"]
+        srv = socket.create_server(("127.0.0.1", 0))
+        with srv, socket.create_connection(srv.getsockname()) as c:
+            a, _ = srv.accept()
+            with a:
+                self.assertEqual(S._socket_owners(*c.getsockname()), {os.getpid()})
+
+
 class CompatTests(unittest.TestCase):
 
     def test_change_kinds_unchanged(self):
