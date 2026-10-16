@@ -35,6 +35,7 @@ import os
 import secrets
 import shutil
 import signal
+import socket
 import subprocess
 import pathlib
 import re
@@ -922,6 +923,63 @@ def _chain(pid, procs):
         out.append(pid)
         pid = procs[pid][0]
     return out
+
+
+# ---- who is on the other end of a request (fly and accept are the reviewer's own buttons) ----
+# Headers are the caller's to choose; the socket is not. The process on this Mac that holds the other
+# end of the connection, and every process above it, says whether an agent sent it: a claude or codex
+# process anywhere above it makes it one. The page in the browser, the Mac app and the phone's tunnel
+# (ngrok, Tailscale) run under launchd, never under an agent.
+AGENT_COMMS = ("claude", "codex")
+LSOF = shutil.which("lsof") or "/usr/sbin/lsof"
+
+
+def _socket_owners(host, port):
+    """Pids of this user's processes that hold the client end of the loopback connection from
+    host:port, one lsof call, or None when lsof fails. Another user's process (a tunnel daemon
+    running as root) is never listed."""
+    end = (f"[{host}]" if ":" in host else host) + f":{port}"
+    try:
+        out = subprocess.run([LSOF, "-nP", "-iTCP@" + end, "-Fpn"], capture_output=True, text=True,
+                             timeout=5).stdout
+    except Exception:
+        return None
+    pids, pid, me = set(), 0, False
+    for line in out.splitlines():
+        if line.startswith("p"):
+            pid = int(line[1:]) if line[1:].isdigit() else 0
+            me = me or pid == os.getpid()
+        elif line.startswith("n" + end + "->"):
+            pids.add(pid)
+    return pids if me else None      # this server holds the other end, so a working lsof always lists it
+
+
+def _agent_caller(conn, addr):
+    """Why the client on this connection is (or may be) an agent, or "" when it is not."""
+    host, port = addr[0], addr[1]
+    if not (host.startswith("127.") or host == "::1"):
+        return ""                    # not from this Mac: the bearer is all there is to check
+    owners = _socket_owners(host, port)
+    if owners is None:
+        return "TapSpace could not tell which app sent it"
+    if not owners:
+        # no process of this user holds that end. Read after lsof, ESTABLISHED means it was open all
+        # through the lookup, so another user's process holds it; anything else means it hung up
+        try:
+            if conn.getsockopt(socket.IPPROTO_TCP, socket.TCP_CONNECTION_INFO, 64)[0] == 4:
+                return ""
+        except (AttributeError, OSError):
+            pass
+        return "it hung up before TapSpace could check who sent it"
+    procs = _procs()
+    for pid in sorted(owners):
+        chain = _chain(pid, procs)
+        if not chain:
+            return "TapSpace could not tell which app sent it"
+        hit = next((x for x in chain if os.path.basename(procs[x][2]).casefold() in AGENT_COMMS), None)
+        if hit:
+            return f"it was sent from inside {os.path.basename(procs[hit][2])} (pid {hit})"
+    return ""
 
 
 def _stop_plan(name):
@@ -2042,12 +2100,16 @@ class H(BaseHTTPRequestHandler):
                 return
             if self.path in ("/api/taps/fly", "/api/taps/accept"):
                 # the reviewer flies a proposed tap or signs a landed one off; the phone may (bearer), like say.
-                # A tap.py call from inside a Claude session is an agent, and accept is never an agent's.
-                w = self._who()
-                if self.path == "/api/taps/accept" and (w.get("session") or w.get("pid")):
-                    self._json({"error": "accept is Hayden's own sign-off"}, 403)
+                # Never an agent: not a tap.py call from inside a Claude session, and not anything whose
+                # socket belongs to a process under a claude or codex process (_agent_caller).
+                act, w = self.path.rsplit("/", 1)[1], self._who()
+                why = "it came through tap.py inside a Claude session" if (w.get("session") or w.get("pid")) \
+                    else _agent_caller(self.connection, self.client_address)
+                if why:
+                    self._json({"error": f"{act} is Hayden's own {'sign-off' if act == 'accept' else 'button'}: {why}"},
+                               403)
                     return
-                code, out = _tap_act(p.get("key"), self.path.rsplit("/", 1)[1])
+                code, out = _tap_act(p.get("key"), act)
                 self._json(out, code)
                 return
             if self.path in ("/api/agents/lead", "/api/agents/adopt"):
