@@ -67,6 +67,12 @@ struct Agent: Decodable, Equatable, Identifiable {
     var role: String? = nil
     /// NAME of the lead this master reports to (server-derived). A hidden key: never shown.
     var parent: String? = nil
+    /// The face the server gave this master: 0 the lead's, 1...17 the others (a tone and a mark, drawn with its
+    /// state's expression). nil from an older server: the plain orb.
+    var look: Int? = nil
+    /// What the lead is doing right now, read from its live session (the lead's row only). nil when unknown:
+    /// the activity strip hides.
+    var activity: AgentActivity? = nil
 
     var id: String { name }
     var key: String { "agent:" + name }
@@ -85,6 +91,16 @@ struct AgentProgress: Decodable, Equatable {
     var isDone: Bool { !steps.isEmpty && current >= steps.count }
     /// The step it is on now (nil when done or out of range).
     var currentText: String? { steps.indices.contains(current) ? steps[current] : nil }
+}
+
+/// The lead's live activity: working | waiting | idle | switching | gone, and the plain word to show for it.
+struct AgentActivity: Decodable, Equatable {
+    var state = ""
+    var word = ""
+    /// An optional plain title (a master's), never a path.
+    var detail = ""
+    /// When this word started (epoch).
+    var since: Double = 0
 }
 
 /// One change note Hayden sent on a card this master owns.
@@ -129,6 +145,10 @@ struct AgentLink: Decodable, Equatable, Identifiable {
 struct AgentsBoard: Decodable, Equatable {
     var agents: [Agent] = []
     var links: [AgentLink] = []
+    /// Everything running under the lead, in the server's order (needs you, working, the rest). [] with no lead.
+    var fleet: [FleetEntry] = []
+    /// The thread Hayden's newest own message went to (a thread key): it never badges. nil when he never wrote.
+    var focus: String? = nil
 }
 
 struct ChatMessage: Decodable, Equatable, Identifiable {
@@ -139,10 +159,143 @@ struct ChatMessage: Decodable, Equatable, Identifiable {
     let ts: Double
     /// Attached image paths (`/chat-media/<file>`), [] when none.
     var images: [String] = []
+    /// An update card (a master's row). nil on plain rows, and on a card this build cannot draw (another `v`):
+    /// that row shows its `body`, the plain line the server always writes.
+    var card: ChatCard? = nil
+    /// Hayden's answer to a card (his row). nil on plain rows.
+    var answer: ChatAnswer? = nil
+    /// The sender's retry key ("" when none): an answer on its way is matched to its stored row by it.
+    var nonce = ""
 }
 
 private struct ChatResponse: Decodable { let messages: Lossy<ChatMessage> }
 private struct ChatPostResponse: Decodable { let message: ChatMessage? }
+
+/// An update card (CONTRACT section 1, as the server stores it). Names are hidden keys; titles are what Hayden sees.
+struct ChatCard: Decodable, Equatable {
+    /// The card schema this build draws; any other `v` shows the row's body (CONTRACT section 3).
+    static let version = 1
+    var v = 0
+    var line = ""
+    /// The face on top: "agent:NAME", "owner/repo#n" or "project:name".
+    var face = ""
+    /// The server's snapshot of every face the card names, by key (draws refs the store no longer has).
+    var faces: [String: CardFaceInfo] = [:]
+    var visual: CardVisual? = nil
+    var items: [CardItem] = []
+    /// Aligned by index with the row's top-level `images`; every one is an approval image.
+    var images: [CardImage] = []
+    var ask: CardAsk? = nil
+    /// The card's one action: its buttons are Accept and Not quite. nil on every other card.
+    var action: CardAction? = nil
+}
+
+struct CardFaceInfo: Decodable, Equatable {
+    var kind = ""            // lead | master | tap | project
+    var look: Int? = nil     // masters and the lead
+    var title = ""
+    var initial = ""         // taps and projects
+    var state: String? = nil // masters and the lead, at send time
+    var phase: String? = nil // taps, at send time
+}
+
+/// One visual under the face. `kind` progress | timeline | graph | word; anything else draws nothing.
+struct CardVisual: Decodable, Equatable {
+    var kind = ""
+    var done = 0             // progress
+    var total = 0
+    var from: Int? = nil     // the previous card's done (same face, progress); nil: fill from 0
+    var label = ""           // progress, graph
+    var steps: [String] = [] // timeline
+    var at = 0               // timeline; == steps.count is all done
+    var points: [Double] = [] // graph
+    var text = ""            // word
+}
+
+struct CardItem: Decodable, Equatable {
+    let ref: String          // a face key
+    var kind = ""            // tap | master | lead | project
+    var title = ""
+    var note = ""
+    var phase: String? = nil // taps: the phase when the card was sent
+    var word = ""
+    var goals: [Int] = []    // taps: [done, total]
+    var state: String? = nil // masters
+    var progress: CardItemProgress? = nil
+    /// That ref's snapshot in the previous card of this thread; nil on its first card (no change beat).
+    var was: CardWas? = nil
+}
+
+struct CardItemProgress: Decodable, Equatable {
+    var current = 0          // 0-based; == steps.count is done (AgentProgress's rule)
+    var steps: [String] = []
+}
+
+/// Taps carry phase and goals, masters state and current (no current when the steps changed).
+struct CardWas: Decodable, Equatable {
+    var phase: String? = nil
+    var goals: [Int] = []
+    var state: String? = nil
+    var current: Int? = nil
+}
+
+struct CardImage: Decodable, Equatable {
+    var label = ""
+    var from: CardImageSource? = nil
+}
+
+/// A picture copied from a tap's proof at send time.
+struct CardImageSource: Decodable, Equatable {
+    var tap = ""
+    var i = 0
+}
+
+struct CardAsk: Decodable, Equatable {
+    var q = ""
+    var checks: [CardCheck] = []
+    var text = false
+}
+
+struct CardCheck: Decodable, Equatable, Identifiable {
+    let id: String           // c1...cN
+    var label = ""
+}
+
+/// A card's one action. `tap_accept` is the only kind: Accept signs off that landed tap through the guarded
+/// accept route (with the card's id), never through an answer.
+struct CardAction: Decodable, Equatable {
+    var kind = ""
+    var tap = ""             // the tap's key
+}
+
+/// Hayden's answer to one card (CONTRACT section 2): an image's verdict, the ask's ticks and words, or the card's
+/// action (accept, deny with a note), one per row.
+struct ChatAnswer: Decodable, Equatable {
+    var card = 0
+    var image: Int? = nil    // nil: an ask or an action answer
+    var verdict = ""         // approve | change
+    var note = ""            // with change, and with deny
+    var checks: [String] = [] // check ids
+    var text = ""
+    var action = ""          // accept | deny; "" on image and ask answers
+}
+
+/// One face in the strip under the lead (CONTRACT section 5).
+struct FleetEntry: Decodable, Equatable, Identifiable {
+    let key: String          // a thread key, never shown
+    var kind = "master"      // master | tap
+    var title = ""
+    var look: Int? = nil
+    var initial = ""         // taps
+    var state = ""           // masters
+    var phase = ""           // taps
+    var word = ""
+    var done = 0
+    var total = 0
+    var needsYou = false
+    var working = false
+    var id: String { key }
+}
 
 struct TapGoal: Decodable, Equatable {
     let text: String
@@ -198,6 +351,8 @@ struct Tap: Decodable, Equatable, Identifiable {
     /// The fly label is on: a proposed tap waiting to fly.
     var flyRequested = false
     var proof: [TapProof] = []
+    /// The repo's letter for its face (the server's one rule); "" from an older server.
+    var initial = ""
 
     var id: String { key }
     /// "[tap] Fix the thing" -> "Fix the thing"
@@ -312,6 +467,18 @@ extension Agent {
         notesRead = c.opt(Keys("notes_read"))
         role = c.opt(Keys("role"))
         parent = (c.opt(Keys("parent")) as String?).flatMap { $0.isEmpty ? nil : $0 }
+        look = c.opt(Keys("look"))
+        activity = c.opt(Keys("activity"))
+    }
+}
+
+extension AgentActivity {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        state = c.or(Keys("state"), "")
+        word = c.or(Keys("word"), "")
+        detail = c.or(Keys("detail"), "")
+        since = c.or(Keys("since"), 0)
     }
 }
 
@@ -356,6 +523,8 @@ extension AgentsBoard {
         let c = try decoder.container(keyedBy: Keys.self)
         agents = try c.decode(Lossy<Agent>.self, forKey: Keys("agents")).items
         links = c.lossy(Keys("links"))
+        fleet = c.lossy(Keys("fleet"))
+        focus = (c.opt(Keys("focus")) as String?).flatMap { $0.isEmpty ? nil : $0 }
     }
 }
 
@@ -368,6 +537,175 @@ extension ChatMessage {
         body = c.or(Keys("body"), "")
         ts = c.or(Keys("ts"), 0)
         images = c.lossy(Keys("images"))
+        card = (c.opt(Keys("card")) as ChatCard?).flatMap { $0.v == ChatCard.version ? $0 : nil }
+        answer = c.opt(Keys("answer"))
+        nonce = c.or(Keys("nonce"), "")
+    }
+}
+
+extension ChatCard {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        v = c.or(Keys("v"), 0)
+        line = c.or(Keys("line"), "")
+        face = c.or(Keys("face"), "")
+        faces = c.or(Keys("faces"), [:])
+        visual = c.opt(Keys("visual"))
+        items = c.lossy(Keys("items"))
+        images = c.lossy(Keys("images"))
+        ask = c.opt(Keys("ask"))
+        action = c.opt(Keys("action"))
+    }
+}
+
+extension CardFaceInfo {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        kind = c.or(Keys("kind"), "")
+        look = c.opt(Keys("look"))
+        title = c.or(Keys("title"), "")
+        initial = c.or(Keys("initial"), "")
+        state = (c.opt(Keys("state")) as String?).flatMap { $0.isEmpty ? nil : $0 }
+        phase = (c.opt(Keys("phase")) as String?).flatMap { $0.isEmpty ? nil : $0 }
+    }
+}
+
+extension CardVisual {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        kind = c.or(Keys("kind"), "")
+        done = c.or(Keys("done"), 0)
+        total = c.or(Keys("total"), 0)
+        from = c.opt(Keys("from"))
+        label = c.or(Keys("label"), "")
+        steps = c.lossy(Keys("steps"))
+        at = c.or(Keys("at"), 0)
+        points = c.lossy(Keys("points"))
+        text = c.or(Keys("text"), "")
+    }
+}
+
+extension CardItem {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        ref = try c.decode(String.self, forKey: Keys("ref"))
+        kind = c.or(Keys("kind"), "")
+        title = c.or(Keys("title"), "")
+        note = c.or(Keys("note"), "")
+        phase = (c.opt(Keys("phase")) as String?).flatMap { $0.isEmpty ? nil : $0 }
+        word = c.or(Keys("word"), "")
+        goals = c.lossy(Keys("goals"))
+        state = (c.opt(Keys("state")) as String?).flatMap { $0.isEmpty ? nil : $0 }
+        progress = c.opt(Keys("progress"))
+        was = c.opt(Keys("was"))
+    }
+}
+
+extension CardItemProgress {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        current = c.or(Keys("current"), 0)
+        steps = c.lossy(Keys("steps"))
+    }
+}
+
+extension CardWas {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        phase = (c.opt(Keys("phase")) as String?).flatMap { $0.isEmpty ? nil : $0 }
+        goals = c.lossy(Keys("goals"))
+        state = (c.opt(Keys("state")) as String?).flatMap { $0.isEmpty ? nil : $0 }
+        current = c.opt(Keys("current"))
+    }
+}
+
+extension CardImage {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        label = c.or(Keys("label"), "")
+        from = c.opt(Keys("from"))
+    }
+}
+
+extension CardImageSource {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        tap = c.or(Keys("tap"), "")
+        i = c.or(Keys("i"), 0)
+    }
+}
+
+extension CardAsk {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        q = c.or(Keys("q"), "")
+        checks = c.lossy(Keys("checks"))
+        text = c.or(Keys("text"), false)
+    }
+}
+
+extension CardCheck {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        id = try c.decode(String.self, forKey: Keys("id"))
+        label = c.or(Keys("label"), "")
+    }
+}
+
+extension CardAction {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        kind = c.or(Keys("kind"), "")
+        tap = c.or(Keys("tap"), "")
+    }
+}
+
+extension ChatAnswer {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        card = c.or(Keys("card"), 0)
+        image = c.opt(Keys("image"))
+        verdict = c.or(Keys("verdict"), "")
+        note = c.or(Keys("note"), "")
+        checks = c.lossy(Keys("checks"))
+        text = c.or(Keys("text"), "")
+        action = c.or(Keys("action"), "")
+    }
+
+    /// The wire shape (CONTRACT sections 2 and 9): an image's verdict (its note only with Not quite), the ask's
+    /// ticks and words (the words only when there are some), or a deny with its note. Accept never posts here.
+    var payload: [String: Any] {
+        var p: [String: Any] = ["card": card]
+        if !action.isEmpty {
+            p["action"] = action
+            if !note.isEmpty { p["note"] = note }
+        } else if let image {
+            p["image"] = image
+            p["verdict"] = verdict
+            if verdict == "change", !note.isEmpty { p["note"] = note }
+        } else {
+            p["checks"] = checks
+            if !text.isEmpty { p["text"] = text }
+        }
+        return p
+    }
+}
+
+extension FleetEntry {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        key = try c.decode(String.self, forKey: Keys("key"))
+        kind = c.or(Keys("kind"), "master")
+        title = c.or(Keys("title"), "")
+        look = c.opt(Keys("look"))
+        initial = c.or(Keys("initial"), "")
+        state = c.or(Keys("state"), "")
+        phase = c.or(Keys("phase"), "")
+        word = c.or(Keys("word"), "")
+        done = c.or(Keys("done"), 0)
+        total = c.or(Keys("total"), 0)
+        needsYou = c.or(Keys("needs_you"), false)
+        working = c.or(Keys("working"), false)
     }
 }
 
@@ -419,6 +757,7 @@ extension Tap {
         ask = c.opt(Keys("ask"))
         flyRequested = c.or(Keys("fly_requested"), false)
         proof = c.lossy(Keys("proof"))
+        initial = c.or(Keys("initial"), "")
     }
 }
 
@@ -568,6 +907,15 @@ enum API {
     @discardableResult
     static func say(_ body: String, toAgent name: String) async throws -> ChatMessage? {
         let data = try await postData("/api/chat", ["agent": name, "body": body])
+        return (try? JSONDecoder().decode(ChatPostResponse.self, from: data))?.message
+    }
+
+    /// POST /api/chat with Hayden's answer to a card: the server checks it against the card, writes the row's plain
+    /// body itself and returns the stored row. The nonce lands a retry on the same row. Speaks for Hayden:
+    /// refused under --snapshot/--demo (the card-frames harness turns writes back on for a preview only).
+    @discardableResult
+    static func answer(_ a: ChatAnswer, toAgent name: String, nonce: String) async throws -> ChatMessage? {
+        let data = try await postData("/api/chat", ["agent": name, "nonce": nonce, "answer": a.payload])
         return (try? JSONDecoder().decode(ChatPostResponse.self, from: data))?.message
     }
 
