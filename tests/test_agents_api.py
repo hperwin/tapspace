@@ -659,6 +659,15 @@ class StopTests(unittest.TestCase):
         self.assertNotIn("stopped", json.loads(S.AGENTS.read_text())[a])
         self.assertEqual(call("/api/chat?agent=" + urllib.parse.quote(a))[1]["messages"], [])
 
+    def test_clear_all_keeps_the_stopped_mark(self):
+        a, sids = self.master("cleared", 990017)
+        self.stop(a)
+        quiet(a, 120)
+        self.assertEqual(call("/api/chat/clear", {})[0], 200)
+        self.assertIsInstance(S._agents()[a]["stopped"], float)
+        join(a, session=sids[0], pid=990017)        # the ended session's leftover listener, after Clear all
+        self.assertNotIn(a, self.names())
+
     def test_wait_wakes_agents_and_chat(self):
         a, _ = self.master("wake", 990016)
         cur = call("/api/wait?since=0&timeout=0")[1]["cursor"]

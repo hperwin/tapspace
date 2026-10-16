@@ -508,7 +508,8 @@ def _chat_clear():
     """Clear all: every thread's history and every agent that is not live moves to
     data/archive/ (nothing is deleted). Live agents stay, with empty threads: listening, starting,
     switching cars, or busy between listens (a Claude session registered to it still runs), so a
-    master answering keeps its goal card and its read mark."""
+    master answering keeps its goal card and its read mark. A spun-down row keeps its stopped mark
+    (it is never served), so a leftover listener of the ended session cannot bring it back."""
     running = _running_names()         # runs ps: before _lock
     with _lock:
         arch = DATA / "archive"
@@ -527,7 +528,7 @@ def _chat_clear():
         now = time.time()
         keep = {n: i for n, i in a.items()
                 if now - i.get("listen", 0) < 30 or i.get("spawned", 0) > i.get("listen", 0)
-                or i.get("switching", 0) > i.get("listen", 0) or n in running}
+                or i.get("switching", 0) > i.get("listen", 0) or n in running or i.get("stopped")}
         tmp = AGENTS.with_suffix(".tmp")
         tmp.write_text(json.dumps(keep, indent=1))
         tmp.replace(AGENTS)
