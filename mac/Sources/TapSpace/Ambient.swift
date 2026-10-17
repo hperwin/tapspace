@@ -254,36 +254,72 @@ struct BreathingDot: NSViewRepresentable {
     }
 }
 
-// MARK: - Agent orb: glossy blue sphere
+// MARK: - Agent orb: a flat disc with its face
 
 struct OrbView: NSViewRepresentable {
     var state: String   // thinking | here | away | switching | starting
+    /// The master's look (0 = the lead's): the disc's tone and the face's mark (ShellFace). nil draws look 0.
+    var look: Int? = nil
+    /// false holds the orb still: no pulse, squeeze, float or ripple (a face inside a card; BreathingDot's flag).
+    /// A new expression still pops in.
+    var animated = true
 
     final class Coordinator {
-        var state = ""
+        var sig = ""
+        var expression: FaceExpression?
+        var mark = ShellFace.Mark.plain
         let glow = CALayer()
         let ripple = CAShapeLayer()
-        let body = CAGradientLayer()
-        let shade = CAGradientLayer()
-        let shine = CAGradientLayer()
+        /// The flat disc: a plain fill (a radial gradient of one colour drew nothing in offscreen renders).
+        let body = CALayer()
+        /// The eyes and mouth: they pop in together on a new expression. Inside `body`, so its pulses carry them.
+        let features = CALayer()
+        let eyes = CAShapeLayer()
+        let mouth = CAShapeLayer()
+        /// The mark: it stays put through an expression change.
+        let lines = CAShapeLayer()
+        let dots = CAShapeLayer()
+
+        /// The face's paths at the body's size, rasterized for the screen (layers the view does not own keep
+        /// scale 1 otherwise), never implicitly animated (a path morph between expressions is noise).
+        func layoutFace(scale: CGFloat) {
+            let b = body.bounds
+            guard b.width > 0, let e = expression else { return }
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            features.frame = b
+            for l in [eyes, mouth, lines, dots] {
+                l.frame = b
+                l.contentsScale = scale
+            }
+            eyes.path = ShellFace.scaled(ShellFace.eyes(e), b.width)
+            mouth.path = ShellFace.scaled(ShellFace.mouth(e), b.width)
+            lines.path = ShellFace.scaled(ShellFace.lines(mark), b.width)
+            dots.path = ShellFace.scaled(ShellFace.dots(mark), b.width)
+            mouth.lineWidth = 2.5 * b.width / 88
+            lines.lineWidth = mouth.lineWidth
+            CATransaction.commit()
+        }
     }
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeNSView(context: Context) -> LayerHost {
         let v = LayerHost()
         let c = context.coordinator
-        c.body.type = .radial
         c.body.masksToBounds = true
-        c.shade.masksToBounds = true
-        c.shine.type = .radial
-        c.shine.masksToBounds = true
         c.ripple.fillColor = nil
         c.ripple.lineWidth = 1.5
         c.glow.shadowOffset = CGSize(width: 0, height: 4)
         c.glow.shadowRadius = 7
+        for l in [c.mouth, c.lines] {
+            l.fillColor = nil
+            l.lineCap = .round
+            l.lineJoin = .round
+        }
         for l in [c.ripple, c.glow, c.body] as [CALayer] { v.layer?.addSublayer(l) }
-        c.body.addSublayer(c.shade)
-        c.body.addSublayer(c.shine)
+        c.features.addSublayer(c.eyes)
+        c.features.addSublayer(c.mouth)
+        for l in [c.features, c.lines, c.dots] as [CALayer] { c.body.addSublayer(l) }
         v.onLayout = { host in
             let b = host.bounds
             let r = min(b.width, b.height) / 2
@@ -293,29 +329,38 @@ struct OrbView: NSViewRepresentable {
             c.glow.shadowPath = CGPath(ellipseIn: b, transform: nil)
             c.body.frame = b
             c.body.cornerRadius = r
-            c.shade.frame = c.body.bounds
-            c.shine.frame = c.body.bounds
             c.ripple.frame = b
             c.ripple.path = CGPath(ellipseIn: b.insetBy(dx: -4, dy: -4), transform: nil)
+            c.layoutFace(scale: host.window?.backingScaleFactor ?? 2)
         }
         return v
     }
 
     func updateNSView(_ v: LayerHost, context: Context) {
         let c = context.coordinator
-        guard c.state != state else { return }
-        c.state = state
-        let away = state == "away"
-        // flat, like Glint: one solid fill, no gradient, shine or glow
-        let fill = away ? NSColor(srgbRed: 0xd1 / 255, green: 0xd1 / 255, blue: 0xd6 / 255, alpha: 1) : Palette.blue
-        c.body.colors = [fill.cgColor, fill.cgColor]
-        c.shade.colors = [NSColor.clear.cgColor, NSColor.clear.cgColor]
-        c.shine.colors = [NSColor.clear.cgColor, NSColor.clear.cgColor]
+        let sig = "\(state)|\(look ?? 0)|\(animated)"
+        guard c.sig != sig else { return }
+        c.sig = sig
+        let was = c.expression
+        let (tone, mark) = ShellFace.look(look ?? 0)
+        let colors = ShellFace.colors(tone: tone, away: state == "away")
+        // flat, like Glint: one solid fill per tone, no gradient, shine or glow; the face's ink changes with it
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        c.body.backgroundColor = colors.fill.cgColor
+        for l in [c.eyes, c.dots] { l.fillColor = colors.ink.cgColor }
+        for l in [c.mouth, c.lines] { l.strokeColor = colors.ink.cgColor }
         c.glow.shadowOpacity = 0
         c.ripple.strokeColor = Palette.blue.withAlphaComponent(0.35).cgColor
         c.ripple.opacity = 0
+        CATransaction.commit()
+        c.expression = FaceExpression.of(state)
+        c.mark = mark
+        c.layoutFace(scale: v.window?.backingScaleFactor ?? 2)
+        if let was, was != c.expression { c.features.add(ShellFace.pop(), forKey: "pop") }
 
         for l in [c.body, c.glow, c.ripple] as [CALayer] { l.removeAllAnimations() }
+        guard animated else { return }
         switch state {
         case "thinking":
             c.body.add(loop("transform.scale", from: 1.0, to: 1.06, duration: 0.8, autoreverses: true), forKey: "pulse")
