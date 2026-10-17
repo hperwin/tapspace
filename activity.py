@@ -32,7 +32,6 @@ CLAUDE_DIR = links.CLAUDE_DIR      # TAPSPACE_CLAUDE_DIR, else ~/.claude
 TAIL_FIRST = 1_000_000             # first sight of a transcript: its last 1 MB (a turn boundary sits far closer)
 TAIL_MAX = 8_000_000               # never read more than this from it in one pass
 LISTEN_FRESH = 30                  # the rail's Here window: a listen poll this recent means the lead hears the reviewer
-ORIGIN_HOLD = 1.0                  # what started a turn shows for its first second
 PROC_EVERY = 10                    # seconds between checks that a claim's pid is still the process that claimed it
 MISS_EVERY = 5                     # seconds before a session with no transcript yet is looked for again
 KINDS_MAX = 200                    # background tasks remembered per transcript (what a notification is about)
@@ -302,8 +301,8 @@ def turn_word(o, kinds):
 
 def fresh():
     """A transcript's state before its first line."""
-    return {"open": None, "turn_at": None, "origin": "", "pending": {}, "free_at": None, "ended": None,
-            "kinds": {}, "launch": {}}
+    return {"open": None, "turn_at": None, "origin": "", "pending": {}, "free_at": None, "call_at": None,
+            "ended": None, "kinds": {}, "launch": {}}
 
 
 def _remember(d, k, v):
@@ -325,7 +324,7 @@ def step(st, o, ctx=None):
     elif t == "system" and o.get("subtype") == "turn_duration":
         st["open"], st["ended"] = False, ts
     elif t == "user" and o.get("turnOrigin"):
-        st.update(open=True, turn_at=ts, origin=turn_word(o, st["kinds"]), pending={}, free_at=None)
+        st.update(open=True, turn_at=ts, origin=turn_word(o, st["kinds"]), pending={}, free_at=None, call_at=None)
     elif t == "user":
         r = o.get("toolUseResult") if isinstance(o.get("toolUseResult"), dict) else {}
         for b in content:
@@ -344,6 +343,8 @@ def step(st, o, ctx=None):
         for b in content:
             if not isinstance(b, dict) or b.get("type") != "tool_use" or not b.get("id"):
                 continue
+            if st["call_at"] is None:
+                st["call_at"] = ts or 0.0                      # the turn's first call, any kind: what woke it is read
             name, inp = b.get("name"), b.get("input") if isinstance(b.get("input"), dict) else {}
             kind = _launch_kind(name, inp)
             if kind:
@@ -357,7 +358,7 @@ def step(st, o, ctx=None):
     return st
 
 
-def snapshot(st, listening, waits, now):
+def snapshot(st, listening, waits):
     """(state, word, detail, since) for a live session from its transcript state (pure). listening: the lead polled
     listen within LISTEN_FRESH; waits() is true while its newest card waits on the reviewer. since is when the
     transcript says this started, or None."""
@@ -365,10 +366,9 @@ def snapshot(st, listening, waits, now):
         if st["pending"]:
             word, detail, ts = list(st["pending"].values())[-1]     # the newest call still running
             return "working", word, detail, ts
-        if st["turn_at"] is not None and now - st["turn_at"] < ORIGIN_HOLD:
+        if st["turn_at"] is not None and st["call_at"] is None:      # what woke it holds until its first call
             return "working", st["origin"], "", st["turn_at"]
-        start = st["turn_at"] + ORIGIN_HOLD if st["turn_at"] is not None else None
-        return "working", "Thinking", "", max(x for x in (st["free_at"], start, 0) if x is not None) or None
+        return "working", "Thinking", "", max(x for x in (st["free_at"], st["call_at"], 0) if x is not None) or None
     if listening:
         return "waiting", ("Waiting on you" if waits() else "Listening"), "", st["ended"]
     return "idle", "Idle", "", st["ended"]
@@ -486,7 +486,7 @@ class Reader:
         if st is None:
             return None
         listening = self.clock() - (info.get("listen") or 0) < LISTEN_FRESH
-        return snapshot(st, listening, waits, self.clock())
+        return snapshot(st, listening, waits)
 
     def _claims(self, path):
         """data/sessions.json's sessions, re-read when it changes (a broken or half-written file keeps the last)."""

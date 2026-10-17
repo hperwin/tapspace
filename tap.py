@@ -51,13 +51,14 @@
                                             images the reviewer attaches print as absolute file paths)
   tap.py card --as NAME "one plain line" [--face REF]
               [--progress 3/5[:label] | --timeline "a|b|c" [--at N] | --graph "3,5,8[:label]" | --word W]
-              [--item REF[=note] ...] [--image FILE[=label] ...] [--proof KEY[:1,3] ...]
+              [--item REF[|name][=note] ...] [--image FILE[=label] ...] [--proof KEY[:1,3] ...]
               [--ask "question" [--check "label" ...] [--text]] [--accept KEY]
                                          -> one update card in NAME's thread: a face, one visual, how far each item
                                             got, images for the reviewer to approve (your --image files, then each
                                             --proof), a question; prints the stored row. REF = a master's NAME or
-                                            title, a tap (owner/repo#n or repo#n) or project:NAME; --proof KEY alone
-                                            sends all its proof images; --accept KEY gives the card Accept and Not
+                                            title, a tap (owner/repo#n or repo#n) or project:NAME; name = a short name
+                                            the card shows in place of its title (up to 40 characters); --proof KEY
+                                            alone sends all its proof images; --accept KEY gives the card Accept and Not
                                             quite for that tap (and its proof images when the card has no --image
                                             or --proof). His answers come back through listen.
                                             exit 0 = stored, 1 = refused (the reason is printed)
@@ -315,8 +316,12 @@ def _card_parse(a):
     elif a.word is not None:
         card["visual"] = {"kind": "word", "text": a.word}
     if a.item:
-        card["items"] = [{"ref": r.strip(), **({"note": n.strip()} if n.strip() else {})}
-                         for r, _, n in (s.partition("=") for s in a.item)]
+        card["items"] = []
+        for s in a.item:
+            left, _, note = s.partition("=")        # REF[|name][=note]: the note after the first =, the name after |
+            ref, _, short = left.partition("|")
+            card["items"].append({"ref": ref.strip(), **({"name": short.strip()} if short.strip() else {}),
+                                  **({"note": note.strip()} if note.strip() else {})})
     if (a.check or a.text) and a.ask is None:
         sys.exit("--check and --text go with --ask")
     if a.ask is not None:
@@ -509,7 +514,9 @@ def main():
     vis.add_argument("--graph", help='a small line graph: numbers, e.g. "3,5,8" or "3,5,8:visits"')
     vis.add_argument("--word", help="one big word, e.g. Landed")
     cd.add_argument("--at", help="where the timeline is: a step number (1 = first), a step's name, or done")
-    cd.add_argument("--item", action="append", default=[], help="a master or tap the card moves: REF or REF=note (repeatable)")
+    cd.add_argument("--item", action="append", default=[],
+                    help="a master or tap the card moves: REF[|name][=note], name a short name the card shows "
+                         "for it in place of its title (repeatable)")
     cd.add_argument("--image", action="append", default=[], help="an image to approve: FILE or FILE=label (repeatable)")
     cd.add_argument("--proof", action="append", default=[],
                     help="a tap's proof images to approve: KEY for all, KEY:1,3 for some (repeatable)")

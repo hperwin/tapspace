@@ -121,6 +121,18 @@ class TapCards(unittest.TestCase):
         self.assertEqual(len(r.stdout.splitlines()), 1)
         self.assertEqual(json.loads(r.stdout)["message"]["id"], 9)
 
+    def test_an_item_may_carry_a_short_name(self):
+        r, card = self.card("Line", "--item", "hperwin/x#7|Beta look=Ready for your look", "--item", "Glint app| Cards ",
+                            "--item", "x#8=Fixed | nothing to do", "--item", "Muddi", "--item", "x#9| =a=b")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(card["items"], [{"ref": "hperwin/x#7", "name": "Beta look", "note": "Ready for your look"},
+                                         {"ref": "Glint app", "name": "Cards"},
+                                         {"ref": "x#8", "note": "Fixed | nothing to do"},   # a | after the = is the note's
+                                         {"ref": "Muddi"},
+                                         {"ref": "x#9", "note": "a=b"}])
+        self.assertEqual(self.calls(), [("POST", "/api/chat/reply")])
+        self.assertIn("REF[|name][=note]", self.tap("card", "--help").stdout)
+
     def test_a_card_without_taps_never_reads_them(self):
         r, card = self.card("Spec done", "--face", "Muddi", "--word", "Done")
         self.assertEqual(r.returncode, 0, r.stderr)
