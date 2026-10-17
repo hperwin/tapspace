@@ -65,7 +65,8 @@ struct ChatCardView: View, Equatable {
         .frame(width: width, alignment: .leading)
         // The progress column's card look: white, corner 18, the light lift.
         .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(Color.white).modifier(ChatCardLift()))
-        .modifier(CardShell(box: shell, on: hold > 0))
+        // A held card's own arrival (BubbleEntrance received); at 1, as every other card's is, it moves nothing.
+        .modifier(CardIn(box: shell))
         .accessibilityElement(children: .contain)
         .onAppear(perform: begin)
     }
@@ -88,16 +89,6 @@ struct ChatCardView: View, Equatable {
             try? await Task.sleep(for: .seconds(hold))
             beats.play(visual: preset)
         }
-    }
-}
-
-/// A held card's own arrival (BubbleEntrance received, on CardIn); a card its row carries in has none.
-private struct CardShell: ViewModifier {
-    let box: SpringBox
-    let on: Bool
-
-    func body(content: Content) -> some View {
-        if on { content.modifier(CardIn(box: box)) } else { content }
     }
 }
 
