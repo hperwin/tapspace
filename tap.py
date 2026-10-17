@@ -496,7 +496,7 @@ def main():
     cd.add_argument("--as", dest="name", default=me, required=not me)
     cd.add_argument("line", help="what the reviewer reads first: one plain line (also the push and what older apps show)")
     cd.add_argument("--face", help="whose face leads the card: a master's NAME or title, a tap (owner/repo#n or "
-                                   "repo#n) or project:NAME; default the one --item, else you")
+                                   "repo#n) or project:NAME; default the one --item, else none")
     vis = cd.add_mutually_exclusive_group()
     vis.add_argument("--progress", help='how far: DONE/TOTAL, e.g. "3/5" or "3/5:3 of 5 landed"')
     vis.add_argument("--timeline", help='steps in order, e.g. "Audit|Spec|Build" (where it is: --at)')
