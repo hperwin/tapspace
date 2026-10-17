@@ -67,8 +67,6 @@ struct CardImageCell: View {
                             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                     }
                 }
-                // Two decision pictures share one height, so their buttons sit level right under them.
-                .frame(width: width, height: hero && !single ? 300 : nil, alignment: hero ? .bottom : .leading)
             if !hero {
                 Text(verbatim: label.isEmpty ? "Image \(index + 1)" : label)
                     .font(.system(size: 12, weight: .semibold))
@@ -86,14 +84,11 @@ struct CardImageCell: View {
         .onChange(of: verdict?.approve == true) { _, on in drawCheck(on) }
     }
 
-    @ViewBuilder private var picture: some View {
-        if hero {
-            ChatImageCell(path: path, single: CGSize(width: width, height: single ? 420 : 300))
-        } else if single {
-            ChatImageCell(path: path, single: CGSize(width: width, height: 280))
-        } else {
-            ChatImageCell(path: path, square: width)
-        }
+    /// Never cropped (CONTRACT 18): the whole picture at its own aspect inside its capped box, which it holds before
+    /// it decodes. A decision card's 420 alone and 300 side by side, a normal card's 280; pictures side by side share
+    /// one height, so their buttons sit level right under them.
+    private var picture: some View {
+        ChatImageCell(path: path, box: CGSize(width: width, height: hero ? (single ? 420 : 300) : 280))
     }
 
     private func said(_ v: CardState.Verdict?) -> CardSaid? {
