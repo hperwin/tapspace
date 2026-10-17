@@ -32,6 +32,7 @@ CLAUDE_DIR = links.CLAUDE_DIR      # TAPSPACE_CLAUDE_DIR, else ~/.claude
 TAIL_FIRST = 1_000_000             # first sight of a transcript: its last 1 MB (a turn boundary sits far closer)
 TAIL_MAX = 8_000_000               # never read more than this from it in one pass
 LISTEN_FRESH = 30                  # the rail's Here window: a listen poll this recent means the lead hears the reviewer
+ORIGIN_HOLD = 15                   # what woke a turn shows until its first call, at most this long (then Thinking)
 PROC_EVERY = 10                    # seconds between checks that a claim's pid is still the process that claimed it
 MISS_EVERY = 5                     # seconds before a session with no transcript yet is looked for again
 KINDS_MAX = 200                    # background tasks remembered per transcript (what a notification is about)
@@ -358,17 +359,19 @@ def step(st, o, ctx=None):
     return st
 
 
-def snapshot(st, listening, waits):
+def snapshot(st, listening, waits, now):
     """(state, word, detail, since) for a live session from its transcript state (pure). listening: the lead polled
     listen within LISTEN_FRESH; waits() is true while its newest card waits on the reviewer. since is when the
-    transcript says this started, or None."""
+    transcript says this started (or when ORIGIN_HOLD ran out), or None."""
     if st["open"]:
         if st["pending"]:
             word, detail, ts = list(st["pending"].values())[-1]     # the newest call still running
             return "working", word, detail, ts
-        if st["turn_at"] is not None and st["call_at"] is None:      # what woke it holds until its first call
+        held = st["turn_at"] + ORIGIN_HOLD if st["turn_at"] is not None else None
+        if held is not None and st["call_at"] is None and now < held:   # what woke it, until its first call
             return "working", st["origin"], "", st["turn_at"]
-        return "working", "Thinking", "", max(x for x in (st["free_at"], st["call_at"], 0) if x is not None) or None
+        woke = min((x for x in (st["call_at"], held) if x is not None), default=None)   # when what woke it gave way
+        return "working", "Thinking", "", max(x for x in (st["free_at"], woke, 0) if x is not None) or None
     if listening:
         return "waiting", ("Waiting on you" if waits() else "Listening"), "", st["ended"]
     return "idle", "Idle", "", st["ended"]
@@ -486,7 +489,7 @@ class Reader:
         if st is None:
             return None
         listening = self.clock() - (info.get("listen") or 0) < LISTEN_FRESH
-        return snapshot(st, listening, waits)
+        return snapshot(st, listening, waits, self.clock())
 
     def _claims(self, path):
         """data/sessions.json's sessions, re-read when it changes (a broken or half-written file keeps the last)."""

@@ -178,8 +178,8 @@ class Turns(Rig):
         self.write(SA, request(T0 - 0.6), prompt(T0 - 0.5, "human"))            # the request can come first
         held = {"state": "working", "word": "Reading your message", "detail": "", "since": round(T0 - 0.5, 1)}
         self.assertEqual(self.act(), held)
-        self.now = T0 + 20                                                       # long past a second, no call yet
-        self.write(SA, request(T0 + 19))
+        self.now = T0 + 14                                                       # long past a second, no call yet
+        self.write(SA, request(T0 + 13))
         self.assertEqual(self.act(), held)
         self.write(SA, bash(T0 + 21, "c1", "ls ~/x"))
         self.now = T0 + 22
@@ -201,6 +201,26 @@ class Turns(Rig):
         self.write(SA, ended(T0 + 49), prompt(T0 + 50, "scheduled"), ended(T0 + 51))
         self.now, self.info["listen"] = T0 + 52, T0 + 50
         self.assertEqual(self.word(), ("waiting", "Listening"))
+
+    def test_a_stalled_turn_reads_thinking_once_the_hold_runs_out(self):
+        self.assertEqual(activity.ORIGIN_HOLD, 15)                              # the ruling's number (CONTRACT 18)
+        self.live()
+        self.write(SA, prompt(T0, "scheduled"), request(T0 + 0.1))
+        self.now = T0 + 14.9
+        self.assertEqual(self.word(), ("working", "Checking in"))
+        self.now = T0 + 15
+        thinking = {"state": "working", "word": "Thinking", "detail": "", "since": round(T0 + 15, 1)}
+        self.assertEqual(self.act(), thinking)
+        self.write(SA, request(T0 + 120), request(T0 + 2200))                    # an hour of requests and no call
+        self.now = T0 + 3600
+        self.assertEqual(self.act(), thinking)
+        self.write(SA, bash(T0 + 3601, "b1", "python3 $TAP listen --as Muddi", bg=True))    # never the word
+        self.assertEqual(self.act(), thinking)
+        self.write(SA, bash(T0 + 3602, "c1", "$MUDDI/muddi.sh fleet"))
+        self.assertEqual(self.word(), ("working", "Checking the masters"))
+        self.write(SA, result(T0 + 3603, "c1"))
+        self.now = T0 + 3604
+        self.assertEqual(self.act(), dict(thinking, since=round(T0 + 3603, 1)))
 
     def test_what_woke_it(self):
         self.live()
