@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Web update cards (contract sections 1 to 4, 9 and 10): the page's scripts still parse together, answers fold into
-the card they answer, the outbox gives way to the server's echo, the visuals' pure parts, the chat-media allow-list, and
-card markup that never meets a global class name or a review or tap route it must not call.
+"""Web update cards (contract sections 1 to 4, 9, 10 and 13): the page's scripts still parse together, answers fold into
+the card they answer, the outbox gives way to the server's echo, the visuals' pure parts, the chat-media allow-list, one
+subject heading each card with rows in words only, and card markup that never meets a global class name or a review or
+tap route it must not call.
 
 Reads space/index.html only; node runs the page's pure blocks (skipped where node is missing). Stdlib only.
     python3 -m unittest discover -s tests -p 'test_web_cards.py' -v
@@ -181,6 +182,29 @@ class PartTests(unittest.TestCase):
                       cardHero({images: [], items: []})]""")
         self.assertEqual(hero, [True, True, False, False, False])
 
+    def test_one_subject_heads_a_card(self):
+        # contract A2: the card's face, else its one item; several items stack (at most 3, then +N); none, no face
+        tap, mst, prj = {"ref": "o/r#1"}, {"ref": "agent:Cards"}, {"ref": "project:tapspace"}
+        heads = js(f"""[cardHead({{items: [{json.dumps(tap)}]}}),
+                       cardHead({{face: 'agent:Cards', items: [{json.dumps(tap)}, {json.dumps(mst)}, {json.dumps(prj)}]}}),
+                       cardHead({{face: 'agent:Muddi', items: [{json.dumps(tap)}, {json.dumps(mst)}]}}),
+                       cardHead({{face: null, items: [{json.dumps(mst)}, {json.dumps(prj)}, {json.dumps(tap)}]}}),
+                       cardHead({{items: [1, 2, 3, 4, 5].map(i => ({{ref: 'o/r#' + i}}))}}),
+                       cardHead({{items: []}}), cardHead({{}}), cardHead({{face: 'agent:Muddi'}})]""")
+        self.assertEqual(heads[0], {"face": "o/r#1", "k": 0, "stack": [], "more": 0, "rows": []})          # never repeated as a row
+        self.assertEqual(heads[1], {"face": "agent:Cards", "k": 1, "stack": [], "more": 0, "rows": [0, 2]})
+        self.assertEqual(heads[2], {"face": "agent:Muddi", "k": -1, "stack": [], "more": 0, "rows": [0, 1]})  # about the sender: asked for
+        self.assertEqual(heads[3], {"face": "", "k": -1, "stack": [0, 1, 2], "more": 0, "rows": [0, 1, 2]})
+        self.assertEqual(heads[4], {"face": "", "k": -1, "stack": [0, 1, 2], "more": 2, "rows": [0, 1, 2, 3, 4]})
+        for none in heads[5:7]:
+            self.assertEqual(none, {"face": "", "k": -1, "stack": [], "more": 0, "rows": []})
+        self.assertEqual(heads[7]["face"], "agent:Muddi")
+
+    def test_a_stack_skips_repeats_and_items_without_a_ref(self):
+        h = js("cardHead({items: [{ref: 'o/r#1'}, {ref: 'o/r#1'}, 'x', {}, {ref: 'o/r#2'}]})")
+        self.assertEqual((h["stack"], h["more"], h["rows"]), ([0, 4], 0, [0, 1, 2, 3, 4]))
+        self.assertEqual(js("cardHead({items: ['x']})")["face"], "")                     # a broken one item heads nothing
+
     def test_send_needs_a_tick_or_words(self):
         self.assertEqual(js("[askReady(0, ''), askReady(0, '  '), askReady(1, ''), askReady(0, 'yes')]"), [False, False, True, True])
 
@@ -216,6 +240,18 @@ class MarkupTests(unittest.TestCase):
         # contract A1: a decision card's Accept is the guarded human route, always with the card's id
         self.assertEqual(re.findall(r"postJ\('/api/taps/accept', \{[^}]*\}\)", CARDS), ["postJ('/api/taps/accept', {key: tap, card: m.rid})"])
         self.assertIn("postJ('/api/chat', {agent: name, nonce: o.nonce, answer})", CARDS)
+
+    def test_rows_are_words_and_the_head_is_never_the_sender(self):
+        # contract A2: a row draws no face, ring or tile; the head face comes from cardHead, never the thread's own agent
+        row = re.search(r"^function itemRow\(.*?^}", CARDS, re.S | re.M).group(0)
+        for face in ("itemFace(", "tapAvatar(", "masterFace(", "face(", "uiface", "chip"):
+            self.assertNotIn(face, row)
+        self.assertNotIn("uiface", PAGE)
+        paint = re.search(r"^function paintCard\(.*?^}", CARDS, re.S | re.M).group(0)
+        self.assertIn("head = cardHead(c)", paint)
+        self.assertNotIn("current", paint)
+        self.assertIn("rows.map(i => itemRow(items[i], c, i))", CARDS)
+        self.assertIn('<span class="umore">+${head.more}</span>', CARDS)
 
     def test_the_recorders_hooks_are_there(self):
         # tools/rec-web.py --answer finds cards by row id, images by index, and the ask's boxes by role and label
