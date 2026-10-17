@@ -168,7 +168,7 @@ class PartTests(unittest.TestCase):
         self.assertEqual((done["at"], done["count"], done["text"]), (2, "Done", "2 of 2"))
 
     def test_step_count(self):
-        self.assertEqual(js("[stepCount(1, 4), stepCount(4, 4), stepCount(0, 0)]"), ["2 of 4", "Done", ""])
+        self.assertEqual(js("[stepCount(1, 4), stepCount(4, 4), stepCount(0, 0)]"), ["2 of 4", "4 of 4", ""])
 
     def test_spark_path_is_p7s_geometry(self):
         self.assertEqual(js("sparkPath([1, 2, 3], 104)"), "M2 34L52 18L102 2")
