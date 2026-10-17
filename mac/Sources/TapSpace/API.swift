@@ -945,8 +945,15 @@ enum API {
 
     /// POST /api/taps/accept {key}: Hayden's sign-off on a landed tap (the server closes it as completed).
     /// Speaks for Hayden: refused under --snapshot/--demo. Only his click calls it, never an agent.
-    static func acceptTap(_ key: String) async throws {
-        try await post("/api/taps/accept", ["key": key])
+    /// With `card` (Accept pressed on an update card's action): the server first checks that card's Accept is
+    /// this tap's (a mismatch accepts nothing), then writes the card's answer row ("Accepted: <title>") in that
+    /// card's thread and returns it.
+    @discardableResult
+    static func acceptTap(_ key: String, card: Int? = nil) async throws -> ChatMessage? {
+        var body: [String: Any] = ["key": key]
+        if let card { body["card"] = card }
+        let data = try await postData("/api/taps/accept", body)
+        return (try? JSONDecoder().decode(ChatPostResponse.self, from: data))?.message
     }
 }
 
