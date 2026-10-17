@@ -148,7 +148,7 @@ enum HarnessCard {
                "closed: every other master and every tap folds")
         expect(MuddiOrder.folded(agents, taps: taps, open: true).isEmpty, "open: nothing folds")
         expect(MuddiOrder.folded(Array(agents.dropFirst()), taps: taps, open: false).isEmpty, "no lead: nothing folds")
-        expect(ChatFleetStrip.fit(214, count: 3) == 3 && ChatFleetStrip.fit(214, count: 12) == 4
+        expect(ChatFleetStrip.fit(172, count: 3) == 3 && ChatFleetStrip.fit(172, count: 12) == 4
                && ChatFleetStrip.fit(600, count: 12) == ChatFleetStrip.beads && ChatFleetStrip.fit(0, count: 2) == 2,
                "the strip shows as many beads as fit beside the disclosure and +N, at most 8")
         expect(LeadActivityStrip.face("working") == "thinking" && LeadActivityStrip.face("waiting") == "here"

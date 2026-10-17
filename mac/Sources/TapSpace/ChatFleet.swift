@@ -17,43 +17,49 @@ struct ChatFleetStrip: View {
     let unread: Bool
     let store: Store
     let toggle: () -> Void
-    @State private var width: CGFloat = 0
+    /// The beads' room: what the rail gives them beside the disclosure (never what they ask for).
+    @State private var room: CGFloat = 0
 
     /// At most this many faces; fewer when they do not fit beside the disclosure.
     static let beads = 8
     static let bead: CGFloat = 24, gap: CGFloat = 6, disclosure: CGFloat = 36, more: CGFloat = 24
 
-    /// How many beads fit in `width` with the disclosure (and "+N" when some are left out), at most `beads`.
-    static func fit(_ width: CGFloat, count: Int) -> Int {
-        guard width > 0 else { return min(count, beads) }
-        let room = width - disclosure - gap
+    /// How many of `count` beads fit in `room` (with "+N" when some are left out), at most `beads`. 0 room (not
+    /// measured yet): as many as `beads` allows.
+    static func fit(_ room: CGFloat, count: Int) -> Int {
+        guard room > 0 else { return min(count, beads) }
         let n = { (w: CGFloat) in max(0, Int((w + gap) / (bead + gap))) }
         if count <= min(beads, n(room)) { return count }
         return max(1, min(beads, n(room - more - gap)))
     }
 
     var body: some View {
-        let n = min(fleet.count, Self.fit(width, count: fleet.count))
+        let n = min(fleet.count, Self.fit(room, count: fleet.count))
         HStack(spacing: Self.gap) {
-            if fleet.isEmpty {
-                Text("Nothing running")
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(Color.faint)
-                    .transition(.opacity)
+            HStack(spacing: Self.gap) {
+                if fleet.isEmpty {
+                    Text("Nothing running")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(Color.faint)
+                        .transition(.opacity)
+                }
+                ForEach(fleet.prefix(n)) { e in
+                    ChatFleetBead(entry: e) { store.open(e.key) }
+                        .transition(.scale(scale: 0.8).combined(with: .opacity))
+                }
+                if fleet.count > n {
+                    Text("+\(fleet.count - n)")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Color.faint)
+                        .monospacedDigit()
+                        .contentTransition(.numericText(value: Double(fleet.count - n)))
+                        .frame(minWidth: Self.more, alignment: .leading)
+                }
             }
-            ForEach(fleet.prefix(n)) { e in
-                ChatFleetBead(entry: e) { store.open(e.key) }
-                    .transition(.scale(scale: 0.8).combined(with: .opacity))
-            }
-            if fleet.count > n {
-                Text("+\(fleet.count - n)")
-                    .font(.system(size: 11))
-                    .foregroundStyle(Color.faint)
-                    .monospacedDigit()
-                    .contentTransition(.numericText(value: Double(fleet.count - n)))
-                    .frame(minWidth: Self.more, alignment: .leading)
-            }
-            Spacer(minLength: Self.gap)
+            // As wide as the rail allows, whatever the beads ask for: measured, so the count fits it.
+            .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+            .clipped()
+            .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { room = $0 }
             Button(action: toggle) {
                 HStack(spacing: 6) {
                     UnreadDot(on: unread && !open)
@@ -69,7 +75,6 @@ struct ChatFleetStrip: View {
             .help(open ? "Fold everything under \(lead)" : "Show every agent and tap")
             .accessibilityLabel(open ? "Fold everything under \(lead)" : "Show every agent and tap")
         }
-        .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { width = $0 }
         // The text column of the lead's row: row padding 12 + orb 38 + spacing 12.
         .padding(.leading, 50)
         .padding(.horizontal, 12)
