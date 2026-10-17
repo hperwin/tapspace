@@ -980,6 +980,19 @@ class ListenTests(Taps):
         self.assertEqual(ids(join(a)), [two])
         self.assertEqual(S._agents()[a]["heard"], two)
 
+    def test_heard_never_moves_back(self):
+        a = name("cross")
+        join(a)
+        one = say(a, "one")
+        self.assertEqual(ids(join(a)), [one])
+        sent(a, {"line": "Fleet moved"})                       # its card, posted before its next listen
+        S._agent_touch(a, heard=one - 1)                       # a poll that read the rows before `one` writes last
+        self.assertEqual(S._agents()[a]["heard"], one)
+        self.assertEqual(ids(join(a)), [])                     # so `one` is never handed over twice
+        two = say(a, "two")
+        self.assertEqual(ids(join(a)), [two])                  # and it still moves forward
+        self.assertEqual(S._agents()[a]["heard"], two)
+
     def test_listen_hands_an_answer_over_with_its_card_line_label_and_file(self):
         a = name("handover")
         join(a)

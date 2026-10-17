@@ -348,6 +348,8 @@ def _agent_touch(name, **extra):
     with _lock:
         a = _agents()
         row = a.get(name) or {"name": name, "first": time.time()}
+        if "heard" in extra:            # listen's cursor only moves forward: two polls for one NAME can cross
+            extra["heard"] = max(extra["heard"], row.get("heard") or 0)
         row.update(extra)
         row["seen"] = time.time()
         a[name] = row
