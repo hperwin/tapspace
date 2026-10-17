@@ -149,7 +149,9 @@ struct ChatProgressPanel: View {
         TimelineView(.periodic(from: .now, by: Self.tick)) { ctx in
             let list = column(now: ctx.date.timeIntervalSince1970)
             if Self.unscrolled {
-                list.frame(maxHeight: .infinity, alignment: .top).clipped()
+                // minHeight 0: a column taller than the window is cut at its edge instead of growing the window's
+                // whole layout past it (a frame with no minimum takes its content's height).
+                list.frame(minHeight: 0, maxHeight: .infinity, alignment: .top).clipped()
             } else {
                 ScrollView(.vertical) { list }
                     .scrollIndicators(.never)
