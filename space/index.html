@@ -1307,7 +1307,8 @@ function faceArt(look, state){
   return `<svg class="fa" viewBox="0 0 88 88" aria-hidden="true"><path d="${FACE_EYES[x]}"/><path class="ln" d="${FACE_MOUTH[x]}"/>` +
     (ln ? `<path class="ln" d="${ln}"/>` : '') + (dot ? `<path d="${dot}"/>` : '') + '</svg>';
 }
-const FACE_STATES = new Set(['here', 'thinking', 'starting', 'switching', 'away']);   // a state lands in a class name: only these
+const FACE_STATES = new Set(['here', 'thinking', 'starting', 'switching', 'away', 'idle']);   // a state lands in a class name: only these
+// (idle: the lead's head while it idles, asleep on its own tone; away is the grey disc)
 const orbCls = a => `orb t${faceLook(a.look)[0]} ${FACE_STATES.has(a.state) ? a.state : 'away'}`;
 function masterFace(a, st = ''){ return `<span class="${orbCls(a)}"${st}>${faceArt(a.look, a.state)}</span>`; }
 // a repo's or project's letter, the server's _initial rule: the first letter or digit after the last '/', upper case
@@ -1439,8 +1440,9 @@ const ringPct = f => f && f.total > 0 ? Math.round(100 * clampInt(f.done, 0, f.t
 const quietKey = (key, focus, onScreen) => !!key && (key === focus || key === onScreen);
 const newsCount = (threads, focus, onScreen) =>
   new Set(threads.filter(t => !quietKey(t.key, focus, onScreen) && (t.unread || t.holding)).map(t => t.key)).size;
-// Contract section 7: the lead's face by its activity (working focused, waiting happy, idle and gone asleep).
-const ACT_STATE = {working: 'thinking', switching: 'switching', waiting: 'here', idle: 'away', gone: 'away'};
+// Contract sections 7 and 18: the lead's face by its activity (working focused, waiting happy, idle asleep on its own
+// tone, gone asleep and greyed).
+const ACT_STATE = {working: 'thinking', switching: 'switching', waiting: 'here', idle: 'idle', gone: 'away'};
 const actKind = s => typeof s === 'string' && Object.hasOwn(ACT_STATE, s) ? s : '';   // a state this page does not know: none
 // ---- end pure: rail ----
 
