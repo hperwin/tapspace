@@ -216,6 +216,8 @@ struct CardItem: Decodable, Equatable {
     let ref: String          // a face key
     var kind = ""            // tap | master | lead | project
     var title = ""
+    /// The sender's short name for it (CONTRACT section 15), drawn before the title; nil when none or blank.
+    var name: String? = nil
     var note = ""
     var phase: String? = nil // taps: the phase when the card was sent
     var word = ""
@@ -591,6 +593,9 @@ extension CardItem {
         ref = try c.decode(String.self, forKey: Keys("ref"))
         kind = c.or(Keys("kind"), "")
         title = c.or(Keys("title"), "")
+        name = (c.opt(Keys("name")) as String?).flatMap {
+            $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0
+        }
         note = c.or(Keys("note"), "")
         phase = (c.opt(Keys("phase")) as String?).flatMap { $0.isEmpty ? nil : $0 }
         word = c.or(Keys("word"), "")
