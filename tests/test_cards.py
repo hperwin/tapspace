@@ -943,6 +943,34 @@ class AcceptFromCardTests(Taps):
         self.assertEqual(self.writes(), [["issue", "close"]])
         self.assertEqual(thread(a), rows)
 
+    def test_two_presses_at_once_write_one_row(self):
+        a = name("twice")
+        join(a)
+        c = self.accept_card(a)
+        reads = S._chat_rows
+        self.addCleanup(setattr, S, "_chat_rows", reads)
+
+        def slow(*args):                       # widen the gap between reading the thread and writing the row
+            got = reads(*args)
+            time.sleep(0.05)
+            return got
+        S._chat_rows = slow
+        got, gate = [], threading.Barrier(4)
+
+        def press():
+            gate.wait()
+            got.append(S._accepted(c)["id"])
+        presses = [threading.Thread(target=press) for _ in range(4)]
+        for t in presses:
+            t.start()
+        for t in presses:
+            t.join(10)
+        S._chat_rows = reads
+        rows = [x for x in thread(a) if (x.get("answer") or {}).get("action") == "accept"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(got, [rows[0]["id"]] * 4)
+        self.assertEqual([e["id"] for e in self.new_inbox() if e["kind"] == "tapspace-chat"], [rows[0]["id"]])
+
 
 class ListenTests(Taps):
     """GET /api/chat/listen: the heard cursor (R6) and the answer fields it adds."""

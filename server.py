@@ -454,26 +454,32 @@ CHAT_SEQ = DATA / "chat-seq"           # last id ever used, so ids stay unique a
 
 def _chat_add(agent, role, body, images=None, nonce="", card=None, answer=None):
     with _lock:
-        rows = _chat_rows()
-        try:
-            seq = int(CHAT_SEQ.read_text())
-        except Exception:
-            seq = 0
-        nid = max(seq, rows[-1]["id"] if rows else 0) + 1
-        CHAT_SEQ.write_text(str(nid))
-        row = {"id": nid, "agent": agent,
-               "role": role, "body": body, "ts": time.time()}
-        if images:
-            row["images"] = images
-        if nonce:
-            row["nonce"] = nonce
-        if card:
-            row["card"] = card
-        if answer:
-            row["answer"] = answer
-        with CHAT.open("a") as fh:
-            fh.write(json.dumps(row) + "\n")
+        row = _chat_append(agent, role, body, images, nonce, card, answer)
     _bump("chat", "agents")
+    return row
+
+
+def _chat_append(agent, role, body, images=None, nonce="", card=None, answer=None):
+    """_chat_add's write, for a caller that holds _lock (it checks the thread in the same hold); it bumps after."""
+    rows = _chat_rows()
+    try:
+        seq = int(CHAT_SEQ.read_text())
+    except Exception:
+        seq = 0
+    nid = max(seq, rows[-1]["id"] if rows else 0) + 1
+    CHAT_SEQ.write_text(str(nid))
+    row = {"id": nid, "agent": agent,
+           "role": role, "body": body, "ts": time.time()}
+    if images:
+        row["images"] = images
+    if nonce:
+        row["nonce"] = nonce
+    if card:
+        row["card"] = card
+    if answer:
+        row["answer"] = answer
+    with CHAT.open("a") as fh:
+        fh.write(json.dumps(row) + "\n")
     return row
 
 
@@ -1410,13 +1416,15 @@ def _accept_card(cid, key):
 def _accepted(row):
     """After an Accept from a card went through: the reviewer's answer row in that card's thread ({card, action:
     accept}, "Accepted: <tap title>"), so the master hears it on listen like any answer. One per card: pressing
-    it again gets the same row."""
+    it again gets the same row (checked and written in one _lock hold, so two presses at once write one)."""
     a = {"card": row["id"], "action": "accept"}
-    dup = next((r for r in _chat_rows(row["agent"]) if r.get("role") == "you" and r.get("answer") == a), None)
+    body = _answer_line(a, row["card"])
+    with _lock:
+        dup = next((r for r in _chat_rows(row["agent"]) if r.get("role") == "you" and r.get("answer") == a), None)
+        out = dup or _chat_append(row["agent"], "you", body, answer=a)
     if dup:
         return dup
-    body = _answer_line(a, row["card"])
-    out = _chat_add(row["agent"], "you", body, answer=a)
+    _bump("chat", "agents")
     _inbox({"kind": "tapspace-chat", "agent": row["agent"], "id": out["id"], "message": body, "images": [], "answer": a})
     return out
 
