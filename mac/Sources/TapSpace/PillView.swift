@@ -363,7 +363,7 @@ extension Store {
             out.append(PillItem(id: "card:" + t.id, kind: .card, who: t.agent, text: t.title, status: "", number: 0,
                                 media: t.videoDeleted ? "" : t.mediaPath(t.version), isVideo: t.isVideo))
         }
-        for t in needsYouTaps {
+        for t in newsTaps {
             out.append(PillItem(id: t.key, kind: .tap(t.key), who: t.repoName, text: t.name, status: t.status, number: t.number,
                                 replying: t.replying == true, initial: t.initial))
         }

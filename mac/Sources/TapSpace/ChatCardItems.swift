@@ -23,8 +23,10 @@ struct CardItemRows: View {
         }
     }
 
-    /// The card's own words for the item first (its snapshot), then the store's live title.
+    /// The sender's short name (CONTRACT section 15), else the card's own words for the item (its snapshot), then the
+    /// store's live title.
     static func title(_ item: CardItem, info: CardFaceInfo?, store: Store) -> String {
+        if let name = item.name { return name }
         for s in [item.title, info?.title ?? ""] where !CardLayout.plain(s).isEmpty { return CardLayout.plain(s) }
         return CardFace.title(item.ref, info: info, store: store)
     }
@@ -65,7 +67,7 @@ struct CardItemRow: View {
 }
 
 /// A row's right edge: the thin bar where there is progress (a tap's goals, a master's steps), filling from the
-/// previous card's value on `box`, and the plain word ("Landed", "Needs you", "3 of 7 steps").
+/// previous card's value on `box`, and the plain word ("Landed", "Needs you", "3 of 7").
 struct CardItemState: View {
     let item: CardItem
     /// false: the previous card's word (before the change beat).
@@ -122,8 +124,9 @@ struct CardItemShown {
         return clamp01(Double(g[0]) / Double(g[1]))
     }
 
-    /// A master's place in its steps (the progress card's count): "3 of 7 steps", "Done" once every step is.
-    static func steps(_ cur: Int, of n: Int) -> String { cur >= n ? "Done" : "\(cur + 1) of \(n) steps" }
+    /// A master's place in its steps (the progress card's count): "3 of 7", and "7 of 7" at its last step and once
+    /// every step is, never "Done": its steps end before Hayden's merge, the note says what is left (CONTRACT 16).
+    static func steps(_ cur: Int, of n: Int) -> String { "\(min(cur + 1, n)) of \(n)" }
 }
 
 /// A spring that is always at rest: the bar of a row that did not move reads it and never re-renders.

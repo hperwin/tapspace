@@ -109,7 +109,7 @@ struct CardLayout {
     let head: Head
     /// The item the one subject is (its change beat plays on the head's face); never drawn again as a row.
     let subjectItem: Int?
-    /// A decision card (A1): pictures, no visual, at most one item. The pictures are the card, the line its only words.
+    /// A decision card (A1): pictures, no visual, at most one item. The pictures are the card: no item row, no label.
     let hero: Bool
     /// The visual is one this build draws and has something to show.
     let visual: Bool
@@ -175,7 +175,7 @@ struct CardLayout {
 // MARK: - The head
 
 /// The top of a card (CONTRACT section 13): its one subject (the face, its name, the line under it), the items'
-/// faces stacked with the line, or the line alone. On a decision card the line is the only words.
+/// faces stacked with the line, or the line alone.
 struct CardHeader: View {
     let row: CardRow
     let layout: CardLayout
@@ -187,9 +187,11 @@ struct CardHeader: View {
         let c = row.card
         switch layout.head {
         case .one(let key):
-            let name = layout.hero ? "" : CardFace.title(key, info: c.faces[key], item: layout.subjectItem.map { c.items[$0] },
-                                                          store: store)
-            HStack(alignment: layout.hero || name.isEmpty ? .center : .top, spacing: 10) {
+            // The sender's short name for the subject (CONTRACT section 15), else today's title; a decision card keeps
+            // it too (section 16).
+            let item = layout.subjectItem.map { c.items[$0] }
+            let name = item?.name ?? CardFace.title(key, info: c.faces[key], item: item, store: store)
+            HStack(alignment: name.isEmpty ? .center : .top, spacing: 10) {
                 subject(key, c).modifier(CardPop(box: beats.face))
                 VStack(alignment: .leading, spacing: 2) {
                     if !name.isEmpty {
