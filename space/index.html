@@ -305,6 +305,37 @@
   /* a project's face: its letter on a squircle (Glint's AvatarArt .squircle, radius 32%) */
   .projav{width:var(--s,38px);height:var(--s,38px);border-radius:32%;flex:none;display:flex;align-items:center;
     justify-content:center;background:rgb(var(--hl));color:#fff;font-size:calc(var(--s,38px)*.45);font-weight:800;line-height:1}
+  /* the lead first and never folded (contract 5, 10): with a fleet served, a strip of what runs under it sits right under
+     its row, and one disclosure folds every other master and tap under it */
+  #leadpin:empty{display:none}
+  #rail.haslead #agentshead{display:none}
+  #rail.haslead #agentlist .agrp,#rail.haslead #tapshead,#rail.haslead #taplist{margin-left:20px}
+  #rail.folded #agentlist,#rail.folded #tapshead,#rail.folded #taplist{display:none}
+  .fleet{display:flex;align-items:center;gap:4px;min-width:0;padding:0 12px 8px}
+  /* contract 10: a working bead runs its face's own loop (a thinking orb, a flying ring's spin); every other bead holds still */
+  .bead:not(.working) .orb,.bead:not(.working) .orb::after,.bead:not(.working) .tapav .arc{animation:none}
+  .bead{appearance:none;border:0;padding:0;background:none;cursor:pointer;position:relative;flex:none;width:24px;height:24px;
+    border-radius:50%;transition:transform .2s ease,box-shadow .25s ease}
+  .bead:active{transform:scale(.9)}
+  .bead.on{box-shadow:0 0 0 2px rgba(var(--hl),.35)}
+  .bead .ring{position:absolute;inset:0;width:24px;height:24px;transform:rotate(-90deg)}
+  .bead .ring .trk{fill:none;stroke:rgba(0,0,0,.06);stroke-width:2}
+  .bead .ring .arc{fill:none;stroke:var(--ink);stroke-width:2;stroke-linecap:round}
+  .bead .orb{position:absolute;left:3px;top:3px}
+  .bead.enter{animation:thumbin .6s cubic-bezier(.3,1.4,.5,1) both}
+  .bead.out{animation:thumbout .3s ease forwards;pointer-events:none}
+  .beadmore{appearance:none;border:0;cursor:pointer;flex:none;padding:6px 7px;border-radius:999px;background:rgba(0,0,0,.045);
+    color:var(--dim);font:600 10.5px/1 -apple-system,BlinkMacSystemFont,sans-serif;font-variant-numeric:tabular-nums}
+  .fleet .quiet{font-size:11px;color:var(--faint);white-space:nowrap}
+  .fold{appearance:none;border:0;background:none;cursor:pointer;flex:none;margin-left:auto;position:relative;width:24px;height:24px;
+    border-radius:8px;display:flex;align-items:center;justify-content:center;color:var(--faint);transition:color .25s ease,background .25s ease}
+  .fold[hidden]{display:none}   /* display:flex above would beat the browser's own [hidden], as .agrp .talk[hidden] knows */
+  .fold:hover{color:var(--dim);background:rgba(0,0,0,.03)}
+  .fold svg{width:12px;height:12px;transition:transform .45s cubic-bezier(.22,.9,.24,1)}
+  .fold[aria-expanded="true"] svg{transform:rotate(180deg)}
+  .fold .unread{position:absolute;top:2px;right:2px;width:7px;height:7px;border-radius:50%;background:rgb(var(--hl));
+    transform:scale(0);transition:transform .35s cubic-bezier(.3,1.6,.5,1)}
+  .fold .unread.show{transform:scale(1)}
   @keyframes spin{to{transform:rotate(360deg)}}
 
   .chip{display:inline-flex;align-items:center;gap:6px;font-size:10.5px;font-weight:600;letter-spacing:.06em;
@@ -334,6 +365,15 @@
   #panehead .sub{font-size:11.5px;color:var(--dim);margin-top:2px}
   #panehead a{color:var(--dim);font-size:11.5px;text-decoration:none;border-bottom:1px solid var(--faint)}
   #panehead.swap{animation:swapin .7s cubic-bezier(.22,.9,.24,1)}
+  /* O3 (contract 7): the lead's live activity under its name; the word swaps in, the dot breathes while it works */
+  #panehead .act{display:inline-flex;align-items:center;gap:6px;max-width:100%;min-width:0;vertical-align:top}
+  #panehead .act i{width:6px;height:6px;border-radius:50%;background:currentColor;flex:none}
+  #panehead .aw{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #panehead .act.working,#panehead .act.switching{color:rgb(var(--hl))}
+  #panehead .act.working i{animation:breathe 1s ease-in-out infinite}   /* the chip's working breath */
+  #panehead .act.idle,#panehead .act.gone{color:var(--faint)}
+  #panehead .act.gone{opacity:.55}
+  #panehead .aw.swap{animation:swapin .7s cubic-bezier(.22,.9,.24,1)}
   #goals{display:flex;gap:8px;padding:10px 20px;overflow-x:auto;border-bottom:1px solid var(--line);scrollbar-width:none}
   #goals:empty{display:none}
   .goal{flex:none;width:230px;display:flex;gap:8px;align-items:flex-start;font-size:11.5px;line-height:1.35;color:var(--dim);
@@ -614,6 +654,8 @@
   @media (max-width:1180px){ #chatview{padding:0 40px;gap:22px;grid-template-columns:300px minmax(0,1fr);max-width:1240px} #progress{display:none} }
   @media (prefers-reduced-motion: reduce){
     .agrp .talk i,.note.enter,.note.out,.orb.ping::after,.stopask,.actcard.enter{animation:none}
+    #rail .thread.enter,.bead,.bead *{animation:none!important}   /* unfolding re-shows rows, which replays their entrance */
+    #panehead .act.working i,#panehead .aw.swap{animation:none}
     #progress,.pgap,.plan .track i,.plan .track.long i.fill,.plan .track.long b{transition:none}
   }
 
@@ -632,6 +674,9 @@
     .msg{max-width:90%}
     .agrp{display:contents}
     .agrp .talk,.notes,.agrp .stopbtn,.agrp .stopask{display:none}
+    #leadpin{display:flex;align-items:center;gap:6px;flex:none}   /* the lead's row, its strip and the fold, inline */
+    .fleet{padding:0;flex:none}
+    .fold{margin-left:0}
   }
 
   @media (max-width:900px){
@@ -663,10 +708,10 @@
       <button class="rbtn new" id="newsession" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg>New session</button>
       <button class="rbtn clear" id="pairphone" type="button" title="Connect Glint on your phone">Pair phone</button>
     </div>
-    <!-- W2 (contract section 5): the lead's pinned group (its row, the fleet strip, the disclosure) goes above this head -->
-    <div class="railhead">Agents</div>
+    <div id="leadpin"></div>
+    <div class="railhead" id="agentshead">Agents</div>
     <div id="agentlist"><div class="railempty">No agents in the space yet.</div></div>
-    <div class="railhead">Your taps</div>
+    <div class="railhead" id="tapshead">Your taps</div>
     <div id="taplist"><div class="railempty">Looking for your taps…</div></div>
   </aside>
   <section id="pane">
@@ -1082,7 +1127,7 @@ function setTab(name, instant){
   placePill(instant);
   store('tapspace.tab', name);
   if (location.hash !== '#' + name) history.replaceState(null, '', '#' + name);
-  if (name === 'chat'){ markRead(current); scrollEnd(true); showCards(false); }   // a card waiting on the Chat tab plays now
+  if (name === 'chat'){ markRead(current); scrollEnd(true); showCards(false); fitStrip(); }   // a card waiting on the Chat tab plays now
 }
 tabs.addEventListener('click', e => { const b = e.target.closest('.tab'); if (b) setTab(b.dataset.tab); });
 
@@ -1173,6 +1218,8 @@ const taplist = $('#taplist');
 let current = store('tapspace.thread') || '';
 let agents = [];                  // rows of GET /api/agents: name (hidden key), title, state, first, seen, last_master, progress, notes, notes_read
 let links = [];                   // agent-to-agent links of GET /api/agents: {a, b, from, last, count, summary, active}
+let focusKey = '';                // GET /api/agents focus: the thread Hayden's newest own message went to (contract section 6)
+let fleet = null;                 // GET /api/agents fleet: what runs under the lead, in the server's order (null: none served)
 const notesHidden = {};           // NAME -> newest note ts this page marked read (hides the rows before the server answers)
 let chat = {agent: '', messages: []};   // the open agent thread
 const agentKey = n => 'agent:' + n;
@@ -1364,6 +1411,7 @@ function cardMoved(it){                   // the item's snapshot moved since the
   const w = it && it.was;
   if (!w || typeof w !== 'object') return false;
   if ('phase' in w && w.phase !== it.phase) return true;
+  if (typeof w.state === 'string' && typeof it.state === 'string' && w.state !== it.state) return true;   // a master's face (contract 12)
   if (Array.isArray(w.goals) && String(w.goals) !== String(it.goals)) return true;
   return 'current' in w && !!it.progress && w.current !== it.progress.current;
 }
@@ -1376,9 +1424,23 @@ function cardTimes(card){                 // ms after arrival
 }
 // ---- end pure: cards ----
 
+// ---- pure: rail (no DOM; tests/test_web_rail.py runs this block in node, after the cards block) ----
+// Pinned with everyone folded under it only when the server serves a lead and its fleet (contract section 5); anything
+// else (an older server, no lead) keeps today's flat list.
+const railPinned = (list, fleet) => (Array.isArray(fleet) && (Array.isArray(list) ? list : []).find(a => a && a.role === 'lead')) || null;
+// How many beads a lane holds: all of them, else as many as leave room for the "+N" (24 px beads, 4 px gaps, "+N" 32 px).
+function beadsFit(count, lane){ return count * 28 - 4 <= lane ? count : Math.max(1, Math.floor((lane - 32) / 28)); }
+const ringPct = f => f && f.total > 0 ? Math.round(100 * clampInt(f.done, 0, f.total) / f.total) : 0;   // a master bead's ring
+// Contract section 6: a thread is quiet when it is the focus or the one on screen; the tab counts distinct keys with news.
+const quietKey = (key, focus, onScreen) => !!key && (key === focus || key === onScreen);
+const newsCount = (threads, focus, onScreen) =>
+  new Set(threads.filter(t => !quietKey(t.key, focus, onScreen) && (t.unread || t.holding)).map(t => t.key)).size;
+// Contract section 7: the lead's face by its activity (working focused, waiting happy, idle and gone asleep).
+const ACT_STATE = {working: 'thinking', switching: 'switching', waiting: 'here', idle: 'away', gone: 'away'};
+const actKind = s => typeof s === 'string' && Object.hasOwn(ACT_STATE, s) ? s : '';   // a state this page does not know: none
+// ---- end pure: rail ----
+
 /* unread = the other side said something after you last looked at that thread */
-/* O2 (contract section 6): the focus rule lands here in wave 2 (quiet(k) = k == focus || on screen); every dot, the
-   Progress cards and the tab badge read isUnread. */
 function lastTheirs(key){
   if (isAgent(key)){ const a = agents.find(x => agentKey(x.name) === key); return a && a.last_master ? a.last_master * 1000 : 0; }
   const t = taps.items.find(x => x.key === key); if (!t) return 0;
@@ -1386,7 +1448,10 @@ function lastTheirs(key){
 }
 function readAt(key){ return +(store('tapspace.read.' + key) || 0); }
 function markRead(key){ store('tapspace.read.' + key, String(Date.now())); }
-function isUnread(key){ return lastTheirs(key) > readAt(key) && !(document.body.classList.contains("chatmode") && key === current && document.hasFocus()); }
+/* O2 (contract section 6): the conversation Hayden is having never badges; only news on other threads does. Every dot,
+   the Progress cards, the fold and the tab count read this. */
+function onScreenKey(){ return document.body.classList.contains("chatmode") && document.hasFocus() ? current : ''; }
+function isUnread(key){ return lastTheirs(key) > readAt(key) && !quietKey(key, focusKey, onScreenKey()); }
 
 /* ---- per agent: the cards you sent change notes on (newest first), and who it is talking with ---- */
 function titleOf(name){ const a = agents.find(x => x.name === name); return a ? (a.title || 'Claude') : ''; }
@@ -1447,17 +1512,22 @@ function railOrder(list){
   return [lead, ...list.filter(under), ...list.filter(a => a !== lead && !under(a))];
 }
 function syncAgents(){
-  const box = $('#agentlist');
-  if (!agents.length){ box.innerHTML = `<div class="railempty">No agents in the space yet. Any agent joins with tap.py listen --as NAME.</div>`; return; }
+  const box = $('#agentlist'), pin = $('#leadpin'), rail = $('#rail');
+  if (!agents.length){ box.innerHTML = `<div class="railempty">No agents in the space yet. Any agent joins with tap.py listen --as NAME.</div>`;
+    pin.innerHTML = ''; rail.classList.remove('haslead', 'folded'); return; }
   if (box.querySelector('.railempty')) box.innerHTML = '';
   // agents that left go first, so the rows that stay are already in order and never get re-inserted
   // (a re-inserted row replays its entrance)
   const keys = new Set(agents.map(a => agentKey(a.name)));
   const have = new Map();
-  [...box.children].forEach(el => keys.has(el.dataset.key) ? have.set(el.dataset.key, el) : el.remove());
+  [...pin.querySelectorAll(':scope > .agrp'), ...box.children].forEach(el => keys.has(el.dataset.key) ? have.set(el.dataset.key, el) : el.remove());
   const order = railOrder(agents), lead = order[0] && order[0].role === 'lead' ? order[0] : null;
-  /* W2 (contract sections 5 and 10): the lead pinned first by position, the fleet strip under it and the one disclosure
-     that folds every other master and tap land here (syncLead, syncFleet). */
+  // Contract sections 5 and 10: with a fleet served the lead is pinned first by position (never folded) with its strip,
+  // and every other master and tap folds under it unless this browser opened the group.
+  const pinned = railPinned(agents, fleet);
+  rail.classList.toggle('haslead', !!pinned);
+  rail.classList.toggle('folded', !!pinned && store('tapspace.rail.open') !== '1');
+  let j = 0;
   order.forEach((a, i) => {
     const key = agentKey(a.name);
     let g = have.get(key);
@@ -1488,11 +1558,83 @@ function syncAgents(){
     talk.hidden = !tk.text; talk.title = tk.tip;
     if (talk.lastChild.textContent !== tk.text) talk.lastChild.textContent = tk.text;
     syncNotes(notes, key, shown);
-    if (box.children[i] !== g) box.insertBefore(g, box.children[i] || null);
+    if (a === pinned){ if (pin.firstChild !== g) pin.insertBefore(g, pin.firstChild); }
+    else { if (box.children[j] !== g) box.insertBefore(g, box.children[j] || null); j++; }
     have.delete(key);
   });
   have.forEach(el => el.remove());
+  syncLead(pinned);
 }
+// The pinned lead's strip of fleet faces with the one disclosure at its end (contract section 5): its own element right
+// under the lead's group, never inside its row or the row's hover (which shows Spin down).
+function syncLead(lead){
+  const pin = $('#leadpin'); let strip = pin.querySelector(':scope > .fleet');
+  if (!lead){ if (strip) strip.remove(); return; }
+  if (!strip){ strip = document.createElement('div'); strip.className = 'fleet'; pin.appendChild(strip); }
+  syncFleet(strip, fleet, lead);
+}
+function syncFleet(strip, list, lead){
+  const folded = $('#rail').classList.contains('folded');
+  const lane = Math.max(0, (strip.clientWidth || 292) - 24 - 28);        // the strip less its padding and the fold
+  const fit = matchMedia('(max-width:900px)').matches ? Math.min(list.length, 8) : beadsFit(list.length, lane);
+  const shown = list.slice(0, fit), more = list.length - shown.length, keep = new Set(shown.map(f => f.key));
+  const live = () => [...strip.querySelectorAll('.bead:not(.out)')];
+  live().forEach(el => { if (!keep.has(el.dataset.key)){ el.classList.add('out'); setTimeout(() => el.remove(), 280); } });   // gone first
+  const have = new Map(live().map(el => [el.dataset.key, el]));
+  shown.forEach((f, i) => {
+    let el = have.get(f.key);
+    if (!el){
+      el = document.createElement('button'); el.type = 'button'; el.className = 'bead enter'; el.dataset.key = f.key;
+      el.style.animationDelay = (i * 40) + 'ms';
+      el.addEventListener('animationend', e => { if (e.target === el) el.classList.remove('enter'); });   // then it presses
+      el.addEventListener('click', () => openThread(f.key));   // its thread opens; the group stays as it is
+    }
+    const sig = JSON.stringify([f.kind, f.phase, f.state, f.look, f.done, f.total, f.working, f.title, f.word, f.initial]);
+    if (el.dataset.sig !== sig){
+      el.dataset.sig = sig; el.innerHTML = beadHtml(f);
+      const words = String(f.title || '') + ', ' + (f.kind === 'tap' ? String(f.word || '') : (MASTER[f.state] || ''));
+      el.title = words; el.setAttribute('aria-label', words);
+    }
+    el.classList.toggle('working', !!f.working); el.classList.toggle('on', current === f.key);
+    const slot = live()[i]; if (slot !== el) strip.insertBefore(el, slot || strip.querySelector('.beadmore, .quiet, .fold'));
+  });
+  let mo = strip.querySelector('.beadmore');
+  if (more > 0){
+    if (!mo){ mo = document.createElement('button'); mo.type = 'button'; mo.className = 'beadmore';
+      mo.addEventListener('click', () => setFold(true)); strip.insertBefore(mo, strip.querySelector('.quiet, .fold')); }
+    if (mo.textContent !== '+' + more){ mo.textContent = '+' + more; mo.setAttribute('aria-label', more + ' more'); }
+  } else if (mo) mo.remove();
+  let q = strip.querySelector('.quiet');
+  if (!list.length){ if (!q){ q = document.createElement('span'); q.className = 'quiet'; q.textContent = 'Nothing running';
+    strip.insertBefore(q, strip.querySelector('.fold')); } }
+  else if (q) q.remove();
+  let fold = strip.querySelector('.fold');
+  if (!fold){
+    fold = document.createElement('button'); fold.type = 'button'; fold.className = 'fold'; fold.setAttribute('aria-label', 'Everyone else');
+    fold.innerHTML = '<svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4.5 6 7.5 9 4.5"/></svg><span class="unread"></span>';
+    fold.addEventListener('click', () => setFold($('#rail').classList.contains('folded')));
+    strip.appendChild(fold);
+  }
+  fold.setAttribute('aria-expanded', String(!folded));
+  fold.title = 'Shows or folds the chats under ' + ((lead && lead.title) || 'Muddi') + '.';
+  fold.hidden = agents.length < 2 && !taps.items.length;   // nothing to fold
+  /* O2: folded rows hide their dots, so one dot rides the fold while any of them would show one (Glint's rule) */
+  const rolled = folded && (agents.some(a => a !== lead && (isUnread(agentKey(a.name)) || visibleNotes(a).length > 0)) ||
+                            taps.items.some(t => isUnread(t.key)));
+  fold.querySelector('.unread').classList.toggle('show', rolled);
+}
+function beadHtml(f){                               // a master inside its done/total ring, a tap in its own phase ring (P2 faces)
+  if (f.kind === 'tap'){                            // a flying tap is working: its ring's own spin (the replying loop) carries it
+    const t = taps.items.find(x => x.key === f.key) || {key: f.key, repo: String(f.key).split('#')[0], title: f.title || '', status: ''};
+    return tapAvatar(Object.assign({}, t, {phase: f.phase, initial: f.initial || t.initial, replying: !!f.working}), ' style="--s:24px"');
+  }
+  const pct = ringPct(f);
+  return `<svg class="ring" viewBox="0 0 24 24" aria-hidden="true"><circle class="trk" cx="12" cy="12" r="11"/>` +
+    (pct ? `<circle class="arc" cx="12" cy="12" r="11" pathLength="100" stroke-dasharray="${pct} 100"/>` : '') + `</svg>` +
+    face(String(f.key), 18, {look: f.look, state: f.state});
+}
+function setFold(open){ store('tapspace.rail.open', open ? '1' : ''); renderRail(); }
+function fitStrip(){ syncLead(railPinned(agents, fleet)); }   // the strip holds as many beads as its width does
 
 function syncList(box, items, keyOf, sigOf, html, emptyText){
   if (!items.length){ box.innerHTML = `<div class="railempty">${emptyText}</div>`; return; }
@@ -1526,10 +1668,10 @@ function renderRail(){
       return tapAvatar(t) + `<span class="tx${t.phase === 'closed' ? ' dim' : ''}"><div class="nm">${esc(tapName(t))}</div>
         <div class="sub">${sub}</div></span><span class="unread"></span>`;
     }, taps.fetched ? 'No taps flying under your name.' : (taps.error ? 'Couldn’t reach GitHub: ' + esc(taps.error) : 'Looking for your taps…'));
-  /* O2: the Chat tab badge (wave 2: the number of distinct keys with news). */
-  const needs = taps.items.filter(isHolding).length;
-  const unread = [...agents.map(a => agentKey(a.name)), ...taps.items.map(t => t.key)].filter(isUnread).length;
-  const bc = $('#badge-chat'); const n = Math.max(needs, unread);
+  /* O2: the Chat tab counts distinct threads with news (an unread reply or a holding tap), never the quiet ones */
+  const threads = [...agents.map(a => { const k = agentKey(a.name); return {key: k, unread: lastTheirs(k) > readAt(k), holding: false}; }),
+                   ...taps.items.map(t => ({key: t.key, unread: lastTheirs(t.key) > readAt(t.key), holding: isHolding(t)}))];
+  const bc = $('#badge-chat'), n = newsCount(threads, focusKey, onScreenKey());
   bc.textContent = n; bc.classList.toggle('show', n > 0);
 }
 
@@ -1548,17 +1690,25 @@ function threadData(){
   return {msgs, typing: !!t.replying, tap: t};
 }
 
-/* O3 (contract section 7): the lead's live activity line in its thread head lands here (wave 2). Returns HTML; until
-   then, when the master started. */
-function headSub(a){ return 'Started ' + when(a.first || a.seen); }
+/* O3 (contract section 7): what the lead is doing right now, in its thread head: its word (and a plain detail), a dot that
+   breathes while it works, still while it waits or idles, greyed when its session is gone. None served: when it started. */
+const activityOf = a => a && a.role === 'lead' && a.activity && typeof a.activity === 'object' &&
+  typeof a.activity.word === 'string' && a.activity.word.trim() ? a.activity : null;
+function headSub(a){
+  const act = activityOf(a);
+  if (!act) return 'Started ' + when(a.first || a.seen);
+  const st = actKind(act.state), detail = typeof act.detail === 'string' && act.detail.trim() ? ' · ' + esc(act.detail.trim()) : '';
+  return `<span class="act${st ? ' ' + st : ''}"><i></i><span class="aw">${esc(act.word.trim())}${detail}</span></span>`;
+}
 function renderHead(d){
   let html, sig;
   if (d.agent){
-    const a = d.agent;
-    sig = current + '|' + a.state + '|' + a.title + '|' + a.look;
-    html = `${masterFace(a)}<span class="tx"><div class="nm">${esc(a.title || 'Claude')}</div>
-      <div class="sub">${headSub(a)}</div></span>
-      <span class="chip ${a.state}"><i></i>${MASTER[a.state]}</span>`;
+    const a = d.agent, act = activityOf(a), st = act && actKind(act.state);
+    const look = st ? Object.assign({}, a, {state: ACT_STATE[st]}) : a;   // the lead's face by what it is doing
+    sig = current + '|' + a.state + '|' + a.title + '|' + a.look + '|' + (act ? 'act:' + st : '');
+    html = `${masterFace(look)}<span class="tx"><div class="nm">${esc(a.title || 'Claude')}</div>
+      <div class="sub">${headSub(a)}</div></span>` +
+      (act ? '' : `<span class="chip ${a.state}"><i></i>${MASTER[a.state]}</span>`);   // the activity line says it
   } else {
     const t = d.tap;
     sig = [t.key, t.status, t.phase, t.phase_word, t.replying, t.title].join('|');
@@ -1569,9 +1719,16 @@ function renderHead(d){
   if (head.dataset.sig !== sig){
     const swap = head.dataset.key !== current;
     head.dataset.sig = sig; head.dataset.key = current; head.innerHTML = html;
-    if (swap){ head.classList.remove('swap'); void head.offsetWidth; head.classList.add('swap'); }
+    if (swap){ head.classList.remove('swap'); void head.offsetWidth; head.classList.add('swap'); head.dataset.word = ''; }
   }
-  if (d.agent){ const sub = head.querySelector('.tx .sub'), h = headSub(d.agent); if (sub) setPart(sub, h, h); }   // its age moves on
+  if (d.agent){                                     // its age moves on; the lead's word swaps in when it changes (the head's swapin)
+    const sub = head.querySelector('.tx .sub'), h = headSub(d.agent);
+    if (sub && setPart(sub, h, h)){
+      const w = sub.querySelector('.aw'), word = w ? w.textContent : '';
+      if (w && head.dataset.word && head.dataset.word !== word) w.classList.add('swap');
+      head.dataset.word = word;
+    }
+  }
   const goals = d.tap ? d.tap.goals : [];
   const gsig = current + JSON.stringify(goals);
   if (goalsEl.dataset.sig !== gsig){
@@ -2114,7 +2271,7 @@ function renderThread(){
   want.forEach((el, i) => { if (msgsEl.children[i] !== el) msgsEl.insertBefore(el, msgsEl.children[i] || null); });
   rendered = {key: current, sig, loaded, stick};
   if (stick) scrollEnd(switched);
-  if (document.body.classList.contains("chatmode")) markRead(current);
+  if (document.body.classList.contains("chatmode") && document.hasFocus()) markRead(current);   // never read behind his back (O2)
   showCards(switched);
 }
 function msgEl(m){ const el = document.createElement('div'); el.className = 'msg ' + m.who; return el; }
@@ -2247,7 +2404,7 @@ async function pollAgents(){
   // while he looked).
   const key = current, had = agentsLoaded && isAgent(key) ? newestNote(agentOf(key)) : null;
   agents = d.agents; links = Array.isArray(d.links) ? d.links : []; agentsLoaded = true;
-  /* W2 (contract sections 5 and 6): the served fleet and focus land here (d.fleet, d.focus). */
+  focusKey = typeof d.focus === 'string' ? d.focus : ''; fleet = Array.isArray(d.fleet) ? d.fleet : null;
   // A note that lands while its master's thread is open and the page is in front is read at once. Rows already listed
   // wait for an explicit open: switching to Chat or the window coming forward never reads them.
   if (had !== null && current === key && document.body.classList.contains("chatmode") && document.hasFocus() &&
@@ -2277,7 +2434,7 @@ setInterval(() => {
 }, 1500);
 window.addEventListener('focus', () => { if (document.body.classList.contains("chatmode")) { markRead(current); renderRail(); showCards(false); } });
 document.addEventListener('visibilitychange', () => showCards(false));   // a card that landed while the page was hidden plays when it shows
-window.addEventListener('resize', () => placePill(true));   // not setTab: that re-ran the read and the jump to the newest message
+window.addEventListener('resize', () => { placePill(true); fitStrip(); });   // not setTab: that re-ran the read and the jump to the newest message
 
 const start = location.hash === '#chat' || location.hash === '#visual' ? location.hash.slice(1) : (store('tapspace.tab') || 'visual');
 requestAnimationFrame(() => setTab(start, true));
