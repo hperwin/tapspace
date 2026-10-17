@@ -137,14 +137,14 @@ def _daemon_env(env):
     return {k: v for k, v in env.items() if k not in SESSION_ENV}
 
 
-def _call(path, payload=None):
+def _call(path, payload=None, timeout=30):
     headers = dict(_who())
     if payload is not None:
         headers["content-type"] = "application/json"
     req = urllib.request.Request(BASE + path, headers=headers,
                                  data=None if payload is None else json.dumps(payload).encode())
     try:
-        with urllib.request.urlopen(req, timeout=30) as r:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
             return json.loads(r.read().decode())
     except urllib.error.HTTPError as e:
         try:
@@ -391,7 +391,8 @@ def _card_try(name, card, images, labels, proofs, accept=None):
                 labels.append({})
     if any(labels):
         card["images"] = labels
-    return _call("/api/chat/reply", {"agent": name, "images": images, "card": card})
+    # the server reads up to 10 proof images from GitHub before it answers: a sender that gave up would send again
+    return _call("/api/chat/reply", {"agent": name, "images": images, "card": card}, timeout=120)
 
 
 def _progress(name, body):

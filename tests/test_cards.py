@@ -1039,6 +1039,31 @@ class ListenTests(Taps):
         self.assertEqual(stored[ask["id"]]["answer"], {"card": c["id"], "checks": ["c1"]})
 
 
+class TapCardWaitTests(Taps):
+    """tap.py card waits up to 120 s for the server's answer, which reads the proof images from GitHub first; its
+    other calls keep 30 s. tap.py runs in-process against this module's server."""
+
+    def test_the_card_post_waits_up_to_120_s(self):
+        spec = importlib.util.spec_from_file_location("tapspace_tap_card_wait_under_test", ROOT / "tap.py")
+        T = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(T)
+        T.BASE, T._who = BASE, lambda: {}                       # this server, no Claude session headers
+        a = name("wait")
+        join(a)
+        real, waits = urllib.request.urlopen, []
+        self.addCleanup(setattr, urllib.request, "urlopen", real)
+
+        def spy(req, timeout=None, **k):
+            waits.append((urllib.parse.urlsplit(req.full_url).path, timeout))
+            return real(req, timeout=timeout, **k)
+        urllib.request.urlopen = spy
+        r = T._card_try(a, {"line": "Two proofs to look at"}, [], [], [(TAP["key"], None)])
+        urllib.request.urlopen = real
+        self.assertTrue(r.get("ok"), r)
+        self.assertEqual(len(r["message"]["images"]), 2)
+        self.assertEqual(waits, [("/api/taps", 30), ("/api/chat/reply", 120)])
+
+
 class LookTests(unittest.TestCase):
     """Server-assigned looks: the lowest free one, the lead holds none, a stored look never moves."""
 
