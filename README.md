@@ -250,9 +250,11 @@ its entrance once, when it lands in the thread you have open. With a lead on
 the list (`tap.py lead`, Muddi here), the lead is pinned on top with a strip
 of everything running under it, needs-you first, and the other masters fold
 behind one disclosure (the page remembers it in `localStorage
-tapspace.rail.open`). The thread you last wrote in is your focus: it never
-shows an unread dot or counts in a badge. The lead's thread head says what
-it is doing right now (what woke it, Thinking, the tool it is running,
+tapspace.rail.open`). The thread you last wrote in is your focus (a chat
+message, or a tap comment you sent from TapSpace; an agent's own comment on
+a tap never moves it): it never shows an unread dot or counts in a badge.
+The lead's thread head says what it is doing right now (what woke it, until
+its first tool call or 15 seconds, Thinking, the tool it is running,
 Listening, Waiting on you, Idle, Offline), read from its own Claude Code
 session; it reports nothing.
 
@@ -294,7 +296,8 @@ working, waiting, idle; null with no claimed session). `fleet` lists
 everything running under the lead, needs you first, then working (each
 `{key, kind, title, state or phase, done, total, needs_you, working}`; empty
 with no lead). `focus` is the thread key your newest own message went to
-(null when you never wrote). Each link is
+(a tap comment counts only when you sent it through TapSpace, recorded in
+`data/tap-said.json`; null when you never wrote). Each link is
 `{a, b, last, count, summary, active, from}`: two agent NAMEs, the latest
 message's time and sender, the messages in the last 24 hours, a short plain
 summary, and `active` while the latest one is under 10 minutes old.
