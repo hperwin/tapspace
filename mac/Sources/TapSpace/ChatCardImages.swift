@@ -252,7 +252,7 @@ struct CardNotesField: View {
         let detail = smoothstep(0.62, 0.97, draft.nw.value) * smoothstep(0.55, 0.97, draft.nh.value)
         let empty = draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         VStack(spacing: 8) {
-            GrowingTextView(text: $draft.text, placeholder: "Tell the agent what to change…",
+            GrowingTextView(text: $draft.text, placeholder: "What should change?",
                             fontSize: 13, returnSends: false, focusToken: focus, onSend: onSend)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 7)
