@@ -17,6 +17,10 @@ struct PillItem: Identifiable, Equatable {
     var isVideo = false
     /// a tap's pilot is working on a reply right now
     var replying = false
+    /// a master's face look (0 the lead's)
+    var look: Int? = nil
+    /// a tap's repo letter, in its ring
+    var initial = ""
 }
 
 final class PillPanel: NSPanel {
@@ -360,13 +364,14 @@ extension Store {
                                 media: t.videoDeleted ? "" : t.mediaPath(t.version), isVideo: t.isVideo))
         }
         for t in needsYouTaps {
-            out.append(PillItem(id: t.key, kind: .tap(t.key), who: t.repoName, text: t.name, status: t.status, number: t.number, replying: t.replying == true))
+            out.append(PillItem(id: t.key, kind: .tap(t.key), who: t.repoName, text: t.name, status: t.status, number: t.number,
+                                replying: t.replying == true, initial: t.initial))
         }
         for a in unreadAgents {
             let row = chats[a.name]?.last { $0.role == "master" }
             let n = row?.images.count ?? 0
             let last = row.map { $0.body.isEmpty && n > 0 ? (n == 1 ? "Sent an image" : "Sent \(n) images") : pillPlain($0.body) } ?? "replied"
-            out.append(PillItem(id: a.key, kind: .agent(a.key), who: a.title, text: last, status: a.state, number: 0))
+            out.append(PillItem(id: a.key, kind: .agent(a.key), who: a.title, text: last, status: a.state, number: 0, look: a.look))
         }
         return out
     }
@@ -511,9 +516,9 @@ struct PillRow: View {
                 PillThumb(path: item.media, isVideo: item.isVideo)
             }
         case .tap:
-            TapAvatar(status: item.status, working: item.replying, size: 22)
+            TapAvatar(status: item.status, working: item.replying, size: 22, initial: item.initial)
         case .agent:
-            OrbView(state: item.status).frame(width: 18, height: 18)
+            OrbView(state: item.status, look: item.look).frame(width: 18, height: 18)
         }
     }
 }
