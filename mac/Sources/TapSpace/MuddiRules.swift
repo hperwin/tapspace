@@ -33,6 +33,14 @@ enum MuddiOrder {
         }
         return [Row(agent: lead, child: false)] + children + rest
     }
+
+    /// With a lead, every other master and every tap folds under it behind one
+    /// disclosure (closed by default): their thread keys are off the rail while
+    /// it is closed. No lead, or open: none.
+    static func folded(_ agents: [Agent], taps: [Tap], open: Bool) -> [String] {
+        guard let lead = lead(agents), !open else { return [] }
+        return agents.filter { $0.key != lead.key }.map(\.key) + taps.map(\.key)
+    }
 }
 
 /// Hayden's five tap states plus closed (closed but not done: shown greyed).
