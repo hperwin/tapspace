@@ -8,7 +8,9 @@ import CoreGraphics
 /// The run is offscreen and never activates (App.swift parks the window and
 /// the pill). `scenes.json` also carries `masters`: what the app decoded for
 /// the masters column, the rail notes and the links, which Scripts/verify.sh
-/// holds against what the server served.
+/// holds against what the server served. Scenes 11 and 12 are the lead's
+/// thread with its update cards at rest and the rail with everything under
+/// the lead shown; the rail starts folded, as Hayden first sees it.
 @MainActor
 final class HarnessSnapshot {
     let app: AppDelegate
@@ -40,6 +42,10 @@ final class HarnessSnapshot {
     private func run() async {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         Harness.log("SNAPSHOT server \(API.base.absoluteString) -> \(dir.path)")
+        // The card motion rules (the package has no test target).
+        let motion = CardMotion.checks()
+        Harness.log("CARDMOTION " + (motion.isEmpty ? "ok" : "bad " + motion.joined(separator: ", ")))
+        if !motion.isEmpty { problems.append("CARDMOTION bad " + motion.joined(separator: ", ")) }
         // The pill is already parked off the real menu bar (App.swift); its view still renders on demand.
 
         // Data and media first: cards, decoded images, the v2 change boxes.
@@ -87,6 +93,7 @@ final class HarnessSnapshot {
         // the size of Hayden's (1512 x 887); 05 opens a thinking master the way a rail
         // click does, which reads its notes.
         await Harness.wait(10) { store.agentsLoaded && !store.agents.isEmpty }
+        UserDefaults.standard.set(false, forKey: RailView.openKey)
         masters = mastersData()
         let agents = store.agents
         let talking = agents.first { $0.state != "thinking" && $0.count > 0 && $0.notes.isEmpty }
@@ -125,6 +132,26 @@ final class HarnessSnapshot {
             }
         } else {
             problems.append("05-chat-agent-thinking: no such agent on the server")
+        }
+
+        // 11, 12. The lead's thread with its update cards (history: every card at rest, its answers folded in), in
+        // a window tall enough for a whole card; then the rail with everything under the lead shown.
+        if let lead = store.agents.first(where: \.isLead) {
+            app.window.setContentSize(NSSize(width: 1512, height: 1200))
+            await openThread(lead)
+            let rows = store.chats[lead.name] ?? []
+            let cards = rows.filter { $0.card != nil }.count
+            masters["cards"] = cards
+            if cards == 0 { problems.append("11-chat-card: the lead's thread has no update card") }
+            shot("11-chat-card", note: "\(lead.title): \(cards) cards, \(rows.filter { $0.answer != nil }.count) answers")
+            UserDefaults.standard.set(true, forKey: RailView.openKey)
+            await settle()
+            shot("12-chat-rail-open", note: "\(store.fleet.count) running under \(lead.title)")
+            UserDefaults.standard.set(false, forKey: RailView.openKey)
+            app.window.setContentSize(NSSize(width: 1240, height: 820))
+            await settle()
+        } else {
+            problems.append("11-chat-card: no lead on the server")
         }
 
         // 6. Chat on a tap thread (real GitHub data through the server, read-only).
@@ -309,7 +336,9 @@ private extension HarnessSnapshot {
                 "notes": agents.reduce(0) { $0 + listedNotes($1) },
                 "links": store.links.count,
                 "links_active": store.links.filter(\.active).count,
-                "owned_cards": store.tickets.filter { $0.owner != nil }.count]
+                "owned_cards": store.tickets.filter { $0.owner != nil }.count,
+                "fleet": store.fleet.count,
+                "looks": agents.filter { $0.look != nil }.count]
     }
 
     /// The note rows the rail lists under a master.
