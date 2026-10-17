@@ -198,7 +198,8 @@ struct FaceView: View {
                 let t = store.tap(key)
                 // A tap the store no longer holds draws its snapshot's phase, else done (Glint's resolver).
                 let p = phase ?? t?.tapPhase ?? info?.phase.flatMap(TapPhase.init(rawValue:)) ?? (t == nil ? .done : nil)
-                TapAvatar(status: t?.status ?? "", working: animated && t?.replying == true, size: size, phase: p)
+                TapAvatar(status: t?.status ?? "", working: animated && t?.replying == true, size: size, phase: p,
+                          still: !animated)
                     .overlay {
                         // The repo's letter in the ring until the check takes its place; an older server's look
                         // (no phase) keeps today's avatar.
