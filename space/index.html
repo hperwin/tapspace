@@ -1863,8 +1863,8 @@ function cardEl(m){
     (act ? actHtml(m) : '') + (ask ? askHtml(m, ask) : '') + `</div><div class="meta2"></div>`;
   el.querySelectorAll('.uwell img').forEach(im => {
     im.addEventListener('error', () => { im.outerHTML = '<div class="gonenote">No picture</div>'; }, {once: true});
-    if (hero) im.addEventListener('load', () => {  // a picture at its own aspect grows the card: keep it in view if he was at the end
-      if (rendered.stick && msgsEl.scrollHeight - msgsEl.scrollTop - msgsEl.clientHeight < 120 + im.offsetHeight) revealCard(el, true);
+    if (hero) im.addEventListener('load', () => {  // a picture at its own aspect grows the card: keep it in view if he was at the end,
+      if (rendered.stick) revealCard(el, true);    // as the render found him (never measured while its scroll is still moving, A5)
     }, {once: true});
   });
   return el;
@@ -2070,11 +2070,11 @@ function beginCard(el, m){
   playCard(el, m.card, cardParts(el, m));
 }
 // The newest card in view: one that fits sits at the end (end), one taller than the thread shows its head (face and line)
-// rather than its foot, so its first beats are seen.
+// rather than its foot, so its first beats are seen. A card still arriving keeps the thread's own glide to the end.
 function revealCard(el, end){
   const box = msgsEl.getBoundingClientRect(), r = el.getBoundingClientRect(), top = r.top - box.top + msgsEl.scrollTop;
   if (msgsEl.scrollHeight - (top + r.height) > 120) return;                    // not the newest thing in the thread
-  if (r.height + 24 <= msgsEl.clientHeight){ if (end) scrollEnd(true); return; }
+  if (r.height + 24 <= msgsEl.clientHeight){ if (end) scrollEnd(!el.classList.contains('new')); return; }
   msgsEl.scrollTop = top - 12;
 }
 // The pieces playCard moves, each set where its beat starts: the bar at visual.from, a moved item as it was.
@@ -2214,6 +2214,10 @@ msgsEl.addEventListener('keydown', e => {           // Cmd or Ctrl + Enter sends
 /* ---- end update cards ---- */
 
 function nearEnd(){ return msgsEl.scrollHeight - msgsEl.scrollTop - msgsEl.clientHeight < 120; }
+// He leaves the end only by scrolling up from it: the render's stick drops then, so a picture that loads later never pulls
+// him back down. The thread's own scroll to the end only moves down, so it never drops it (contract A5).
+let msgsTop = 0;
+msgsEl.addEventListener('scroll', () => { if (msgsEl.scrollTop < msgsTop && !nearEnd()) rendered.stick = false; msgsTop = msgsEl.scrollTop; }, {passive: true});
 function scrollEnd(instant){
   if (instant){ msgsEl.style.scrollBehavior = 'auto'; msgsEl.scrollTop = msgsEl.scrollHeight; msgsEl.style.scrollBehavior = ''; }
   else msgsEl.scrollTop = msgsEl.scrollHeight;

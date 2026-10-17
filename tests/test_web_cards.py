@@ -340,6 +340,20 @@ class MarkupTests(unittest.TestCase):
         self.assertIn(".msg.ucard.new", cards[0])
         self.assertIn("cardRM.matches", CARDS)                      # the 0.2 s fade instead of the beats
 
+    def test_a_hero_picture_keeps_the_end_from_the_renders_stick(self):
+        # contract A5: a decision card's picture decides "he was at the end" from the stick its render took, never from a
+        # distance measured while the thread's own scroll is still moving; only his scroll up from the end drops it; a card
+        # still arriving keeps the thread's glide, one at rest jumps
+        el = re.search(r"^function cardEl\(.*?^}", CARDS, re.S | re.M).group(0)
+        load = el[el.index("im.addEventListener('load'"):]
+        load = load[:load.index("{once: true}")]
+        self.assertIn("if (rendered.stick) revealCard(el, true);", load)
+        for measure in ("scrollHeight", "scrollTop", "clientHeight", "offsetHeight"):
+            self.assertNotIn(measure, load)
+        self.assertIn("msgsEl.addEventListener('scroll', () => { if (msgsEl.scrollTop < msgsTop && !nearEnd()) "
+                      "rendered.stick = false; msgsTop = msgsEl.scrollTop; }, {passive: true});", PAGE)
+        self.assertIn("if (end) scrollEnd(!el.classList.contains('new'));", CARDS)
+
     def test_the_composer_sends_a_nonce(self):
         self.assertIn("post('/api/chat', {agent: name, body, images, nonce: o.nonce})", PAGE)
 
