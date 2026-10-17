@@ -512,7 +512,7 @@ struct PaneView: View {
                     Rectangle().fill(Color.hairline).frame(height: 1)
                     // The lead's thread: what it is doing right now, live from its session (CONTRACT 7).
                     if let agent, agent.isLead, let activity = agent.activity {
-                        LeadActivityStrip(activity: activity, look: agent.look)
+                        LeadActivityStrip(activity: activity)
                             .modifier(SwapIn(box: swap, rise: 4))
                         Rectangle().fill(Color.hairline).frame(height: 1)
                     }
@@ -572,7 +572,11 @@ struct PaneHeader: View {
     var body: some View {
         HStack(spacing: 12) {
             if let agent {
-                OrbView(state: agent.state, look: agent.look).frame(width: 38, height: 38)
+                // The lead while its row serves activity: one face and one status (CONTRACT 18, as the web does). The
+                // face wears what it is doing and the activity strip under the header says it, so no chip here.
+                let activity = agent.isLead ? agent.activity : nil
+                OrbView(state: activity.map { LeadActivityStrip.face($0.state) } ?? agent.state, look: agent.look)
+                    .frame(width: 38, height: 38)
                 VStack(alignment: .leading, spacing: 2) {
                     HeaderTitle(text: agent.title)
                     Text(agentSubtitle(agent))
@@ -582,7 +586,9 @@ struct PaneHeader: View {
                         .truncationMode(.middle)
                 }
                 Spacer(minLength: 8)
-                StatusChip(state: agent.state, label: agentLabel[agent.state, default: agent.state])
+                if activity == nil {
+                    StatusChip(state: agent.state, label: agentLabel[agent.state, default: agent.state])
+                }
             } else if let tap {
                 TapAvatar(status: tap.status, working: tap.replying == true, phase: tap.tapPhase, initial: tap.initial)
                 VStack(alignment: .leading, spacing: 2) {

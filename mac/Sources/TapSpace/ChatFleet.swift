@@ -126,13 +126,12 @@ struct ChatFleetBead: View {
     }
 }
 
-/// What the lead is doing right now (CONTRACT 7), one slim line at the top of its thread: its face with the
-/// expression of that state, the server's word (swapped in place when it changes), and a breathing dot while it
-/// works. Calm when idle, greyed when its session is gone. Hidden while the server does not know (`activity` nil).
+/// What the lead is doing right now (CONTRACT 7), one slim line at the top of its thread: the server's word (swapped
+/// in place when it changes) and a breathing dot while it works. Calm when idle, greyed when its session is gone.
+/// The thread's one face is the header's, wearing this state's expression (`face`), and the header then has no chip
+/// (CONTRACT 18). Hidden while the server does not know (`activity` nil).
 struct LeadActivityStrip: View {
     let activity: AgentActivity
-    /// The lead's face look.
-    let look: Int?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// The orb state whose expression each activity state wears: working focused, waiting happy, switching wow,
@@ -150,8 +149,6 @@ struct LeadActivityStrip: View {
     var body: some View {
         let a = activity
         HStack(spacing: 10) {
-            OrbView(state: Self.face(a.state), look: look)
-                .frame(width: 22, height: 22)
             HStack(spacing: 6) {
                 Text(a.word)
                     .font(.system(size: 12.5, weight: .medium))
