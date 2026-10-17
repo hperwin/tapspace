@@ -1863,8 +1863,8 @@ function cardEl(m){
     (act ? actHtml(m) : '') + (ask ? askHtml(m, ask) : '') + `</div><div class="meta2"></div>`;
   el.querySelectorAll('.uwell img').forEach(im => {
     im.addEventListener('error', () => { im.outerHTML = '<div class="gonenote">No picture</div>'; }, {once: true});
-    if (hero) im.addEventListener('load', () => {  // a picture at its own aspect grows the card: keep it in view if he was at the end,
-      if (rendered.stick) revealCard(el, true);    // as the render found him (never measured while its scroll is still moving, A5)
+    if (hero) im.addEventListener('load', () => {  // a picture at its own aspect grows the thread: if he was at the end, as the render
+      if (rendered.stick) keepEnd();               // found him (never measured while its scroll is still moving, A5), the end stays
     }, {once: true});
   });
   return el;
@@ -2071,6 +2071,12 @@ function beginCard(el, m){
 }
 // The newest card in view: one that fits sits at the end (end), one taller than the thread shows its head (face and line)
 // rather than its foot, so its first beats are seen. A card still arriving keeps the thread's own glide to the end.
+// A picture that loads late grows the thread wherever its card sits: the thread's newest thing stays in view (a card by
+// revealCard's rule, anything else at the end), not the card that grew, which is not always the newest (A5).
+function keepEnd(){
+  const last = msgsEl.lastElementChild;
+  if (last && last.classList.contains('ucard')) revealCard(last, true); else scrollEnd(true);
+}
 function revealCard(el, end){
   const box = msgsEl.getBoundingClientRect(), r = el.getBoundingClientRect(), top = r.top - box.top + msgsEl.scrollTop;
   if (msgsEl.scrollHeight - (top + r.height) > 120) return;                    // not the newest thing in the thread

@@ -347,12 +347,29 @@ class MarkupTests(unittest.TestCase):
         el = re.search(r"^function cardEl\(.*?^}", CARDS, re.S | re.M).group(0)
         load = el[el.index("im.addEventListener('load'"):]
         load = load[:load.index("{once: true}")]
-        self.assertIn("if (rendered.stick) revealCard(el, true);", load)
+        self.assertIn("if (rendered.stick) keepEnd();", load)
         for measure in ("scrollHeight", "scrollTop", "clientHeight", "offsetHeight"):
             self.assertNotIn(measure, load)
         self.assertIn("msgsEl.addEventListener('scroll', () => { if (msgsEl.scrollTop < msgsTop && !nearEnd()) "
                       "rendered.stick = false; msgsTop = msgsEl.scrollTop; }, {passive: true});", PAGE)
         self.assertIn("if (end) scrollEnd(!el.classList.contains('new'));", CARDS)
+
+    @unittest.skipUnless(NODE, "node is not installed")
+    def test_a_late_picture_keeps_the_threads_newest_thing_in_view(self):
+        # contract A5, found on the composed tree: a decision card that is not the newest (another card came after it)
+        # loads its picture after the thread opened at its end; the newest card, not the one that grew, stays in view
+        fn = re.search(r"^function keepEnd\(\)\{.*?^}", CARDS, re.S | re.M).group(0)
+        code = fn + """
+const calls = [], node = (id, cls) => ({id, classList: {contains: c => cls.includes(c)}});
+const revealCard = (el, end) => calls.push(['reveal', el.id, end]), scrollEnd = i => calls.push(['end', i]);
+let msgsEl;
+for (const last of [node('729', ['msg', 'them', 'ucard']), node('~typing', ['typing']), node('730', ['msg', 'them']), null]) {
+  msgsEl = {lastElementChild: last}; keepEnd();
+}
+process.stdout.write(JSON.stringify(calls));"""
+        out = subprocess.run([NODE, "-e", code], capture_output=True, text=True, timeout=30)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(json.loads(out.stdout), [["reveal", "729", True], ["end", True], ["end", True], ["end", True]])
 
     def test_the_composer_sends_a_nonce(self):
         self.assertIn("post('/api/chat', {agent: name, body, images, nonce: o.nonce})", PAGE)
