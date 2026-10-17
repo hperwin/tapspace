@@ -154,12 +154,20 @@ enum HarnessCard {
         expect(LeadActivityStrip.face("working") == "thinking" && LeadActivityStrip.face("waiting") == "here"
                && LeadActivityStrip.face("gone") == "away" && LeadActivityStrip.face("later") == "idle",
                "the lead's face wears its activity: working focused, waiting happy, gone grey, anything else sleepy")
+        expect(CardItemShown.steps(0, of: 4) == "1 of 4" && CardItemShown.steps(2, of: 4) == "3 of 4"
+               && CardItemShown.steps(3, of: 4) == "4 of 4" && CardItemShown.steps(4, of: 4) == "4 of 4",
+               "a master's count is the step it is on: 3 of 4 at current 2, 4 of 4 at its last step and when done")
 
         // First view (CONTRACT 10, 12): at an open, the newest two cards newer than the read mark play.
         let cards = [(key: "a", ts: 1.0), (key: "b", ts: 5.0), (key: "c", ts: 6.0), (key: "d", ts: 7.0)]
         expect(BubbleAnimator.opening(cards, after: 4) == ["c", "d"], "the newest two unseen cards play at an open")
         expect(BubbleAnimator.opening(cards, after: 6) == ["d"] && BubbleAnimator.opening(cards, after: 9).isEmpty,
                "seen cards draw at rest")
+        let anim = BubbleAnimator(), keys = cards.map(\.key)
+        anim.sync(thread: "t", loaded: true, keys: keys, fly: [], cards: cards, mark: { 4 }, plays: false)
+        anim.sync(thread: "u", loaded: true, keys: [], fly: [])
+        anim.sync(thread: "t", loaded: true, keys: keys, fly: [], cards: cards, mark: { 4 }, plays: true)
+        expect(!keys.contains(where: anim.opens), "a card drawn at rest at an open never plays at a later open")
         return failed
     }
 }
