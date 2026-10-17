@@ -48,6 +48,7 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import quote, urlencode
 
+import activity
 import links
 import qr
 
@@ -562,7 +563,11 @@ def _agent_rows(allrows=None):
             (lead["name"] if lead and r is not lead else None)
     if lead:
         lead["role"] = "lead"
-        # O3 hook (lane T7, CONTRACT section 7): the lead row's "activity" is set here; its word joins _agents_watch's sig
+        # what the lead is doing right now, read from its own Claude session's transcript (activity.py, CONTRACT 7)
+        lead["activity"] = activity.of(
+            lead["name"], agents[lead["name"]], lead["state"], CLAIMS, _proc_start,
+            waits=lambda: _waits_on_you([m for m in allrows if m.get("agent") == lead["name"]]),
+            titles=lambda: {n: _title(i) for n, i in agents.items()}, taps=TAPS["items"])
         out = [lead] + [r for r in out if r is not lead and r["parent"] == lead["name"]] + \
               [r for r in out if r is not lead and r["parent"] != lead["name"]]
     return out
@@ -683,7 +688,8 @@ def _agents_watch():
             # focus too: a tap comment of his moves it through the taps refresh, not a chat write
             sig = ([(r["name"], r["state"], r["where"], r["title"], (r["progress"] or {}).get("updated"),
                      r["notes_read"], [(n["ticket"], n["version"], n["ts"]) for n in r["notes"]],
-                     r.get("role"), r["parent"], r["look"])
+                     r.get("role"), r["parent"], r["look"],
+                     tuple((r.get("activity") or {}).get(k) for k in ("state", "word", "detail")))
                     for r in rows],
                    links.rows({r["name"] for r in rows}), _focus(chat, TAPS["items"]))
             if sig != last:
