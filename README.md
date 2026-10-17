@@ -294,6 +294,7 @@ Keep recordings short (5 to 20 seconds, under ~60MB; the CLI enforces the cap). 
   ```bash
   curl -s -X POST 127.0.0.1:4747/api/archive -H 'content-type: application/json' -d '{"campaign":"my-feature"}'
   ```
+  A new version (`tap.py update`) on an archived card is a new ask: the card comes back to the space, waiting.
 - `data/` (tickets, captures, inbox) survives server restarts and is gitignored.
 - The page self-reloads when `space/index.html` changes (a version stamp is baked at serve time and checked against `/api/state`), so upgrading never requires a manual refresh.
 

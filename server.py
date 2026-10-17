@@ -2296,6 +2296,7 @@ class H(BaseHTTPRequestHandler):
                 t["versions"].append({"v": v, "note": p.get("note", ""), "ts": time.time(),
                                       "media": kind, "ext": ext})
                 t["status"] = "waiting"
+                t.pop("archived", None)          # a new version is a new ask: back in the space
                 if owner and (how == "explicit" or not t.get("owner")):
                     t["owner"], t["owner_how"] = owner, how      # the lane iterating proves it; explicit corrects
                 if who.get("session") and not t.get("session"):

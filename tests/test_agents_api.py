@@ -827,6 +827,21 @@ class TapButtonTests(unittest.TestCase):
                 self.assertEqual(S._socket_owners(*c.getsockname()), {os.getpid()})
 
 
+class ArchiveTests(unittest.TestCase):
+
+    def test_an_update_brings_an_archived_card_back(self):
+        campaign = "wrap-" + uuid.uuid4().hex[:6]
+        tid, other = post(campaign=campaign), post(campaign=campaign)
+        self.assertEqual(call("/api/archive", {"campaign": campaign})[1], {"ok": True, "archived": 2})
+        live = lambda: {t["id"]: t for t in call("/api/state")[1]["tickets"]}
+        self.assertFalse({tid, other} & set(live()))
+        code, r = call("/api/update", {"id": tid, "image_b64": PNG, "note": "v2"})
+        self.assertEqual((code, r["version"]), (200, 2))
+        self.assertEqual((live()[tid]["status"], live()[tid]["version"]), ("waiting", 2))
+        self.assertNotIn(other, live())                              # only the card that asked again
+        self.assertNotIn("archived", stored(tid))
+
+
 class CompatTests(unittest.TestCase):
 
     def test_change_kinds_unchanged(self):
