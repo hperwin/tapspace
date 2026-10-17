@@ -67,8 +67,6 @@ struct CardImageCell: View {
                             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                     }
                 }
-                // Two decision pictures share one height, so their buttons sit level right under them.
-                .frame(width: width, height: hero && !single ? 300 : nil, alignment: hero ? .bottom : .leading)
             if !hero {
                 Text(verbatim: label.isEmpty ? "Image \(index + 1)" : label)
                     .font(.system(size: 12, weight: .semibold))
@@ -86,14 +84,11 @@ struct CardImageCell: View {
         .onChange(of: verdict?.approve == true) { _, on in drawCheck(on) }
     }
 
-    @ViewBuilder private var picture: some View {
-        if hero {
-            ChatImageCell(path: path, single: CGSize(width: width, height: single ? 420 : 300))
-        } else if single {
-            ChatImageCell(path: path, single: CGSize(width: width, height: 280))
-        } else {
-            ChatImageCell(path: path, square: width)
-        }
+    /// Never cropped (CONTRACT 18): the whole picture at its own aspect inside its capped box, which it holds before
+    /// it decodes. A decision card's 420 alone and 300 side by side, a normal card's 280; pictures side by side share
+    /// one height, so their buttons sit level right under them.
+    private var picture: some View {
+        ChatImageCell(path: path, box: CGSize(width: width, height: hero ? (single ? 420 : 300) : 280))
     }
 
     private func said(_ v: CardState.Verdict?) -> CardSaid? {
@@ -252,7 +247,7 @@ struct CardNotesField: View {
         let detail = smoothstep(0.62, 0.97, draft.nw.value) * smoothstep(0.55, 0.97, draft.nh.value)
         let empty = draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         VStack(spacing: 8) {
-            GrowingTextView(text: $draft.text, placeholder: "Tell the agent what to change…",
+            GrowingTextView(text: $draft.text, placeholder: "What should change?",
                             fontSize: 13, returnSends: false, focusToken: focus, onSend: onSend)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 7)
@@ -328,7 +323,10 @@ struct CardActionView: View {
     private var said: CardSaid? {
         let fresh = CardAccepts.fresh(row.id, now: Date().timeIntervalSince1970)
         guard let v = row.state.action else {
-            return fresh ? CardSaid(word: "Accepted", color: .up, note: "It shows as Done in a moment.") : nil
+            if fresh { return CardSaid(word: "Accepted", color: .up, note: "It shows as Done in a moment.") }
+            // Accepted somewhere else (its tap card, another client): once the tap is Done the card says so too, in
+            // place of its buttons (CONTRACT 18, Glint's rule).
+            return store.tap(tap)?.tapPhase == .done ? CardSaid(word: "Accepted", color: .up) : nil
         }
         if v.approve {
             // An Accept on its way keeps its button ("Accepting…"), as the tap card's does: it closes the tap on

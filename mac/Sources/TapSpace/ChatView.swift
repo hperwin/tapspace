@@ -412,7 +412,8 @@ final class BubbleAnimator {
     private var openMark: Double = 0
     /// The unseen cards that play once the thread's open settles.
     private var opening: Set<String> = []
-    /// Rows that had their entrance this session: a card never plays at an open after that.
+    /// Rows that had their entrance this session, and every card there at an open: a card never plays at an open
+    /// after that.
     private var entered: Set<String> = []
     weak var geo: ChatGeometry?
 
@@ -424,7 +425,10 @@ final class BubbleAnimator {
     /// in, as on any later open (springing in, every laid-out row re-rendered on
     /// every frame). The exception is `cards` (key, time) newer than `mark()`,
     /// the read mark from before the open, read once per thread switch: the
-    /// newest two of them play together after `openHold` when `plays`.
+    /// newest two of them play together after `openHold` when `plays`, once the
+    /// thread can be seen (a thread opened from the pill before its window is up
+    /// waits for it: ChatCardView). Every other card there drew at rest: seen,
+    /// it never plays later (CONTRACT 18).
     func sync(thread: String, loaded: Bool, keys: [String], fly: Set<String>,
               cards: [(key: String, ts: Double)] = [], mark: () -> Double = { .infinity }, plays: Bool = false) {
         if thread != self.thread { openMark = mark() }
@@ -434,11 +438,11 @@ final class BubbleAnimator {
             known = Set(keys)
             boxes.removeAll()
             opening.removeAll()
-            guard loaded, plays else { return }
-            for k in Self.opening(cards, after: openMark) where !entered.contains(k) {
-                opening.insert(k)
-                entered.insert(k)
+            guard loaded else { return }
+            if plays {
+                for k in Self.opening(cards, after: openMark) where !entered.contains(k) { opening.insert(k) }
             }
+            entered.formUnion(cards.map(\.key))
             return
         }
         for k in keys where !known.contains(k) {
@@ -512,7 +516,7 @@ struct PaneView: View {
                     Rectangle().fill(Color.hairline).frame(height: 1)
                     // The lead's thread: what it is doing right now, live from its session (CONTRACT 7).
                     if let agent, agent.isLead, let activity = agent.activity {
-                        LeadActivityStrip(activity: activity, look: agent.look)
+                        LeadActivityStrip(activity: activity)
                             .modifier(SwapIn(box: swap, rise: 4))
                         Rectangle().fill(Color.hairline).frame(height: 1)
                     }
@@ -572,7 +576,11 @@ struct PaneHeader: View {
     var body: some View {
         HStack(spacing: 12) {
             if let agent {
-                OrbView(state: agent.state, look: agent.look).frame(width: 38, height: 38)
+                // The lead while its row serves activity: one face and one status (CONTRACT 18, as the web does). The
+                // face wears what it is doing and the activity strip under the header says it, so no chip here.
+                let activity = agent.isLead ? agent.activity : nil
+                OrbView(state: activity.map { LeadActivityStrip.face($0.state) } ?? agent.state, look: agent.look)
+                    .frame(width: 38, height: 38)
                 VStack(alignment: .leading, spacing: 2) {
                     HeaderTitle(text: agent.title)
                     Text(agentSubtitle(agent))
@@ -582,7 +590,9 @@ struct PaneHeader: View {
                         .truncationMode(.middle)
                 }
                 Spacer(minLength: 8)
-                StatusChip(state: agent.state, label: agentLabel[agent.state, default: agent.state])
+                if activity == nil {
+                    StatusChip(state: agent.state, label: agentLabel[agent.state, default: agent.state])
+                }
             } else if let tap {
                 TapAvatar(status: tap.status, working: tap.replying == true, phase: tap.tapPhase, initial: tap.initial)
                 VStack(alignment: .leading, spacing: 2) {
@@ -831,8 +841,7 @@ struct MessageList: View {
         let cards: [(key: String, ts: Double)] = rows.compactMap { m, k in m.card == nil ? nil : (key: k, ts: m.ts) }
         let _ = animator.sync(thread: thread, loaded: agent.map { store.chats[$0.name] != nil } ?? (tap != nil),
                               keys: keys, fly: Set(rows.filter(\.0.fly).map(\.1)), cards: cards,
-                              mark: { ThreadOpenMark.take(thread, store: store) },
-                              plays: !reduceMotion && store.isViewingCandidate)
+                              mark: { ThreadOpenMark.take(thread, store: store) }, plays: !reduceMotion)
         // An answer landing on a card (or rolling back) changes the list too.
         let answered: String = msgs.map { $0.card?.state.sig ?? "" }.joined(separator: ",")
         let sig = keys.joined(separator: ",") + "|\(typing)|" + msgs.map { $0.receipt.map { "\($0)" } ?? "" }.joined()
