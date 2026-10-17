@@ -65,7 +65,8 @@ struct CardImageCell: View {
                             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                     }
                 }
-                .frame(width: width, alignment: hero ? .center : .leading)
+                // Two decision pictures share one height, so their buttons sit level right under them.
+                .frame(width: width, height: hero && !single ? 300 : nil, alignment: hero ? .bottom : .leading)
             if !hero {
                 Text(verbatim: label.isEmpty ? "Image \(index + 1)" : label)
                     .font(.system(size: 12, weight: .semibold))
