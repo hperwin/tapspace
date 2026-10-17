@@ -173,13 +173,34 @@ class Turns(Rig):
                    request(T0 - 5.9))
         self.assertEqual(self.act(), {"state": "working", "word": "Thinking", "detail": "", "since": round(T0 - 6, 1)})
 
-    def test_what_woke_it_shows_for_the_first_second(self):
+    def test_what_woke_it_holds_until_the_turns_first_call(self):
         self.live()
         self.write(SA, request(T0 - 0.6), prompt(T0 - 0.5, "human"))            # the request can come first
-        self.assertEqual(self.act(), {"state": "working", "word": "Reading your message", "detail": "",
-                                      "since": round(T0 - 0.5, 1)})
-        self.now = T0 + 0.6
-        self.assertEqual(self.word(), ("working", "Thinking"))
+        held = {"state": "working", "word": "Reading your message", "detail": "", "since": round(T0 - 0.5, 1)}
+        self.assertEqual(self.act(), held)
+        self.now = T0 + 20                                                       # long past a second, no call yet
+        self.write(SA, request(T0 + 19))
+        self.assertEqual(self.act(), held)
+        self.write(SA, bash(T0 + 21, "c1", "ls ~/x"))
+        self.now = T0 + 22
+        self.assertEqual(self.word(), ("working", "Reading files"))
+        self.write(SA, result(T0 + 23, "c1"), request(T0 + 23.1))
+        self.now = T0 + 24
+        self.assertEqual(self.act(), {"state": "working", "word": "Thinking", "detail": "", "since": round(T0 + 23, 1)})
+        # a call the line never shows (a background command, a tool search) ends it too
+        for k, call in enumerate((lambda t: bash(t, "b1", "python3 $TAP listen --as Muddi", bg=True),
+                                  lambda t: tool(t, "ts", "ToolSearch", query="select:Monitor", max_results=1))):
+            t = T0 + 30 + 10 * k
+            self.write(SA, ended(t - 1), prompt(t, "scheduled"))
+            self.now = t + 0.5
+            self.assertEqual(self.word(), ("working", "Checking in"))
+            self.write(SA, call(t + 1))
+            self.now = t + 2
+            self.assertEqual(self.act(), {"state": "working", "word": "Thinking", "detail": "", "since": round(t + 1, 1)})
+        # and so does the turn's end
+        self.write(SA, ended(T0 + 49), prompt(T0 + 50, "scheduled"), ended(T0 + 51))
+        self.now, self.info["listen"] = T0 + 52, T0 + 50
+        self.assertEqual(self.word(), ("waiting", "Listening"))
 
     def test_what_woke_it(self):
         self.live()
@@ -355,7 +376,7 @@ class Tail(Rig):
         line = dump(bash(T0 - 5, "c1", "$MUDDI/muddi.sh fleet")).encode()
         self.raw(SA, line[:40])
         self.now = T0 - 4
-        self.assertEqual(self.word(), ("working", "Thinking"))
+        self.assertEqual(self.word(), ("working", "Reading your message"))     # no whole call yet: what woke it
         self.raw(SA, line[40:] + b"\n")
         self.assertEqual(self.word(), ("working", "Checking the masters"))
 
