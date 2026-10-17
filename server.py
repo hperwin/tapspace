@@ -569,32 +569,41 @@ def _agent_rows(allrows=None):
         # what the lead is doing right now, read from its own Claude session's transcript (activity.py)
         lead["activity"] = activity.of(
             lead["name"], agents[lead["name"]], lead["state"], CLAIMS, _proc_start,
-            waits=lambda: _waits_on_you([m for m in allrows if m.get("agent") == lead["name"]]),
+            waits=lambda: _waits_on_you([m for m in allrows if m.get("agent") == lead["name"]], TAPS["items"]),
             titles=lambda: {n: _title(i) for n, i in agents.items()}, taps=TAPS["items"])
         out = [lead] + [r for r in out if r is not lead and r["parent"] == lead["name"]] + \
               [r for r in out if r is not lead and r["parent"] != lead["name"]]
     return out
 
 
+def _newest_card(thread):
+    """The newest card row in one agent's thread, or None: the only card that can still wait on the reviewer."""
+    return next((r for r in reversed(thread) if r.get("role") == "master" and isinstance(r.get("card"), dict)), None)
+
+
 def _ask_open(thread):
-    """True when the newest card in this thread that asks something has no answer to its ask yet."""
-    asked = next((r["id"] for r in reversed(thread)
-                  if r.get("role") == "master" and (r.get("card") or {}).get("ask")), None)
-    return asked is not None and not any(r.get("role") == "you" and (r.get("answer") or {}).get("card") == asked
-                                         and "checks" in r["answer"] for r in thread)
+    """True when the newest card in this thread asks something and its ask has no answer yet. Like its images,
+    an older card's question is left behind once a newer card comes."""
+    row = _newest_card(thread)
+    return bool(row and row["card"].get("ask")) and not any(
+        r.get("role") == "you" and (r.get("answer") or {}).get("card") == row["id"] and "checks" in r["answer"]
+        for r in thread)
 
 
-def _waits_on_you(thread):
-    """True when a master's thread waits on the reviewer: its newest question is unanswered (_ask_open), or its
-    newest card still has an image without a verdict, or an Accept / Not quite nobody pressed yet."""
+def _waits_on_you(thread, taps=()):
+    """True when a master's thread waits on the reviewer: its newest card's question is unanswered (_ask_open),
+    or it still has an image without a verdict, or an Accept / Not quite nobody pressed while its tap is open
+    (taps: TAPS items; a tap accepted elsewhere, done or closed, settles it)."""
     if _ask_open(thread):
         return True
-    row = next((r for r in reversed(thread) if r.get("role") == "master" and isinstance(r.get("card"), dict)), None)
+    row = _newest_card(thread)
     if not row:
         return False
     said = [r["answer"] for r in thread if r.get("role") == "you" and (r.get("answer") or {}).get("card") == row["id"]]
     if row["card"].get("action"):
-        return not any("action" in a for a in said)          # the images are the action's picture
+        tap = next((t for t in taps if t.get("key") == row["card"]["action"].get("tap")), {})
+        return tap.get("phase") not in ("done", "closed") and \
+            not any("action" in a for a in said)             # the images are the action's picture
     return any(not any(a.get("image") == i for a in said) for i in range(len(row["card"].get("images") or [])))
 
 
@@ -619,7 +628,7 @@ def _fleet(rows, taps, chat):
             continue
         out.append({"key": "agent:" + r["name"], "kind": "master", "title": r["title"], "look": r["look"],
                     "state": r["state"], "done": done, "total": len(steps),
-                    "needs_you": _waits_on_you(threads.get(r["name"], [])),
+                    "needs_you": _waits_on_you(threads.get(r["name"], []), taps),
                     "working": r["state"] in ("thinking", "starting", "switching"),
                     "at": max(r["last"], pg.get("updated") or 0)})
     for t in taps:

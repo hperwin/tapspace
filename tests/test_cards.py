@@ -1102,6 +1102,42 @@ class FleetTests(Taps):
         self.assertFalse(w([acc, self.you("m", 1, 2, action="accept")]))
         self.assertTrue(w([acc, self.you("m", 1, 2, image=0, verdict="approve")]))       # the picture is the action's
 
+    def test_only_the_newest_card_asks_and_an_accept_settles_with_its_tap(self):
+        ask = {"q": "Q?", "checks": [{"id": "c1", "label": "A"}], "text": False}
+        w = S._waits_on_you
+        # a newer card leaves an older question behind, like its images (CONTRACT 18)
+        moved_on = [self.ask_card("m", 1, ask=ask), self.ask_card("m", 2)]
+        self.assertFalse(S._ask_open(moved_on))
+        self.assertFalse(w(moved_on))
+        self.assertTrue(w([self.ask_card("m", 1, ask=ask), self.you("m", 1, 2, checks=["c1"]), self.ask_card("m", 3, ask=ask)]))
+        self.assertFalse(w([self.ask_card("m", 1, ask=ask), self.ask_card("m", 3, ask=ask), self.you("m", 3, 4, checks=[])]))
+        # an Accept card is settled by its answer row, or once its tap is no longer open (accepted on its tap card or
+        # on GitHub, or closed)
+        acc = self.ask_card("m", 5, images=[{"label": "One"}], action={"kind": "tap_accept", "tap": TAP["key"]})
+        for phase, waits in (("landed", True), ("holding", True), ("done", False), ("closed", False)):
+            with self.subTest(phase=phase):
+                self.assertEqual(w([acc], [tap(TAP["key"], phase, TAP["last"])]), waits)
+        self.assertTrue(w([acc], [tap("hperwin/other-app#1", "done", TAP["last"])]))     # another tap says nothing
+        self.assertTrue(w([acc], []))                                                     # not served: still waits
+        # the fleet's needs_you reads the same rule
+        rows = [self.master("lead", "here", role="lead"), self.master("m", "here", last="19:40")]
+        f = lambda phase: next(x for x in S._fleet(rows, [tap(TAP["key"], phase, "2026-10-16T19:50:00Z")], [acc])
+                               if x["key"] == "agent:m")
+        self.assertTrue(f("landed")["needs_you"])
+        self.assertFalse(f("done")["needs_you"])
+
+    def test_the_leads_waiting_word_reads_the_same_rule(self):
+        lead = name("waitlead")
+        join(lead)
+        self.assertEqual(call("/api/agents/lead", {"name": lead})[0], 200)
+        sent(lead, {"line": "The lineup fix is ready to accept", "action": {"kind": "tap_accept", "tap": TAP["key"]}})
+        self.addCleanup(setattr, S.activity, "of", S.activity.of)
+        S.activity.of = lambda *a, waits, **k: {"waits": waits()}       # what the lead's activity is handed
+        S.TAPS["items"] = [dict(TAP, phase="landed", phase_word="Landed")]
+        self.assertEqual(row(lead)["activity"], {"waits": True})
+        S.TAPS["items"] = [dict(TAP, phase="done", phase_word="Done")]       # Hayden accepted it on its tap card
+        self.assertEqual(row(lead)["activity"], {"waits": False})
+
     def test_no_lead_no_fleet(self):
         self.assertEqual(S._fleet([self.master("m1", "thinking", 1, 3)], [tap("a/app#1", "holding", "2026-10-16T19:50:00Z")],
                                   []), [])
