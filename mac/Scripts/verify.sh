@@ -2,10 +2,12 @@
 # The Mac app's verification loop, on a scratch server and never on screen: build, seed real data,
 # let the two seeded masters exchange a message, check what the server serves, render every scene
 # and the link frames offscreen (the app must never come to the front or show a Dock icon), hold
-# the masters data the app decoded against the server's, then stop the server.
+# the masters data the app decoded against the server's, render the card frames (an update card
+# arriving in the lead's thread and answered) offscreen, then stop the server.
 #
 #   Scripts/verify.sh [port=4748] [out-dir] [demo-seconds=30]
 #   LINK=0 Scripts/verify.sh ...  skip the link frames and link.mp4
+#   CARD=0 Scripts/verify.sh ...  skip the card frames and card.mp4
 #   FPS=1 Scripts/verify.sh ...   also the --demo fps run, which shows a window and a second pill ON
 #                                 SCREEN and takes focus: only with the go of whoever uses this Mac
 set -euo pipefail
@@ -45,7 +47,7 @@ Scripts/seed.sh --link "$DATA" || true
 echo "==> What the server serves"
 SEEDED=0
 python3 - "$URL" "$OUT/served.json" <<'PY' || SEEDED=1
-import json, sys, urllib.request
+import json, sys, urllib.parse, urllib.request
 url, out = sys.argv[1:3]
 
 
@@ -55,18 +57,24 @@ def get(path):
 
 board, tickets = get("/api/agents"), get("/api/state")["tickets"]
 rows, links = board.get("agents") or [], board.get("links") or []
+lead = next((r for r in rows if r.get("role") == "lead"), None)
+chat = get("/api/chat?agent=" + urllib.parse.quote(lead["name"]))["messages"] if lead else []
 served = {"agents": len(rows),
           "with_progress": sum(1 for r in rows if r.get("progress")),
           "notes": sum(len(r.get("notes") or []) for r in rows),
           "links": len(links),
           "links_active": sum(1 for l in links if l.get("active")),
-          "owned_cards": sum(1 for t in tickets if t.get("owner"))}
+          "owned_cards": sum(1 for t in tickets if t.get("owner")),
+          "cards": sum(1 for m in chat if isinstance(m.get("card"), dict)),
+          "fleet": len(board.get("fleet") or []),
+          "looks": sum(1 for r in rows if isinstance(r.get("look"), int))}
 with open(out, "w") as fh:
     json.dump(served, fh, indent=1)
 print("    " + ", ".join(f"{k} {v}" for k, v in served.items()))
 # What seed.sh put there: two masters with goal cards, all five cards owned, two notes under
-# Expert takes v2 (an image card and a clip), one live link.
-seeded = {"agents": 2, "with_progress": 2, "notes": 2, "links_active": 1, "owned_cards": 5}
+# Expert takes v2 (an image card and a clip), one live link, two update cards in the lead's thread, a look
+# on each master.
+seeded = {"agents": 2, "with_progress": 2, "notes": 2, "links_active": 1, "owned_cards": 5, "cards": 2, "looks": 2}
 bad = [f"{k} {served[k]} (seeded {v})" for k, v in seeded.items() if served[k] != v]
 notes = [n for r in rows for n in r.get("notes") or []]
 if sorted(bool(n.get("thumb")) for n in notes) != [False, True]:
@@ -80,6 +88,10 @@ for n in notes:
             ok = False
         if not ok:
             bad.append(f"note thumb {n['thumb']} does not load as an image")
+# Hayden's seeded answer to the first card: its body is the server's, never the client's.
+answers = [m for m in chat if m.get("role") == "you" and isinstance(m.get("answer"), dict)]
+if not any(str(m.get("body", "")).startswith("Keep both going?") for m in answers):
+    bad.append("the seeded answer row's body is not the server's (it starts with the question)")
 if bad:
     sys.exit("    SEED CHECK FAILED: " + "; ".join(bad))
 PY
@@ -148,6 +160,23 @@ if [[ "${LINK:-1}" == "1" ]]; then
     fi
 fi
 
+CARDS=0
+if [[ "${CARD:-1}" == "1" ]]; then
+    echo "==> Card frames -> $OUT/card (offscreen), then card.mp4 at 30 fps"
+    rm -rf "$OUT/card"
+    offscreen "$OUT/card" "$OUT/card.log" TAPSPACE_CARD_FRAMES=1
+    CARDS=$RC
+    grep -E "^(CARD|SNAPSHOT)" "$OUT/card.log" | tail -8 || true
+    if [[ $CARDS -eq 0 && -f "$OUT/card/f000.png" ]]; then
+        ffmpeg -loglevel error -y -framerate 30 -i "$OUT/card/f%03d.png" -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2" \
+            -c:v libx264 -pix_fmt yuv420p "$OUT/card/card.mp4"
+        echo "    $OUT/card/card.mp4: $(ffprobe -v error -show_entries format=duration -of csv=p=0 "$OUT/card/card.mp4") s"
+    else
+        echo "    no card frames (exit $CARDS); see $OUT/card.log"
+        CARDS=1
+    fi
+fi
+
 if [[ "${FPS:-0}" == "1" ]]; then
     echo "==> --demo --fps for $SECS s (ON SCREEN)"
     Scripts/fps.sh "$URL" "$SECS" "$BIN"
@@ -156,4 +185,4 @@ fi
 echo
 echo "snapshots: $OUT/snapshots (exit $SNAP; scenes.json lists each scene and the masters data)"
 if [[ $SNAP -ne 0 ]]; then exit "$SNAP"; fi
-[[ $SEEDED -eq 0 && $MATCHED -eq 0 && $QUIET -eq 0 && $FRAMES -eq 0 ]] || exit 1
+[[ $SEEDED -eq 0 && $MATCHED -eq 0 && $QUIET -eq 0 && $FRAMES -eq 0 && $CARDS -eq 0 ]] || exit 1

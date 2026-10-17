@@ -8,6 +8,8 @@ import AppKit
 ///                     hierarchy (HarnessSnapshot), write scenes.json, exit
 ///   TAPSPACE_LINK_FRAMES=1 with --snapshot: link frames (HarnessLink)
 ///                     instead of the scenes
+///   TAPSPACE_CARD_FRAMES=1|live|checks with --snapshot: card frames
+///                     (HarnessCard): an update card arriving and answered
 ///   --demo            a scripted ~10 s loop that never stops (HarnessDemo):
 ///                     tabs, notes liquid, rail selection, a bubble flying in,
 ///                     the pill bulging, spreading and retracting
@@ -15,7 +17,9 @@ import AppKit
 ///                     harness also prints a summary every loop (HarnessFPS)
 ///
 /// Both modes run with `API.allowWrites == false`: nothing here can decide a
-/// card, post a chat or comment on a tap.
+/// card, post a chat or comment on a tap. The one exception is card frames'
+/// `live` round trip, which answers its cards on the scratch server it was
+/// pointed at (never the live one: ChatHarness.refusal).
 @MainActor
 enum Harness {
     static func run(flags: Flags, app: AppDelegate) {
@@ -24,6 +28,8 @@ enum Harness {
             let url = URL(fileURLWithPath: (dir as NSString).expandingTildeInPath)
             if HarnessLink.asked {
                 HarnessLink.run(app: app, dir: url)
+            } else if HarnessCard.asked {
+                HarnessCard.run(app: app, dir: url)
             } else {
                 HarnessSnapshot(app: app, dir: url).start()
             }

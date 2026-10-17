@@ -44,12 +44,23 @@ struct RailView: View {
     @State private var track = LiquidTrack(axis: .vertical, cornerRadius: 16, dropRadius: 12,
                                            anchorRadius: 22, squish: 0.06)
     @State private var frames: [String: CGRect] = [:]
+    /// Everything under the lead shown (the disclosure open). Remembered on this Mac; closed by default.
+    @AppStorage(RailView.openKey) private var fleetOpen = false
+    static let openKey = "railFleetOpen"
+    /// The strip under the lead: where the selection sits while the open thread is folded away.
+    static let fleetKey = "rail:fleet"
 
     var body: some View {
         let details = Dictionary(store.agents.map { ($0.key, RailDetail.of($0, store: store)) },
                                  uniquingKeysWith: { first, _ in first })
-        // The lead first, its children indented under it, then the rest (no lead: as served).
+        // The lead first, its children under it, then the rest (no lead: as served).
         let ordered = MuddiOrder.rows(store.agents)
+        // With a lead, every other master and every tap folds under it behind one disclosure (CONTRACT 5, 10).
+        let lead = MuddiOrder.lead(store.agents)
+        let open = lead == nil || fleetOpen
+        let rows = open ? ordered : ordered.filter { $0.agent.key == lead?.key }
+        let folded = MuddiOrder.folded(store.agents, taps: store.taps.items, open: fleetOpen)
+        let shown = Set(rows.map(\.agent.key) + (open ? store.taps.items.map(\.key) : []))
         ScrollView(.vertical) {
             VStack(alignment: .leading, spacing: 8) {
                 RailTools(store: store)
@@ -59,30 +70,43 @@ struct RailView: View {
                               ? "No agents in the space yet. Any agent joins with tap.py listen --as NAME."
                               : "Looking for agents…")
                 }
-                ForEach(Array(ordered.enumerated()), id: \.element.agent.key) { i, row in
+                ForEach(Array(rows.enumerated()), id: \.element.agent.key) { i, row in
                     let a = row.agent
                     // The lines under a master are siblings of its row, never inside it:
                     // the row's frame is what the liquid selection follows.
                     VStack(alignment: .leading, spacing: 0) {
                         RailRow(key: a.key, index: i, store: store, onFrame: { frames[a.key] = $0 }) {
-                            OrbView(state: a.state).frame(width: 38, height: 38)
+                            OrbView(state: a.state, look: a.look).frame(width: 38, height: 38)
                             RowText(title: a.title, sub: agentSub(a))
                         }
                         .modifier(SpinDownRow(key: a.key, title: a.title, store: store))
                         RailAgentDetail(detail: details[a.key] ?? RailDetail()) { store.open(a.key) }
+                        if a.key == lead?.key {
+                            ChatFleetStrip(fleet: store.fleet, lead: a.title, open: fleetOpen,
+                                           unread: folded.contains { store.isUnread($0) || store.hasNotes($0) },
+                                           store: store) { fleetOpen.toggle() }
+                                .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .named("rail")) }) { frames[Self.fleetKey] = $0 }
+                        }
                     }
-                    // A child of the lead moves in as one: row, Spin down, talk line, notes.
-                    .padding(.leading, row.child ? MuddiOrder.indent : 0)
+                    // Under the lead, every other master moves in as one: row, Spin down, talk line, notes.
+                    .padding(.leading, lead != nil && a.key != lead?.key ? MuddiOrder.indent : 0)
+                    .transition(RailNoteRow.exit)
                 }
-                RailHead(title: "Your taps")
-                if store.taps.items.isEmpty {
-                    RailEmpty(text: tapsEmptyText)
-                }
-                ForEach(Array(store.taps.items.enumerated()), id: \.element.key) { i, t in
-                    RailRow(key: t.key, index: store.agents.count + i, store: store, onFrame: { frames[t.key] = $0 }) {
-                        TapAvatar(status: t.status, working: t.replying == true, phase: t.tapPhase)
-                        RowText(title: t.name, sub: tapSub(t), dim: t.tapPhase == .closed)
+                if open {
+                    Group {
+                        RailHead(title: "Your taps")
+                        if store.taps.items.isEmpty {
+                            RailEmpty(text: tapsEmptyText)
+                        }
+                        ForEach(Array(store.taps.items.enumerated()), id: \.element.key) { i, t in
+                            RailRow(key: t.key, index: rows.count + i, store: store, onFrame: { frames[t.key] = $0 }) {
+                                TapAvatar(status: t.status, working: t.replying == true, phase: t.tapPhase, initial: t.initial)
+                                RowText(title: t.name, sub: tapSub(t), dim: t.tapPhase == .closed)
+                            }
+                            .transition(RailNoteRow.exit)
+                        }
                     }
+                    .padding(.leading, lead != nil ? MuddiOrder.indent : 0)
                 }
             }
             .padding(.horizontal, 6)
@@ -91,11 +115,18 @@ struct RailView: View {
             .coordinateSpace(.named("rail"))
             .background(alignment: .topLeading) { ChatRailLiquid(track: track) }
             // Agents re-sort by state (thinking first), move under the lead or out,
-            // and gain or shed the lines under them: rows glide, the body follows.
+            // and gain or shed the lines under them; the group folds and unfolds:
+            // rows glide, the body follows.
             .animation(.spring(response: 0.5, dampingFraction: 0.82),
-                       value: ordered.map { $0.agent.key + ($0.child ? ">" : "") + "|" + (details[$0.agent.key]?.sig ?? "") })
+                       value: rows.map { $0.agent.key + ($0.child ? ">" : "") + "|" + (details[$0.agent.key]?.sig ?? "") }
+                           + ["open:\(open)"])
         }
         .scrollIndicators(.never)
+        // A folded row leaves no frame behind for the selection to find.
+        .onChange(of: shown) { _, keys in
+            frames = frames.filter { keys.contains($0.key) || ($0.key == Self.fleetKey && lead != nil) }
+        }
+        .onChange(of: fleetOpen) { place(animated: true) }
         .onChange(of: frames) { place(animated: true) }
         // The pane builds the new thread in the update that changes it (layout
         // of every bubble, one long main-thread frame). The liquid starts on the
@@ -119,8 +150,11 @@ struct RailView: View {
         return s
     }
 
+    /// The selection sits on the open thread's row, or on the strip under the lead while that row is folded away.
     private func place(animated: Bool) {
-        guard let r = frames[store.thread], r.height > 0 else { track.hide(); return }
+        let t = store.thread
+        let hidden = MuddiOrder.folded(store.agents, taps: store.taps.items, open: fleetOpen).contains(t)
+        guard let r = frames[hidden ? Self.fleetKey : t], r.height > 0 else { track.hide(); return }
         track.move(to: r, animated: animated)
     }
 }
@@ -282,23 +316,33 @@ struct UnreadDot: View {
 /// Ring avatar per tap: spinning arc = flying, breathing blue = needs you,
 /// dotted slow spin = boarding, green check = landed. With a phase from the
 /// server the look comes from MuddiLook (landed: green ring, done: the check).
+/// The repo's letter sits in the centre until the check takes its place.
 struct TapAvatar: View {
     let status: String
     var working = false
     var size: CGFloat = 38
     /// nil (an older server, or the pill): the legacy look by `status`.
     var phase: TapPhase? = nil
+    /// The repo's letter (the server's `initial`); "" draws the ring alone.
+    var initial = ""
+    /// The ring holds still (a face inside an update card never loops).
+    var still = false
 
     var body: some View {
         let look = phase.map { MuddiLook($0, working: working) } ?? legacyLook
         ZStack {
             Circle().fill(look.fill)
-            RingView(style: look.ring, lineWidth: 2.2 * size / 38, track: NSColor.black.withAlphaComponent(0.06))
+            RingView(style: still ? look.ring.resting : look.ring, lineWidth: 2.2 * size / 38,
+                     track: NSColor.black.withAlphaComponent(0.06))
             Group {
                 if look.check {
                     Image(systemName: "checkmark")
                         .font(.system(size: 11 * size / 38, weight: .bold))
                         .transition(.symbolEffect(.drawOn))
+                } else if !initial.isEmpty {
+                    Text(verbatim: initial)
+                        .font(.system(size: 0.4 * size, weight: .bold))
+                        .transition(.opacity)
                 }
             }
             .foregroundStyle(look.glyph)
@@ -338,6 +382,8 @@ struct DisplayMessage: Identifiable, Equatable {
     /// Served paths (/chat-media/...) or, before upload, "local:<id>".
     var images: [String] = []
     var fly = false
+    /// An update card (agent threads): drawn by ChatCardView in place of the bubble.
+    var card: CardRow? = nil
 }
 
 /// Where the composer field sits in the pane, so a sent bubble can lift out
@@ -352,29 +398,52 @@ final class ChatGeometry {
 
 
 /// Bubble entrances: a new message springs in (blur + offset + scale); a
-/// message Hayden just sent flies up out of the composer.
+/// message Hayden just sent flies up out of the composer. An update card plays
+/// its beats when it springs in (CONTRACT 10), and so do the newest two Hayden
+/// had not seen when the thread opened: they wait out of sight while the open
+/// settles, then come in on their own (ChatCardView's `hold`).
 @MainActor
 final class BubbleAnimator {
     private var boxes: [String: SpringBox] = [:]
     private var known: Set<String> = []
     private var thread = ""
     private var loaded = false
+    /// The open thread's read mark from just before it opened.
+    private var openMark: Double = 0
+    /// The unseen cards that play once the thread's open settles.
+    private var opening: Set<String> = []
+    /// Rows that had their entrance this session: a card never plays at an open after that.
+    private var entered: Set<String> = []
     weak var geo: ChatGeometry?
+
+    /// How long a thread's open settles before its unseen cards come in (CONTRACT 12: 700 ms).
+    static let openHold = 0.7
 
     /// `loaded`: the thread's history has been fetched. The rows of that first
     /// fetch are history, not arrivals: they take their places without springing
     /// in, as on any later open (springing in, every laid-out row re-rendered on
-    /// every frame).
-    func sync(thread: String, loaded: Bool, keys: [String], fly: Set<String>) {
+    /// every frame). The exception is `cards` (key, time) newer than `mark()`,
+    /// the read mark from before the open, read once per thread switch: the
+    /// newest two of them play together after `openHold` when `plays`.
+    func sync(thread: String, loaded: Bool, keys: [String], fly: Set<String>,
+              cards: [(key: String, ts: Double)] = [], mark: () -> Double = { .infinity }, plays: Bool = false) {
+        if thread != self.thread { openMark = mark() }
         if thread != self.thread || !self.loaded {
             self.thread = thread
             self.loaded = loaded
             known = Set(keys)
             boxes.removeAll()
+            opening.removeAll()
+            guard loaded, plays else { return }
+            for k in Self.opening(cards, after: openMark) where !entered.contains(k) {
+                opening.insert(k)
+                entered.insert(k)
+            }
             return
         }
         for k in keys where !known.contains(k) {
             known.insert(k)
+            entered.insert(k)
             let flies = fly.contains(k)
             let b = SpringBox(0, flies ? .chatFly : .chatIn)
             boxes[k] = b
@@ -388,6 +457,15 @@ final class BubbleAnimator {
     }
 
     func box(_ k: String) -> SpringBox? { boxes[k] }
+
+    /// A card that plays once its thread's open settles (it arrives on its own, after `openHold`).
+    func opens(_ k: String) -> Bool { opening.contains(k) }
+
+    /// The cards that play when a thread opens (CONTRACT 10, 12): of the cards newer than the read mark from
+    /// before the open, the newest two (`cards` in thread order).
+    nonisolated static func opening(_ cards: [(key: String, ts: Double)], after mark: Double) -> [String] {
+        cards.filter { $0.ts > mark }.suffix(2).map(\.key)
+    }
 }
 
 /// The thread swap: header, goals and messages rise into place out of a
@@ -432,6 +510,12 @@ struct PaneView: View {
                     PaneHeader(agent: agent, tap: tap)
                         .modifier(SwapIn(box: swap, rise: 4))
                     Rectangle().fill(Color.hairline).frame(height: 1)
+                    // The lead's thread: what it is doing right now, live from its session (CONTRACT 7).
+                    if let agent, agent.isLead, let activity = agent.activity {
+                        LeadActivityStrip(activity: activity, look: agent.look)
+                            .modifier(SwapIn(box: swap, rise: 4))
+                        Rectangle().fill(Color.hairline).frame(height: 1)
+                    }
                     if let tap, !tap.goals.isEmpty, ProcessInfo.processInfo.environment["CHATEXP_NOGOALS"] == nil {
                         GoalsStrip(goals: tap.goals)
                             .modifier(SwapIn(box: swap, rise: 4))
@@ -459,6 +543,12 @@ struct PaneView: View {
         .overlay { DropOverlay(active: dropTarget && agent != nil) }
         .clipShape(shape)
         .background(shape.fill(.white).softShadow())
+        // Card frames (HarnessCard) crop to the pane; reported only when they are asked for.
+        .background {
+            if CardPose.asked {
+                Color.clear.onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { CardPose.shared.pane = $0 }
+            }
+        }
         .onDrop(of: [.fileURL, .image], isTargeted: $dropTarget) { draft.drop($0, store: store) }
         .onAppear { ChatHarness.startIfAsked(store: store) }
         .onChange(of: store.thread) {
@@ -482,7 +572,7 @@ struct PaneHeader: View {
     var body: some View {
         HStack(spacing: 12) {
             if let agent {
-                OrbView(state: agent.state).frame(width: 38, height: 38)
+                OrbView(state: agent.state, look: agent.look).frame(width: 38, height: 38)
                 VStack(alignment: .leading, spacing: 2) {
                     HeaderTitle(text: agent.title)
                     Text(agentSubtitle(agent))
@@ -494,7 +584,7 @@ struct PaneHeader: View {
                 Spacer(minLength: 8)
                 StatusChip(state: agent.state, label: agentLabel[agent.state, default: agent.state])
             } else if let tap {
-                TapAvatar(status: tap.status, working: tap.replying == true, phase: tap.tapPhase)
+                TapAvatar(status: tap.status, working: tap.replying == true, phase: tap.tapPhase, initial: tap.initial)
                 VStack(alignment: .leading, spacing: 2) {
                     HeaderTitle(text: tap.name)
                     HStack(spacing: 4) {
@@ -675,6 +765,9 @@ struct MessageList: View {
     /// The row that topped the list when "Show earlier messages" was pressed,
     /// until the one scroll back to it (onChange of the window) has run.
     @State private var keepTop: String?
+    /// The row at the end of the list at the last change (an update card arriving there scrolls to its top).
+    @State private var lastNewest = ""
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// Rows laid out: the newest 40, and 40 more per "Show earlier messages".
     static let page = 40
 
@@ -683,10 +776,14 @@ struct MessageList: View {
         var out: [DisplayMessage] = []
         if let agent {
             var present = Set<String>()
-            for m in store.chats[agent.name] ?? [] {
+            // The server's rows (and, under card frames only, the posed ones), each answer folded into its card.
+            let rows = (store.chats[agent.name] ?? []) + CardPose.shared.rows(for: agent.name)
+            let fold = CardFold(rows: rows, pending: CardAnswers.shared.pending(for: agent.name))
+            for m in rows where !fold.hides(m) {
                 let id = "\(key)#\(m.id)"
                 present.insert(id)
-                out.append(DisplayMessage(id: id, mine: m.role == "you", body: m.body, ts: m.ts, images: m.images))
+                let card = m.card.map { CardRow(card: $0, id: m.id, agent: m.agent, state: fold.state(m.id)) }
+                out.append(DisplayMessage(id: id, mine: m.role == "you", body: m.body, ts: m.ts, images: m.images, card: card))
             }
             // Sends with images, until their server row is in the thread.
             let outbox = ChatOutbox.shared
@@ -715,7 +812,9 @@ struct MessageList: View {
         // reply is in the thread the dots go, without waiting for the next
         // agents poll. A tap: it has seen (👀) his latest comment and not
         // answered yet, the server's `replying`.
-        let typing = agent.map { $0.state == "thinking" && msgs.last?.mine == true } ?? (tap?.chatReplying ?? false)
+        // An answer folded into a card is still his newest word: the dots show until the agent replies.
+        let typing = agent.map { a in a.state == "thinking" && (msgs.last?.mine == true || store.chats[a.name]?.last?.role == "you") }
+            ?? (tap?.chatReplying ?? false)
         // A server row that confirmed an optimistic bubble keeps that bubble's
         // key (one row, one identity, its flight state intact) and still flies:
         // on a local server the row lands within the first frames of the flight.
@@ -726,10 +825,18 @@ struct MessageList: View {
             if k != m.id { m.fly = true }
             return (m, k)
         }
-        let _ = animator.sync(thread: store.thread, loaded: agent.map { store.chats[$0.name] != nil } ?? true,
-                              keys: keys, fly: Set(rows.filter(\.0.fly).map(\.1)))
+        let thread = store.thread
+        // Loaded once its history is in: an agent's fetched rows, a tap's served comments. A thread whose row has
+        // not arrived yet is not loaded, so the history that comes with it later takes its place at rest.
+        let cards: [(key: String, ts: Double)] = rows.compactMap { m, k in m.card == nil ? nil : (key: k, ts: m.ts) }
+        let _ = animator.sync(thread: thread, loaded: agent.map { store.chats[$0.name] != nil } ?? (tap != nil),
+                              keys: keys, fly: Set(rows.filter(\.0.fly).map(\.1)), cards: cards,
+                              mark: { ThreadOpenMark.take(thread, store: store) },
+                              plays: !reduceMotion && store.isViewingCandidate)
+        // An answer landing on a card (or rolling back) changes the list too.
+        let answered: String = msgs.map { $0.card?.state.sig ?? "" }.joined(separator: ",")
         let sig = keys.joined(separator: ",") + "|\(typing)|" + msgs.map { $0.receipt.map { "\($0)" } ?? "" }.joined()
-            + "|" + msgs.map { "\($0.images.count)" }.joined()
+            + "|" + msgs.map { "\($0.images.count)" }.joined() + "|" + answered
         let limit = Self.page * (1 + earlier.count(in: store.thread))
         GeometryReader { box in
             let maxW = min(620, box.size.width * 0.82)
@@ -752,7 +859,7 @@ struct MessageList: View {
                             }
                         }
                         ForEach(ProcessInfo.processInfo.environment["CHATEXP_NOLIST"] == nil ? Array(rows.suffix(limit)) : [], id: \.1) { m, k in
-                            BubbleRow(m: m, box: animator.box(k), maxWidth: maxW, geo: geo)
+                            BubbleRow(m: m, box: animator.box(k), opens: animator.opens(k), maxWidth: maxW, geo: geo)
                                 .id(k)
                         }
                         // The dots' spring is scoped to the dots: on the list it would also
@@ -795,6 +902,10 @@ struct MessageList: View {
                 .onChange(of: sig, initial: true) {
                     let switched = lastThread != store.thread
                     lastThread = store.thread
+                    // A card that just arrived at the end: its top comes into view (a tall one would show only its end).
+                    let newest = rows.last?.1 ?? ""
+                    let card = newest != lastNewest && rows.last?.0.card != nil && animator.box(newest) != nil
+                    lastNewest = newest
                     // A thread opens on its newest page.
                     if switched { earlier = EarlierPages() }
                     if store.isViewingCandidate { store.markRead(store.thread) }
@@ -802,7 +913,9 @@ struct MessageList: View {
                     // A switched thread is a fresh scroll view already at its bottom.
                     guard !switched, nearBottom else { return }
                     DispatchQueue.main.async {
-                        withAnimation(.spring(response: 0.45, dampingFraction: 0.9)) { position.scrollTo(edge: .bottom) }
+                        withAnimation(.spring(response: 0.45, dampingFraction: 0.9)) {
+                            if card { reader.scrollTo(newest, anchor: .top) } else { position.scrollTo(edge: .bottom) }
+                        }
                     }
                 }
                 // "Show earlier messages" grew the window: the new page sits above, and
@@ -856,13 +969,24 @@ extension Store {
     /// The chat tab is up on this thread (window focus aside): reading counts.
     var isViewingCandidate: Bool { tab == .chat && windowKey }
 
-    /// An explicit open (rail row, note row, progress card): its replies and its
+    /// An explicit open (rail row, note row, progress card, fleet bead): its replies and its
     /// card notes are read. Notes are read only here and when one lands on screen.
     func open(_ key: String) {
+        if key != thread { ThreadOpenMark.keep(key, readAt(key)) }
         thread = key
         markRead(key)
         readNotes(key)
     }
+}
+
+/// The read mark a thread had just before `Store.open` read it: its update cards newer than that are the ones
+/// Hayden has not seen, and the newest two play when the thread opens (CONTRACT 10). A thread switched to directly
+/// (a launch flag, the harness) is still unread when its list first draws, so the store's own mark serves there.
+@MainActor
+enum ThreadOpenMark {
+    private static var marks: [String: Double] = [:]
+    static func keep(_ key: String, _ mark: Double) { marks[key] = mark }
+    static func take(_ key: String, store: Store) -> Double { marks.removeValue(forKey: key) ?? store.readAt(key) }
 }
 
 struct Hello: View {
@@ -903,6 +1027,8 @@ private let bubbleTail: CGFloat = 6
 struct BubbleRow: View {
     let m: DisplayMessage
     let box: SpringBox?
+    /// An unseen card at its thread's open (BubbleAnimator): it waits for the open to settle, then plays.
+    var opens = false
     let maxWidth: CGFloat
     var geo: ChatGeometry? = nil
     @State private var row: CGRect = .zero
@@ -919,11 +1045,19 @@ struct BubbleRow: View {
                                            style: .continuous)
         VStack(alignment: m.mine ? .trailing : .leading, spacing: 4) {
             VStack(alignment: m.mine ? .trailing : .leading, spacing: 6) {
-                if !m.images.isEmpty {
-                    ChatImageGrid(paths: m.images, mine: m.mine, maxWidth: maxWidth)
-                }
-                if !m.body.isEmpty || m.images.isEmpty {
-                    BubbleBody(m: m, ink: flying ? smoothstep(0.08, 0.6, p) : 1, shape: shape)
+                if let card = m.card {
+                    // Its own surface and beats (once per session, the card's own claim). Arriving, the row's
+                    // received-bubble entrance below is beat 0; at an open, it holds and then arrives on its own.
+                    ChatCardView(row: card, images: m.images, play: box != nil || opens,
+                                 width: min(maxWidth, ChatCardView.maxWidth), hold: opens ? BubbleAnimator.openHold : 0)
+                        .equatable()
+                } else {
+                    if !m.images.isEmpty {
+                        ChatImageGrid(paths: m.images, mine: m.mine, maxWidth: maxWidth)
+                    }
+                    if !m.body.isEmpty || m.images.isEmpty {
+                        BubbleBody(m: m, ink: flying ? smoothstep(0.08, 0.6, p) : 1, shape: shape)
+                    }
                 }
             }
             .onGeometryChange(for: CGSize.self, of: { $0.size }) { s in if m.fly { size = s } }
