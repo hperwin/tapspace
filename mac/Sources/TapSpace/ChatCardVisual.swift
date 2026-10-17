@@ -26,7 +26,7 @@ struct CardProgressBar: View {
     let beats: CardBeats
 
     var body: some View {
-        let f = CardLayout.fill(visual)
+        let f = visual.fill
         VStack(alignment: .leading, spacing: 7) {
             CardBar(box: beats.visual, from: f.from, to: f.to)
             CardVisualLabel(text: visual.label, count: "\(min(visual.done, visual.total)) of \(visual.total)")

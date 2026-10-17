@@ -16,6 +16,7 @@ struct CardImages: View {
     let decide: Bool
     let beats: CardBeats
     let still: Bool
+    let store: Store
 
     var body: some View {
         let cols = paths.count == 1 ? 1 : 2
@@ -25,7 +26,7 @@ struct CardImages: View {
                 HStack(alignment: .top, spacing: 10) {
                     ForEach(start..<min(paths.count, start + cols), id: \.self) { i in
                         CardImageCell(row: row, index: i, path: paths[i], width: side, single: cols == 1, hero: hero,
-                                      decide: decide, still: still)
+                                      decide: decide, still: still, store: store)
                             .modifier(CardIn(box: beats.images[i]))
                     }
                 }
@@ -44,6 +45,7 @@ struct CardImageCell: View {
     let hero: Bool
     let decide: Bool
     let still: Bool
+    let store: Store
     /// The Visual card's check, drawn on an Approve and cleared after its hold.
     @State private var check = SpringBox(0, .draw)
     @State private var veil = SpringBox(1, .smooth)
@@ -118,7 +120,7 @@ struct CardImageCell: View {
     private func approve() {
         let draft = CardDrafts.image(row.id, index)
         if draft.notesOpen { draft.toggleNotes() }
-        Task { await CardSend.answer(ChatAnswer(card: row.id, image: index, verdict: "approve"), to: row.agent) }
+        Task { await store.answer(ChatAnswer(card: row.id, image: index, verdict: "approve"), to: row.agent) }
     }
 
     /// Not quite's Send: it needs words (CONTRACT section 12).
@@ -130,7 +132,7 @@ struct CardImageCell: View {
         holdSent()
         Task {
             let a = ChatAnswer(card: row.id, image: index, verdict: "change", note: note)
-            if await CardSend.answer(a, to: row.agent) { draft.text = "" }
+            if await store.answer(a, to: row.agent) { draft.text = "" }
         }
     }
 
@@ -312,7 +314,7 @@ struct CardActionView: View {
 
     var body: some View {
         let title = CardFace.title(tap, info: row.card.faces[tap], store: store)
-        CardDecide(yes: busy ? "Accepting…" : "Accept", busy: busy, draft: CardActionDrafts.of(row.id), said: said,
+        CardDecide(yes: busy ? "Accepting…" : "Accept", busy: busy, draft: CardDrafts.action(row.id), said: said,
                    width: width + 24, still: still, onYes: { asking = true }, onSend: deny)
             .padding(.horizontal, -12)
             .alert(title.isEmpty ? "Accept it?" : "Accept \(title)?", isPresented: $asking) {
@@ -335,18 +337,18 @@ struct CardActionView: View {
     }
 
     private func accept() {
-        let draft = CardActionDrafts.of(row.id)
+        let draft = CardDrafts.action(row.id)
         if draft.notesOpen { draft.toggleNotes() }
         busy = true
         Task {
-            if await CardSend.accept(tap: tap, card: row.id, store: store) { CardAccepts.mark(row.id) }
+            if await store.accept(tap: tap, card: row.id) { CardAccepts.mark(row.id) }
             busy = false
         }
     }
 
     /// Not quite's Send: it needs words (CONTRACT section 12).
     private func deny() {
-        let draft = CardActionDrafts.of(row.id)
+        let draft = CardDrafts.action(row.id)
         let note = draft.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !note.isEmpty else { return }
         draft.toggleNotes()
@@ -356,23 +358,10 @@ struct CardActionView: View {
             sentHold = false
         }
         Task {
-            if await CardSend.answer(ChatAnswer(card: row.id, note: note, action: "deny"), to: row.agent, store: store) {
+            if await store.answer(ChatAnswer(card: row.id, note: note, action: "deny"), to: row.agent) {
                 draft.text = ""
             }
         }
-    }
-}
-
-/// The note field's draft for a card's action, kept per card for the app's life (a thread switch keeps it).
-@MainActor
-enum CardActionDrafts {
-    private static var all: [Int: CardImageDraft] = [:]
-
-    static func of(_ card: Int) -> CardImageDraft {
-        if let d = all[card] { return d }
-        let d = CardImageDraft()
-        all[card] = d
-        return d
     }
 }
 

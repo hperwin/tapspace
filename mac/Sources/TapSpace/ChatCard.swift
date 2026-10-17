@@ -49,7 +49,7 @@ struct ChatCardView: View, Equatable {
             if !layout.rows.isEmpty { CardItemRows(card: c, layout: layout, beats: beats, still: still, store: store) }
             if layout.images > 0 {
                 CardImages(row: row, paths: Array(images.prefix(layout.images)), width: inner, hero: layout.hero,
-                           decide: layout.action == nil, beats: beats, still: still)
+                           decide: layout.action == nil, beats: beats, still: still, store: store)
             }
             if let a = layout.action {
                 // The one Accept / Not quite pair, under the pictures, arriving right after the last of them.
@@ -57,7 +57,7 @@ struct ChatCardView: View, Equatable {
                     .modifier(CardIn(box: beats.images[layout.images]))
             }
             if let ask = c.ask {
-                CardAskView(row: row, ask: ask, still: still)
+                CardAskView(row: row, ask: ask, still: still, store: store)
                     .modifier(CardArrive(box: beats.ask))
             }
         }
@@ -170,22 +170,9 @@ struct CardLayout {
         }
     }
 
-    /// An item moved since the thread's previous card (P7's rule, plus a master's state alone: CONTRACT section 12).
-    /// Projects never move.
-    static func moved(_ it: CardItem) -> Bool {
-        guard let w = it.was, it.kind != "project" else { return false }
-        if CardMotion.moved(wasPhase: w.phase, phase: it.phase, wasGoals: w.goals.isEmpty ? nil : w.goals, goals: it.goals,
-                            wasCurrent: w.current, current: it.progress?.current) { return true }
-        if let s = w.state, s != it.state { return true }
-        return false
-    }
-
-    /// A progress visual's fill, where it starts (the previous card's) and ends, 0...1.
-    static func fill(_ v: CardVisual) -> (from: Double, to: Double) {
-        guard v.total > 0 else { return (0, 0) }
-        let t = Double(v.total)
-        return (clamp01(Double(v.from ?? 0) / t), clamp01(Double(v.done) / t))
-    }
+    /// An item moved since the thread's previous card (CardItem.changed, a master's state alone included: CONTRACT
+    /// section 12). Projects never move.
+    static func moved(_ it: CardItem) -> Bool { it.kind != "project" && it.changed }
 
     /// A title as Hayden reads it: "[tap] Fix the thing" -> "Fix the thing" (Tap.name's rule).
     static func plain(_ s: String) -> String {
@@ -267,8 +254,9 @@ struct CardLine: View {
     }
 }
 
-/// A face inside a card: the chat's one resolver (FaceView). `state` and `phase` pin it to the card's snapshot (a
-/// change beat); nil shows the store's live face, or the snapshot's for a key the store no longer holds.
+/// A face inside a card: the chat's one resolver (FaceView), holding still (nothing loops in a card, P7). `state`
+/// and `phase` pin it to the card's snapshot (a change beat); nil shows the store's live face, or the snapshot's
+/// for a key the store no longer holds.
 struct CardFace: View {
     let key: String
     let size: CGFloat
@@ -278,10 +266,8 @@ struct CardFace: View {
     var store: Store = .shared
 
     var body: some View {
-        FaceView(key: key, size: size, info: info,
-                 state: state ?? (store.agent(key) == nil ? info?.state : nil),
-                 phase: phase ?? (store.tap(key) == nil ? info?.phase.flatMap(TapPhase.init(rawValue:)) : nil),
-                 store: store)
+        FaceView(key: key, size: size, info: info, state: state ?? (store.agent(key) == nil ? info?.state : nil),
+                 phase: phase, animated: false, store: store)
     }
 
     /// What Hayden calls a face key: the store's live title, else the card's snapshot, else a project's name; ""
@@ -325,21 +311,5 @@ struct CardFaceStack: View {
             }
         }
         .accessibilityHidden(true)
-    }
-}
-
-// MARK: - Answers
-
-/// The one way a card's buttons reach TapSpace: an answer row (POST /api/chat, shown at once and rolled back on a
-/// refusal) or the card's Accept (the tap's guarded accept route with this card's id).
-@MainActor
-enum CardSend {
-    @discardableResult
-    static func answer(_ a: ChatAnswer, to agent: String, store: Store? = nil) async -> Bool {
-        await CardAnswers.shared.send(a, to: agent, store: store ?? .shared)
-    }
-
-    static func accept(tap key: String, card: Int, store: Store) async -> Bool {
-        await store.accept(tap: key, card: card)
     }
 }

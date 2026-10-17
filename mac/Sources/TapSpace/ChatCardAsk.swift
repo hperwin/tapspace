@@ -9,6 +9,7 @@ struct CardAskView: View {
     let row: CardRow
     let ask: CardAsk
     let still: Bool
+    let store: Store
     @State private var sentHold = false
 
     var body: some View {
@@ -77,7 +78,7 @@ struct CardAskView: View {
             sentHold = false
         }
         Task {
-            if await CardSend.answer(a, to: row.agent) {
+            if await store.answer(a, to: row.agent) {
                 draft.ticks = []
                 draft.text = ""
             }
