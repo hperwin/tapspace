@@ -196,6 +196,23 @@ elif a[:2] not in (["issue", "close"], ["issue", "edit"]):
     sys.exit("fake gh: unexpected call " + " ".join(a))
 ''' % sys.executable
 
+GH_SAY = '''#!%s
+"""Fake gh for the say route: hperwin's tap, each comment the next url; records every call; never reaches GitHub."""
+import json, os, sys
+a = sys.argv[1:]
+log = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gh-argv.jsonl")
+with open(log, "a") as f:
+    f.write(json.dumps(a) + "\\n")
+if a[:2] == ["issue", "view"]:
+    print(json.dumps({"author": {"login": "hperwin"}, "labels": [{"name": "flightdeck"}]}))
+elif a[:2] == ["issue", "comment"]:
+    print("https://github.com/hperwin/fixture-say/issues/9#issuecomment-%%d" %% sum(1 for _ in open(log)))
+elif a[:2] == ["api", "user"]:
+    print("hperwin")
+else:
+    sys.exit("fake gh: unexpected call " + " ".join(a))
+''' % sys.executable
+
 
 class Taps(unittest.TestCase):
     """One landed tap of the reviewer's is served (TAP), its proof images come from a fake _proof_image, pushes
@@ -1099,23 +1116,35 @@ class FleetTests(Taps):
 
 
 class FocusTests(Taps):
-    """focus: the thread the reviewer's newest own message went to (CONTRACT section 6)."""
+    """focus: the thread the reviewer's newest own message went to (CONTRACT section 6). A tap comment counts only
+    when he sent it through TapSpace (the say route records it); an agent's own gh comment never does (section 18)."""
 
     def iso(self, ts):
         return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts))
+
+    def his(self, ts):
+        """A tap comment the reviewer sent through TapSpace, as _tap serves it, recorded the way the say route does."""
+        url = f"{TAP['url']}#issuecomment-{uuid.uuid4().int % 10 ** 9}"
+        with S._lock:
+            S.SAID.write_text(json.dumps({**S._said(), url: time.time()}))
+        return {"who": "you", "ts": self.iso(ts), "via": "", "body": "go", "url": url}
 
     def test_the_newest_own_message_names_the_thread(self):
         t0 = S._epoch("2026-10-16T19:00:00Z")
         chat = [{"id": 1, "agent": "A", "role": "you", "ts": t0 + 10}, {"id": 2, "agent": "B", "role": "master", "ts": t0 + 50},
                 {"id": 3, "agent": "B", "role": "you", "ts": t0 + 20}, {"id": 4, "agent": "C", "role": "system", "ts": t0 + 90}]
-        msg = lambda who, ts, via="": {"who": who, "ts": self.iso(ts), "via": via, "body": "b"}
-        self.assertEqual(S._focus(chat, []), "agent:B")
+        msg = lambda who, ts, via="": {"who": who, "ts": self.iso(ts), "via": via, "body": "b",
+                                       "url": f"{TAP['url']}#issuecomment-{int(ts)}"}
+        said = {msg("you", t0 + 30)["url"], msg("you", t0 + 15)["url"]}           # what the say route recorded
+        self.assertEqual(S._focus(chat, [], said), "agent:B")
         t = dict(TAP, messages=[msg("you", t0 + 30), msg("tap", t0 + 80), msg("you", t0 + 70, via="Muddi")])
-        self.assertEqual(S._focus(chat, [t]), TAP["key"])
-        self.assertEqual(S._focus(chat, [dict(TAP, messages=[msg("you", t0 + 15)])]), "agent:B")
-        self.assertEqual(S._focus(chat[:1], []), "agent:A")
-        self.assertIsNone(S._focus([], [dict(TAP, messages=[msg("tap", t0)])]))
-        self.assertIsNone(S._focus([chat[1], chat[3]], []))
+        self.assertEqual(S._focus(chat, [t], said), TAP["key"])
+        self.assertEqual(S._focus(chat, [dict(TAP, messages=[msg("you", t0 + 15)])], said), "agent:B")
+        self.assertEqual(S._focus(chat[:1], [], said), "agent:A")
+        self.assertIsNone(S._focus([], [dict(TAP, messages=[msg("tap", t0)])], said))
+        self.assertIsNone(S._focus([chat[1], chat[3]], [], said))
+        # an agent's own gh comment is signed in as him too, but no TapSpace surface sent it: never the focus
+        self.assertEqual(S._focus(chat, [dict(TAP, messages=[msg("you", t0 + 95)])], said), "agent:B")
 
     def test_served_and_it_moves_with_each_message(self):
         a, b = name("focusa"), name("focusb")
@@ -1127,7 +1156,7 @@ class FocusTests(Taps):
         self.assertEqual(call("/api/agents")[1]["focus"], "agent:" + a)            # a card is not his message
         answer(b, {"card": c["id"], "image": 0, "verdict": "approve"})
         self.assertEqual(call("/api/agents")[1]["focus"], "agent:" + b)            # an answer is
-        S.TAPS["items"] = [dict(TAP, messages=[{"who": "you", "ts": self.iso(time.time() + 60), "via": "", "body": "go"}])]
+        S.TAPS["items"] = [dict(TAP, messages=[self.his(time.time() + 60)])]
         self.assertEqual(call("/api/agents")[1]["focus"], TAP["key"])
 
     def test_a_tap_comment_that_moves_focus_wakes_agents(self):
@@ -1139,13 +1168,46 @@ class FocusTests(Taps):
             if "agents" not in r["changed"]:
                 break
         # no write, no bump: only the watch's signature (focus) can notice this
-        S.TAPS["items"] = [dict(TAP, messages=[{"who": "you", "ts": self.iso(time.time() + 3600), "via": "", "body": "go"}])]
+        S.TAPS["items"] = [dict(TAP, messages=[self.his(time.time() + 3600)])]
         seen, deadline = set(), time.time() + 5
         while "agents" not in seen and time.time() < deadline:
             r = call(f"/api/wait?since={cur}&timeout=3")[1]
             seen.update(r["changed"])
             cur = r["cursor"]
         self.assertIn("agents", seen)
+
+    def test_his_say_moves_focus_and_an_agents_own_comment_never_does(self):
+        shim = pathlib.Path(TMP.name) / "gh-say"
+        shim.mkdir(exist_ok=True)
+        (shim / "gh").write_text(GH_SAY)
+        (shim / "gh").chmod(0o755)
+        S.GH = str(shim / "gh")
+        key = "hperwin/fixture-say#9"
+        self.addCleanup(S.HOT.pop, key, None)
+        code, r = call("/api/taps/say", {"key": key, "body": "Ship the lineup first"})     # a TapSpace surface
+        self.assertEqual(code, 200, r)
+        his = r["url"]
+        code, r = call("/api/taps/say", {"key": key, "body": "On it", "via": "Muddi"})     # tap.py tap-say
+        self.assertEqual(code, 200, r)
+        for_him = r["url"]
+        self.assertIn(his, S._said())
+        self.assertNotIn(for_him, S._said())
+        self.assertEqual(S._via()[for_him], "Muddi")
+        # the tap as _tap serves it: his comment, Muddi's tap-say, then Muddi's own gh comment, signed in as him too
+        t0 = float(int(time.time()))                       # whole seconds, like GitHub's createdAt
+        said = [("Ship the lineup first", his), ("On it", for_him),
+                ("Accepted: all three goals", "https://github.com/hperwin/fixture-say/issues/9#issuecomment-999")]
+        iss = {"author": {"login": "hperwin"}, "title": "A tap", "body": "- [ ] it works", "labels": [{"name": "flightdeck"}],
+               "state": "OPEN", "url": "https://github.com/hperwin/fixture-say/issues/9", "createdAt": self.iso(t0 - 600),
+               "closedAt": None, "stateReason": None,
+               "comments": [{"author": {"login": "hperwin"}, "body": b, "createdAt": self.iso(t0 + k), "url": u}
+                            for k, (b, u) in enumerate(said, 1)]}
+        item = S._tap("hperwin/fixture-say", 9, iss)
+        self.assertEqual([(m["who"], m["via"]) for m in item["messages"]], [("you", ""), ("you", "Muddi"), ("you", "")])
+        self.assertEqual(S._focus([{"id": 1, "agent": "Muddi", "role": "you", "ts": t0}], [item]), key)
+        # Muddi's thread stays the focus while Muddi talks on the tap (its tap-say at +2 s, its own comment at +3 s)
+        self.assertEqual(S._focus([{"id": 1, "agent": "Muddi", "role": "you", "ts": t0 + 1.5}], [item]), "agent:Muddi")
+        self.assertIsNone(S._focus([], [dict(item, messages=item["messages"][1:])]))
 
 
 if __name__ == "__main__":

@@ -510,17 +510,20 @@ def _title(info):
     return "Claude"
 
 
-def _focus(allrows, taps):
+def _focus(allrows, taps, said=None):
     """The thread the reviewer is talking in: the one his newest own message went to, a chat row of his
-    (agent:NAME) or a comment of his on a tap that no agent sent for him (that tap's key); None when he never
-    wrote. Clients never badge the focus. allrows: every chat row; taps: TAPS items."""
+    (agent:NAME) or a comment he sent on a tap through TapSpace himself (that tap's key); None when he never
+    wrote. An agent's own gh comment is signed in as him too, so a tap comment counts only when the say route
+    recorded it (said: tap-said.json's urls, read when None). Clients never badge the focus. allrows: every chat
+    row; taps: TAPS items."""
+    said = _said() if said is None else said
     best, key = None, None
     for r in allrows:
         if r.get("role") == "you" and (best is None or r.get("ts", 0) >= best):
             best, key = r.get("ts", 0), "agent:" + r["agent"]
     for t in taps:
         for m in t.get("messages") or []:
-            if m.get("who") == "you" and not m.get("via") and (best is None or _epoch(m["ts"]) > best):
+            if m.get("who") == "you" and m.get("url") in said and (best is None or _epoch(m["ts"]) > best):
                 best, key = _epoch(m["ts"]), t["key"]
     return key
 
@@ -1778,11 +1781,19 @@ TAP_HOT_EVERY = 6
 _UNLISTED = {}              # tap key -> when it was first kept although GitHub search did not list it yet
 TAP_SEARCH_LAG = 15 * 60    # how long such a tap is kept without the search listing it
 VIA = DATA / "tap-via.json"  # comment url -> the agent that sent it for the reviewer
+SAID = DATA / "tap-said.json"  # comment url -> when the reviewer sent it himself through TapSpace (say with no via)
 
 
 def _via():
     try:
         return json.loads(VIA.read_text())
+    except Exception:
+        return {}
+
+
+def _said():
+    try:
+        return json.loads(SAID.read_text())
     except Exception:
         return {}
 
@@ -2818,11 +2829,15 @@ class H(BaseHTTPRequestHandler):
             except Exception as e:
                 self._json({"error": str(e)}, 502)
                 return
-            if via:
-                with _lock:
+            with _lock:
+                if via:
                     v = _via()
                     v[url] = via
                     VIA.write_text(json.dumps(v, indent=1))
+                else:       # his own words from a TapSpace surface: the only tap comments that move focus (_focus)
+                    s = _said()
+                    s[url] = time.time()
+                    SAID.write_text(json.dumps(s, indent=1))
             _inbox({"kind": "tapspace-tap-say", "tap": key, "message": body, "url": url,
                     "via": via})
             _hot(key, 0.15)
