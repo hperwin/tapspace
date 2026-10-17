@@ -322,6 +322,24 @@ class AcceptShowsTheProof(unittest.TestCase):
         self.assertEqual(self.posts("/api/chat/reply")[-1]["images"], [])
         self.assertEqual(self.calls(), [("POST", "/api/chat/reply")])
 
+    def test_accept_alone_sends_the_newest_four_proof_images(self):
+        def proofs(n):
+            Stub.answers["/api/taps"] = (200, {"fetched": 1.0, "items": [
+                {"key": "hperwin/x#7", "proof": [{"url": f"u{i}", "alt": f"shot {i}"} for i in range(n)]}]})
+        proofs(16)                             # paid-media-mcp#29 had 16: all of them was over the card's 10
+        r, card = self.card("The ads are ready. Accept them?", "--item", "x#7|Ads", "--accept", "x#7")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.posts("/api/chat/reply")[-1]["images"],
+                         [{"proof": {"key": "hperwin/x#7", "i": i}} for i in (12, 13, 14, 15)])
+        self.assertNotIn("images", card)
+        for n, want in [(5, [1, 2, 3, 4]), (4, [0, 1, 2, 3]), (1, [0])]:
+            proofs(n)
+            self.card("Line", "--accept", "x#7")
+            self.assertEqual([x["proof"]["i"] for x in self.posts("/api/chat/reply")[-1]["images"]], want)
+        proofs(16)
+        self.card("Line", "--accept", "x#7", "--proof", "x#7")             # a --proof KEY still means all of them
+        self.assertEqual(len(self.posts("/api/chat/reply")[-1]["images"]), 16)
+
 
 if __name__ == "__main__":
     unittest.main()
