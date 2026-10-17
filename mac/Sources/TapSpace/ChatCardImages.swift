@@ -328,7 +328,10 @@ struct CardActionView: View {
     private var said: CardSaid? {
         let fresh = CardAccepts.fresh(row.id, now: Date().timeIntervalSince1970)
         guard let v = row.state.action else {
-            return fresh ? CardSaid(word: "Accepted", color: .up, note: "It shows as Done in a moment.") : nil
+            if fresh { return CardSaid(word: "Accepted", color: .up, note: "It shows as Done in a moment.") }
+            // Accepted somewhere else (its tap card, another client): once the tap is Done the card says so too, in
+            // place of its buttons (CONTRACT 18, Glint's rule).
+            return store.tap(tap)?.tapPhase == .done ? CardSaid(word: "Accepted", color: .up) : nil
         }
         if v.approve {
             // An Accept on its way keeps its button ("Accepting…"), as the tap card's does: it closes the tap on
