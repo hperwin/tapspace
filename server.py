@@ -1347,14 +1347,17 @@ def _answer(raw, card_row):
 
 
 def _action_title(card):
-    """The title of the tap a card's Accept is for, as the card showed it."""
-    return ((card.get("faces") or {}).get(card["action"]["tap"]) or {}).get("title") or "the tap"
+    """The tap a card's Accept is for, as the card named it: the short name of the card's item for that tap when
+    it has one, else the tap's title in the card's faces."""
+    tap = card["action"]["tap"]
+    names = [str(it.get("name") or "").strip() for it in card.get("items") or [] if it.get("ref") == tap]
+    return next(filter(None, names), "") or ((card.get("faces") or {}).get(tap) or {}).get("title") or "the tap"
 
 
 def _answer_line(a, card):
     """An answer row's body, one line: "Approved: <label>", "Not quite: <label>: <note>" (no note: just the label),
-    "Accepted: <tap title>", "Not quite: <tap title>: <note>", or "<q> <ticked labels>. <text>" ("(no boxes
-    ticked)" when the card has boxes and none is ticked)."""
+    "Accepted: <tap>", "Not quite: <tap>: <note>" (the tap as _action_title names it), or "<q> <ticked labels>.
+    <text>" ("(no boxes ticked)" when the card has boxes and none is ticked)."""
     if "action" in a:
         title = _cut_words(_action_title(card))            # a long tap title would bury the note
         if a["action"] == "accept":

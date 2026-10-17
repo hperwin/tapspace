@@ -434,6 +434,22 @@ class AnswerRuleTests(unittest.TestCase):
         self.assertEqual(self.both({"card": 541, "action": "deny"}, ACCEPT_ROW)[1], f"Not quite: {TAP_TITLE}")
         self.assertEqual(S._answer_line({"card": 541, "action": "accept"}, ACCEPT_ROW["card"]), f"Accepted: {TAP_TITLE}")
 
+    def test_the_accept_names_its_tap_by_the_cards_short_name(self):
+        def lines(items, title=TAP_TITLE):
+            c = {**ACCEPT_ROW["card"], "items": items,
+                 "faces": {**STORED["faces"], TAP["key"]: {**STORED["faces"][TAP["key"]], "title": title}}}
+            return (S._answer_line({"card": 541, "action": "deny", "note": "the score\nis small"}, c),
+                    S._answer_line({"card": 541, "action": "accept"}, c))
+        named = {"ref": TAP["key"], "kind": "tap", "title": TAP_TITLE, "name": "Beta look", "note": "Ready"}
+        self.assertEqual(lines([{"ref": "agent:Muddi", "name": "Lead"}, named]),
+                         ("Not quite: Beta look: the score / is small", "Accepted: Beta look"))
+        long = "Simulator screenshots of Snapp show the app the way beta testers see it"
+        for items in ([], [{**named, "name": "  "}], [{k: v for k, v in named.items() if k != "name"}],
+                      [{**named, "ref": "hperwin/other#2"}]):       # no item, a blank name, no name, another tap's
+            with self.subTest(items=items):
+                self.assertEqual(lines(items, long), ("Not quite: Simulator screenshots of Snapp show...: the score "
+                                                      "/ is small", "Accepted: Simulator screenshots of Snapp show..."))
+
     def test_refusals(self):
         text_only = {**CARD_ROW, "card": {**STORED, "ask": {"q": "Anything else?", "checks": [], "text": True}}}
         no_box = {**CARD_ROW, "card": {**STORED, "ask": {"q": "Pick one", "checks": [{"id": "c1", "label": "A"}],
@@ -835,6 +851,15 @@ class AnswerApiTests(Taps):
                                              "line": "The lineup fix is ready to accept", "tap": TAP["key"]})
         self.assertFalse(self.gh_log.exists())
 
+    def test_not_quite_names_the_tap_as_the_card_does(self):
+        a = name("denyname")
+        join(a)
+        c = sent(a, {"line": "The beta look is ready. Accept it?", "items": [{"ref": "fixture-app#7", "name": "Beta look"}],
+                     "action": {"kind": "tap_accept", "tap": TAP["key"]}}, images=[{"proof": {"key": TAP["key"], "i": 0}}])
+        code, r = answer(a, {"card": c["id"], "action": "deny", "note": "Not yet, the score is small"})
+        self.assertEqual((code, r["message"]["body"]), (200, "Not quite: Beta look: Not yet, the score is small"))
+        self.assertEqual(join(a)[1]["pending"][-1]["body"], "Not quite: Beta look: Not yet, the score is small")
+
 
 class AcceptFromCardTests(Taps):
     """POST /api/taps/accept {key, card}: the same caller check as today, the card checked before gh is called,
@@ -896,6 +921,16 @@ class AcceptFromCardTests(Taps):
         code, r = self.press({"key": TAP["key"], "card": c["id"]}, headers={"Origin": BASE})   # pressed again
         self.assertEqual((code, r["message"]["id"]), (200, m["id"]))
         self.assertEqual(sum(1 for x in thread(a) if (x.get("answer") or {}).get("action") == "accept"), 1)
+
+    def test_accept_names_the_tap_as_the_card_does(self):
+        a = name("acceptname")
+        join(a)
+        c = sent(a, {"line": "The lineup fix is ready. Accept it?", "items": [{"ref": TAP["key"], "name": "Lineup cards"}],
+                     "action": {"kind": "tap_accept", "tap": TAP["key"]}}, images=[{"proof": {"key": TAP["key"], "i": 0}}])
+        self.peer("/Applications/TapSpace.app/Contents/MacOS/TapSpace")
+        code, r = self.press({"key": TAP["key"], "card": c["id"]})
+        self.assertEqual((code, r["message"]["body"]), (200, "Accepted: Lineup cards"))
+        self.assertEqual([e["message"] for e in self.new_inbox() if e["kind"] == "tapspace-chat"], ["Accepted: Lineup cards"])
 
     def test_an_agent_caller_is_refused_and_the_card_is_not_answered(self):
         a = name("agentcall")
