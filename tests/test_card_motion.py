@@ -113,5 +113,69 @@ class BeatTableTests(unittest.TestCase):
         self.assertEqual(js(f"{json.dumps(cases)}.map(cardMoved)"), [True, False, True, True, False, False, False])
 
 
+@unittest.skipUnless(NODE, "node is not installed")
+class FirstViewTests(unittest.TestCase):
+    """Contract 10 and 18: the page's own cardsOnScreen and showCards over a stubbed thread. A live arrival plays on a
+    visible page, focused or not; a hidden page or another tab plays nothing and sees nothing until it shows; a card seen
+    at rest never plays later; an open plays only the newest two of its unread cards, after the settle."""
+    SHOW = PAGE[PAGE.index("const CARD_SETTLE = "):PAGE.index("function beginCard(")]
+
+    def run_steps(self, focused, steps):
+        # steps: [action, arg]: ['open'|'show', null] calls showCards(true|false); ['card', [rid, ts, live]] adds a card
+        # to the thread (live: it arrived by a poll); ['live', rid] marks one live; ['page', {vis, chat}] changes the
+        # page; ['settle', null] runs the held timers
+        code = f"""(() => {{
+const page = {{vis: 'visible', chat: true}}, out = [];
+const document = {{body: {{classList: {{contains: c => c === 'chatmode' && page.chat}}}},
+  get visibilityState(){{ return page.vis; }}, hasFocus: () => {json.dumps(focused)}}};
+const tms = ts => ts * 1000, cardMsgs = new Map(), cardSeen = new Set(), cardLive = new Set(), msgsEl = {{children: []}};
+const current = 'agent:M', openMark = {{key: 'agent:M', at: 5000}}, timers = [];
+const setTimeout = (fn, ms) => timers.push([fn, ms]);
+const beginCard = (el, m) => out.push(['play', m.rid, el.wait]);
+{self.SHOW}
+for (const [act, arg] of {json.dumps(steps)}){{
+  if (act === 'card'){{ const [rid, ts, live] = arg, el = {{dataset: {{id: 'm' + rid}}, isConnected: true, wait: false}};
+    el.classList = {{contains: c => c === 'ucard', add: c => {{ if (c === 'wait') el.wait = true; }}}};
+    cardMsgs.set('m' + rid, {{rid, ts}}); if (live) cardLive.add(rid); msgsEl.children.push(el); }}
+  else if (act === 'live') cardLive.add(arg);
+  else if (act === 'page') Object.assign(page, arg);
+  else if (act === 'settle') timers.splice(0).forEach(([fn, ms]) => {{ out.push(['settle', ms]); fn(); }});
+  else showCards(act === 'open');
+}}
+out.push(['seen', [...cardSeen].sort((a, b) => a - b)]);
+process.stdout.write(JSON.stringify(out)); }})()"""
+        out = subprocess.run([NODE, "-e", code], capture_output=True, text=True, timeout=30)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        return json.loads(out.stdout)
+
+    def test_a_live_arrival_plays_on_a_visible_page_focused_or_not(self):
+        steps = [["card", [1, 1, False]], ["open", None], ["card", [2, 9, True]], ["show", None]]
+        for focused in (True, False):
+            self.assertEqual(self.run_steps(focused, steps), [["play", 2, False], ["seen", [1, 2]]], focused)
+
+    def test_a_hidden_page_or_another_tab_waits_and_then_plays(self):
+        steps = [["card", [1, 1, False]], ["open", None],
+                 ["page", {"vis": "hidden"}], ["card", [2, 9, True]], ["show", None],
+                 ["page", {"vis": "visible", "chat": False}], ["card", [3, 10, True]], ["show", None],
+                 ["page", {"chat": True}], ["show", None]]
+        self.assertEqual(self.run_steps(False, steps), [["play", 2, False], ["play", 3, False], ["seen", [1, 2, 3]]])
+
+    def test_a_card_seen_at_rest_never_plays_later(self):
+        # history drawn at rest (older than the read mark, not live) is seen at once; marking it live later changes nothing
+        steps = [["card", [1, 1, False]], ["open", None], ["live", 1], ["show", None], ["show", None]]
+        self.assertEqual(self.run_steps(False, steps), [["seen", [1]]])
+
+    def test_an_open_plays_the_newest_two_unread_after_the_settle(self):
+        steps = [["card", [1, 1, False]], ["card", [2, 6, False]], ["card", [3, 7, False]], ["card", [4, 8, False]],
+                 ["open", None], ["settle", None], ["show", None]]
+        self.assertEqual(self.run_steps(False, steps),
+                         [["settle", 700], ["play", 3, True], ["settle", 700], ["play", 4, True], ["seen", [1, 2, 3, 4]]])
+
+    def test_focus_is_only_the_read_marks(self):
+        gate = re.search(r"const cardsOnScreen = \(\) => (.*);", PAGE).group(1)
+        self.assertIn("document.visibilityState === 'visible'", gate)
+        self.assertNotIn("hasFocus", gate)
+
+
 if __name__ == "__main__":
     unittest.main()

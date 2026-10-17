@@ -1127,7 +1127,10 @@ function setTab(name, instant){
   placePill(instant);
   store('tapspace.tab', name);
   if (location.hash !== '#' + name) history.replaceState(null, '', '#' + name);
-  if (name === 'chat'){ markRead(current); scrollEnd(true); showCards(false); fitStrip(); }   // a card waiting on the Chat tab plays now
+  if (name === 'chat'){                             // a card waiting on the Chat tab plays now; read only while he looks (O2)
+    if (document.hasFocus()) markRead(current);
+    scrollEnd(true); showCards(false); fitStrip();
+  }
 }
 tabs.addEventListener('click', e => { const b = e.target.closest('.tab'); if (b) setTab(b.dataset.tab); });
 
@@ -2042,11 +2045,12 @@ function cardSwap(x){                               // a word or line swapped in
   x.classList.remove('uswap'); void x.offsetWidth; x.classList.add('uswap');
   clearTimeout(x._sw); x._sw = setTimeout(() => x.classList.remove('uswap'), 750);   // a later display flip never replays it
 }
-// First view (contract 10): a card plays its beats the first time it is on screen in the open, focused thread, when it
-// arrived live on this page or is newer than the thread's read mark as it stood when the thread opened. At most the newest
-// two play per open, once the open has settled; every other card is already at rest, as a played card ends.
+// First view (contract 10 and 18): a card plays its beats the first time it is on screen in the open thread of a visible
+// page (focus is not needed: it gates only the read mark), when it arrived live on this page or is newer than the thread's
+// read mark as it stood when the thread opened. At most the newest two play per open, once the open has settled; every
+// other card is seen at rest, as a played card ends, and never plays later.
 const CARD_SETTLE = 700;                  // ms after a thread opens: the head's swapin (#panehead.swap) has finished
-const cardsOnScreen = () => document.body.classList.contains('chatmode') && document.visibilityState === 'visible' && document.hasFocus();
+const cardsOnScreen = () => document.body.classList.contains('chatmode') && document.visibilityState === 'visible';
 function showCards(opened){
   if (!cardsOnScreen()) return;
   const due = [];

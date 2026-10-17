@@ -192,6 +192,30 @@ class MarkupTests(unittest.TestCase):
                       block("function renderThread(", "function msgEl("))
         self.assertIn("focusKey = typeof d.focus === 'string'", block("async function pollAgents(", "async function pollChat("))
 
+    def test_the_chat_tab_reads_only_a_focused_page(self):
+        # contract 18: focus gates the read mark, including the one the Chat tab writes at page load; a visible page that
+        # is not focused still shows its cards
+        if not NODE:
+            self.skipTest("node is not installed")
+        tab = block("function setTab(name, instant){", "tabs.addEventListener('click'")
+
+        def run(focused):
+            code = f"""(() => {{
+const did = [], document = {{body: {{classList: {{toggle: () => {{}}}}}}, hasFocus: () => {json.dumps(focused)}}};
+const tabs = {{querySelectorAll: () => []}}, placePill = () => {{}}, store = () => {{}};
+const location = {{hash: '#chat'}}, history = {{replaceState: () => {{}}}};
+const current = 'agent:M', markRead = k => did.push('read ' + k), scrollEnd = () => did.push('end');
+const showCards = () => did.push('cards'), fitStrip = () => {{}};
+{tab}
+setTab('chat', true);
+process.stdout.write(JSON.stringify(did)); }})()"""
+            out = subprocess.run([NODE, "-e", code], capture_output=True, text=True, timeout=30)
+            self.assertEqual(out.returncode, 0, out.stderr)
+            return json.loads(out.stdout)
+
+        self.assertEqual(run(True), ["read agent:M", "end", "cards"])
+        self.assertEqual(run(False), ["end", "cards"])
+
     def test_a_bead_opens_its_thread_and_leaves_the_group_as_it_is(self):
         fleet = block("function syncFleet(", "function beadHtml(")
         self.assertIn("el.addEventListener('click', () => openThread(f.key));", fleet)
