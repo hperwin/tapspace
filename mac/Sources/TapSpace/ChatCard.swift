@@ -11,7 +11,7 @@ struct ChatCardView: View, Equatable {
     /// The row's served image paths, aligned with card.images.
     let images: [String]
     /// The thread asks for its beats: it arrived live, or it was unread when the thread opened (CONTRACT section 10).
-    /// It plays once per session, and only on screen in the focused Chat tab.
+    /// It plays once per session, once it is on screen: the Chat tab of a visible window, key or not (CONTRACT 18).
     let play: Bool
     let width: CGFloat
     var store: Store = .shared
@@ -22,6 +22,8 @@ struct ChatCardView: View, Equatable {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var beats: CardBeats
     @State private var shell: SpringBox
+    /// Played, or put at rest: its first view is decided.
+    @State private var begun = false
 
     init(row: CardRow, images: [String], play: Bool, width: CGFloat, store: Store? = nil, hold: Double = 0) {
         self.row = row
@@ -69,14 +71,18 @@ struct ChatCardView: View, Equatable {
         .modifier(CardIn(box: shell))
         .accessibilityElement(children: .contain)
         .onAppear(perform: begin)
+        // Asked to play out of sight (another tab, a hidden window, a thread opened from the pill): it begins as soon
+        // as it can be seen.
+        .onChange(of: store.tab == .chat && store.windowVisible) { begin() }
     }
 
-    /// The first view (P7 2.2.1, CONTRACT sections 10 and 12): a card the thread asked to play, on screen in the
-    /// focused Chat tab, plays once per session. Reduce Motion, another tab or a hidden window: it builds at rest.
+    /// The first view (P7 2.2.1, CONTRACT sections 10, 12 and 18): a card the thread asked to play plays once per
+    /// session, when it is on screen in the Chat tab of a visible window; the key window gates only the read mark.
+    /// Until then it waits, unseen, its pieces hidden. Reduce Motion, or played already: it builds at rest.
     private func begin() {
-        guard play else { return }
-        let seen = store.tab == .chat && store.windowVisible && store.windowKey
-        guard !reduceMotion, seen, CardMotion.claim("\(row.agent)#\(row.id)") else {
+        guard play, !begun, reduceMotion || (store.tab == .chat && store.windowVisible) else { return }
+        begun = true
+        guard !reduceMotion, CardMotion.claim("\(row.agent)#\(row.id)") else {
             beats.rest()
             shell.snap(1)
             return

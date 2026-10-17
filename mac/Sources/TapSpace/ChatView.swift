@@ -412,7 +412,8 @@ final class BubbleAnimator {
     private var openMark: Double = 0
     /// The unseen cards that play once the thread's open settles.
     private var opening: Set<String> = []
-    /// Rows that had their entrance this session: a card never plays at an open after that.
+    /// Rows that had their entrance this session, and every card there at an open: a card never plays at an open
+    /// after that.
     private var entered: Set<String> = []
     weak var geo: ChatGeometry?
 
@@ -424,7 +425,10 @@ final class BubbleAnimator {
     /// in, as on any later open (springing in, every laid-out row re-rendered on
     /// every frame). The exception is `cards` (key, time) newer than `mark()`,
     /// the read mark from before the open, read once per thread switch: the
-    /// newest two of them play together after `openHold` when `plays`.
+    /// newest two of them play together after `openHold` when `plays`, once the
+    /// thread can be seen (a thread opened from the pill before its window is up
+    /// waits for it: ChatCardView). Every other card there drew at rest: seen,
+    /// it never plays later (CONTRACT 18).
     func sync(thread: String, loaded: Bool, keys: [String], fly: Set<String>,
               cards: [(key: String, ts: Double)] = [], mark: () -> Double = { .infinity }, plays: Bool = false) {
         if thread != self.thread { openMark = mark() }
@@ -434,11 +438,11 @@ final class BubbleAnimator {
             known = Set(keys)
             boxes.removeAll()
             opening.removeAll()
-            guard loaded, plays else { return }
-            for k in Self.opening(cards, after: openMark) where !entered.contains(k) {
-                opening.insert(k)
-                entered.insert(k)
+            guard loaded else { return }
+            if plays {
+                for k in Self.opening(cards, after: openMark) where !entered.contains(k) { opening.insert(k) }
             }
+            entered.formUnion(cards.map(\.key))
             return
         }
         for k in keys where !known.contains(k) {
@@ -837,8 +841,7 @@ struct MessageList: View {
         let cards: [(key: String, ts: Double)] = rows.compactMap { m, k in m.card == nil ? nil : (key: k, ts: m.ts) }
         let _ = animator.sync(thread: thread, loaded: agent.map { store.chats[$0.name] != nil } ?? (tap != nil),
                               keys: keys, fly: Set(rows.filter(\.0.fly).map(\.1)), cards: cards,
-                              mark: { ThreadOpenMark.take(thread, store: store) },
-                              plays: !reduceMotion && store.isViewingCandidate)
+                              mark: { ThreadOpenMark.take(thread, store: store) }, plays: !reduceMotion)
         // An answer landing on a card (or rolling back) changes the list too.
         let answered: String = msgs.map { $0.card?.state.sig ?? "" }.joined(separator: ",")
         let sig = keys.joined(separator: ",") + "|\(typing)|" + msgs.map { $0.receipt.map { "\($0)" } ?? "" }.joined()
