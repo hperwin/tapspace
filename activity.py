@@ -1,4 +1,4 @@
-"""Live activity: what the lead is doing right now, read from its own Claude Code session (CONTRACT section 7).
+"""Live activity: what the lead is doing right now, read from its own Claude Code session.
 
 Nobody reports anything. The lead's NAME has a claim in data/sessions.json (tap.py's session stamp, written by the
 server's _claim; a relay's new car adds its own session under the same NAME). The newest live claim names the
@@ -13,7 +13,7 @@ system/turn_duration; a tool_use waits for its tool_result. What the lead row se
   waiting    turn over, its listener polled within 30 s   Listening, or Waiting on you while its newest card waits
   idle       turn over, nobody listening                  Idle
 
-Words come from one fixed table of plain phrases (A18 section 4): no paths, codes or numbers. detail is "" or a title
+Words come from one fixed table of plain phrases, drawn from a lead's real calls: no paths, codes or numbers. detail is "" or a title
 the space already shows (a master's, a tap's, a helper's own description), cleaned by links._clip.
 
 server.py:  activity.of(name, info, state, claims, proc_start, waits, titles, taps)   the lead row's "activity"
@@ -40,6 +40,7 @@ KINDS_MAX = 200                    # background tasks remembered per transcript 
 _NEEDLES = (b'"tool_use"', b'"tool_result"', b'"turnOrigin"', b'"turn_duration"')
 _REQUEST = b'{"type":"api-request",'      # a model request was sent; -blob and -shape copies never match
 _HEREDOC = re.compile(r"<<-?\s*['\"]?(\w+)['\"]?.*?^\s*\1\s*$", re.S | re.M)
+_COMMENT = re.compile(r"(?m)(?:^|(?<=[\s;&|]))#[^\n]*")    # a shell comment starts a word; a # inside one stays
 _SEP = {"&&", "||", ";", "|", "&", "(", ")", ";;", "|&", "$"}
 _LEADS = {"do", "then", "else", "elif", "if", "while", "until", "!", "{", "time", "nohup", "exec", "command", "builtin"}
 _QUIET = {"cd", "echo", "sleep", "true", "false", "printf", "export", "date", "set", "local", "mkdir", "test", "[",
@@ -52,7 +53,7 @@ _TASK = re.compile(r"/tasks/(\w+)\.output\b")
 _TAG = re.compile(r"<(task-id|tool-use-id|status|summary)>(.*?)</\1>", re.S)
 _LOCAL = re.compile(r"(?:127\.0\.0\.1|localhost):\d+")
 
-# The fixed words, by what the lead ran (A18 section 4). Every word the line can show is in WORDS.
+# The fixed words, by what the lead ran. Every word the line can show is in WORDS.
 TAP_WORDS = {"listen": "Listening", "reply": "Writing to you", "card": "Sending you an update",
              "goal": "Updating its goal card", "step": "Updating its goal card", "taps": "Checking taps",
              "tap-read": "Reading a tap", "tap-say": "Answering a tap", "tap-watch": "Watching taps",
@@ -89,10 +90,10 @@ WORDS = frozenset(list(TAP_WORDS.values()) + list(MUDDI_WORDS.values()) + list(F
 def _segments(cmd):
     """A shell command's simple commands, in order, each as its words: assignments, keywords and the commands that
     only move around (cd, echo, sleep...) dropped, heredoc bodies skipped."""
-    cmd = _HEREDOC.sub(" HEREDOC ", cmd[:4000]).replace("\n", " ; ")
+    cmd = _COMMENT.sub(" ", _HEREDOC.sub(" HEREDOC ", cmd[:4000])).replace("\n", " ; ")
     try:
         lx = shlex.shlex(cmd, posix=True, punctuation_chars=True)
-        lx.whitespace_split = True
+        lx.whitespace_split, lx.commenters = True, ""      # shlex would cut owner/repo#n at its #
         toks = list(lx)
     except ValueError:
         toks = cmd.split()
@@ -177,10 +178,12 @@ def bash_word(cmd, kinds, ctx=None):
                 return "Checking a PR", ""
             return "Checking GitHub", ""
         if a == "git":
-            verbs = [x for x in w[1:] if not x.startswith("-")]
+            rest = w[1:]
+            while rest and rest[0].startswith("-"):     # git -C DIR / -c k=v / --no-pager ... before the verb
+                rest = rest[2:] if rest[0] in ("-C", "-c") else rest[1:]
             busy = {"commit", "push", "merge", "rebase", "add", "checkout", "switch", "worktree", "reset", "cherry-pick",
                     "stash", "branch", "tag", "rm", "mv", "restore", "pull"}
-            return ("Working on code" if verbs and verbs[0] in busy else "Reading code"), ""
+            return ("Working on code" if rest and rest[0] in busy else "Reading code"), ""
         if a == "curl":
             return ("Checking TapSpace" if any(_LOCAL.search(x) for x in w) else "Looking something up"), ""
         if a in ("cat", "tail", "head") and any(_TASK.search(x) for x in w):
