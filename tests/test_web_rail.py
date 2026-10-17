@@ -118,6 +118,44 @@ class FocusTests(unittest.TestCase):
 
 
 @unittest.skipUnless(NODE, "node is not installed")
+class ActivityTests(unittest.TestCase):
+    """Contract section 7 on the web: the lead's thread head line from GET /api/agents activity."""
+    HEAD = block("function esc(t)", "function md(src)") + "\nconst when = () => '6h';\n" + \
+        block("/* O3 (contract section 7)", "function renderHead(")
+
+    def sub(self, a):
+        return js(f"headSub({json.dumps(a)})", self.HEAD)
+
+    def test_the_face_follows_what_it_does(self):
+        self.assertEqual(js("ACT_STATE"), {"working": "thinking", "switching": "switching", "waiting": "here", "idle": "away", "gone": "away"})
+        self.assertEqual(js("['working', 'gone', 'planning', 'constructor', '__proto__', null].map(actKind)"),
+                         ["working", "gone", "", "", "", ""])
+
+    def test_the_head_line(self):
+        lead = {"role": "lead", "first": 1}
+        self.assertEqual(self.sub(dict(lead, activity=None)), "Started 6h")
+        self.assertEqual(self.sub(dict(lead, activity={"state": "working", "word": "Checking a tap", "detail": "", "since": 1})),
+                         '<span class="act working"><i></i><span class="aw">Checking a tap</span></span>')
+        self.assertEqual(self.sub(dict(lead, activity={"state": "waiting", "word": "Listening", "detail": "Chat update cards"})),
+                         '<span class="act waiting"><i></i><span class="aw">Listening · Chat update cards</span></span>')
+        # contract 12: a state this page does not know still shows its word; nothing from the wire lands in a class
+        self.assertEqual(self.sub(dict(lead, activity={"state": "x\" onmouseover=\"y", "word": "<b>Planning</b>"})),
+                         '<span class="act"><i></i><span class="aw">&lt;b&gt;Planning&lt;/b&gt;</span></span>')
+        self.assertEqual(self.sub({"role": "master", "first": 1, "activity": {"state": "working", "word": "Thinking"}}), "Started 6h")
+        self.assertEqual(self.sub(dict(lead, activity={"state": "idle", "word": "  "})), "Started 6h")
+
+    def test_head_wiring(self):
+        head = block("function renderHead(", "/* ---- a tap's action card")
+        self.assertIn("(act ? '' : `<span class=\"chip", head)                       # the activity line replaces the chip
+        self.assertIn("w.classList.add('swap')", head)                             # the word swaps in
+        self.assertIn("head.dataset.word = ''", head)                              # a thread switch never swaps the word
+        self.assertIn("#panehead .aw.swap{animation:swapin", CSS)
+        self.assertIn("#panehead .act.working i{animation:breathe", CSS)
+        blocks = re.findall(r"@media \(prefers-reduced-motion: reduce\)\{(.*?)\n  \}", CSS, re.S)
+        self.assertTrue(any("#panehead .act.working i" in b and "#panehead .aw.swap" in b for b in blocks))
+
+
+@unittest.skipUnless(NODE, "node is not installed")
 class MovedTests(unittest.TestCase):
     def test_a_master_moves_when_only_its_state_did(self):
         # contract 12: a state-only change gets its beat (the face pops to its new expression); nothing else moves

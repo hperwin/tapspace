@@ -365,6 +365,15 @@
   #panehead .sub{font-size:11.5px;color:var(--dim);margin-top:2px}
   #panehead a{color:var(--dim);font-size:11.5px;text-decoration:none;border-bottom:1px solid var(--faint)}
   #panehead.swap{animation:swapin .7s cubic-bezier(.22,.9,.24,1)}
+  /* O3 (contract 7): the lead's live activity under its name; the word swaps in, the dot breathes while it works */
+  #panehead .act{display:inline-flex;align-items:center;gap:6px;max-width:100%;min-width:0;vertical-align:top}
+  #panehead .act i{width:6px;height:6px;border-radius:50%;background:currentColor;flex:none}
+  #panehead .aw{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #panehead .act.working,#panehead .act.switching{color:rgb(var(--hl))}
+  #panehead .act.working i{animation:breathe 1s ease-in-out infinite}   /* the chip's working breath */
+  #panehead .act.idle,#panehead .act.gone{color:var(--faint)}
+  #panehead .act.gone{opacity:.55}
+  #panehead .aw.swap{animation:swapin .7s cubic-bezier(.22,.9,.24,1)}
   #goals{display:flex;gap:8px;padding:10px 20px;overflow-x:auto;border-bottom:1px solid var(--line);scrollbar-width:none}
   #goals:empty{display:none}
   .goal{flex:none;width:230px;display:flex;gap:8px;align-items:flex-start;font-size:11.5px;line-height:1.35;color:var(--dim);
@@ -646,6 +655,7 @@
   @media (prefers-reduced-motion: reduce){
     .agrp .talk i,.note.enter,.note.out,.orb.ping::after,.stopask,.actcard.enter{animation:none}
     #rail .thread.enter,.bead,.bead *{animation:none!important}   /* unfolding re-shows rows, which replays their entrance */
+    #panehead .act.working i,#panehead .aw.swap{animation:none}
     #progress,.pgap,.plan .track i,.plan .track.long i.fill,.plan .track.long b{transition:none}
   }
 
@@ -1425,6 +1435,9 @@ const ringPct = f => f && f.total > 0 ? Math.round(100 * clampInt(f.done, 0, f.t
 const quietKey = (key, focus, onScreen) => !!key && (key === focus || key === onScreen);
 const newsCount = (threads, focus, onScreen) =>
   new Set(threads.filter(t => !quietKey(t.key, focus, onScreen) && (t.unread || t.holding)).map(t => t.key)).size;
+// Contract section 7: the lead's face by its activity (working focused, waiting happy, idle and gone asleep).
+const ACT_STATE = {working: 'thinking', switching: 'switching', waiting: 'here', idle: 'away', gone: 'away'};
+const actKind = s => typeof s === 'string' && Object.hasOwn(ACT_STATE, s) ? s : '';   // a state this page does not know: none
 // ---- end pure: rail ----
 
 /* unread = the other side said something after you last looked at that thread */
@@ -1677,17 +1690,25 @@ function threadData(){
   return {msgs, typing: !!t.replying, tap: t};
 }
 
-/* O3 (contract section 7): the lead's live activity line in its thread head lands here (wave 2). Returns HTML; until
-   then, when the master started. */
-function headSub(a){ return 'Started ' + when(a.first || a.seen); }
+/* O3 (contract section 7): what the lead is doing right now, in its thread head: its word (and a plain detail), a dot that
+   breathes while it works, still while it waits or idles, greyed when its session is gone. None served: when it started. */
+const activityOf = a => a && a.role === 'lead' && a.activity && typeof a.activity === 'object' &&
+  typeof a.activity.word === 'string' && a.activity.word.trim() ? a.activity : null;
+function headSub(a){
+  const act = activityOf(a);
+  if (!act) return 'Started ' + when(a.first || a.seen);
+  const st = actKind(act.state), detail = typeof act.detail === 'string' && act.detail.trim() ? ' · ' + esc(act.detail.trim()) : '';
+  return `<span class="act${st ? ' ' + st : ''}"><i></i><span class="aw">${esc(act.word.trim())}${detail}</span></span>`;
+}
 function renderHead(d){
   let html, sig;
   if (d.agent){
-    const a = d.agent;
-    sig = current + '|' + a.state + '|' + a.title + '|' + a.look;
-    html = `${masterFace(a)}<span class="tx"><div class="nm">${esc(a.title || 'Claude')}</div>
-      <div class="sub">${headSub(a)}</div></span>
-      <span class="chip ${a.state}"><i></i>${MASTER[a.state]}</span>`;
+    const a = d.agent, act = activityOf(a), st = act && actKind(act.state);
+    const look = st ? Object.assign({}, a, {state: ACT_STATE[st]}) : a;   // the lead's face by what it is doing
+    sig = current + '|' + a.state + '|' + a.title + '|' + a.look + '|' + (act ? 'act:' + st : '');
+    html = `${masterFace(look)}<span class="tx"><div class="nm">${esc(a.title || 'Claude')}</div>
+      <div class="sub">${headSub(a)}</div></span>` +
+      (act ? '' : `<span class="chip ${a.state}"><i></i>${MASTER[a.state]}</span>`);   // the activity line says it
   } else {
     const t = d.tap;
     sig = [t.key, t.status, t.phase, t.phase_word, t.replying, t.title].join('|');
@@ -1698,9 +1719,16 @@ function renderHead(d){
   if (head.dataset.sig !== sig){
     const swap = head.dataset.key !== current;
     head.dataset.sig = sig; head.dataset.key = current; head.innerHTML = html;
-    if (swap){ head.classList.remove('swap'); void head.offsetWidth; head.classList.add('swap'); }
+    if (swap){ head.classList.remove('swap'); void head.offsetWidth; head.classList.add('swap'); head.dataset.word = ''; }
   }
-  if (d.agent){ const sub = head.querySelector('.tx .sub'), h = headSub(d.agent); if (sub) setPart(sub, h, h); }   // its age moves on
+  if (d.agent){                                     // its age moves on; the lead's word swaps in when it changes (the head's swapin)
+    const sub = head.querySelector('.tx .sub'), h = headSub(d.agent);
+    if (sub && setPart(sub, h, h)){
+      const w = sub.querySelector('.aw'), word = w ? w.textContent : '';
+      if (w && head.dataset.word && head.dataset.word !== word) w.classList.add('swap');
+      head.dataset.word = word;
+    }
+  }
   const goals = d.tap ? d.tap.goals : [];
   const gsig = current + JSON.stringify(goals);
   if (goalsEl.dataset.sig !== gsig){
