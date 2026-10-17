@@ -12,7 +12,10 @@
 # update so the change highlights show, two short clips made from them, two sent back with notes),
 # and two masters in the Chat tab: "Mac app polish" mid-conversation and "Expert takes v2" thinking
 # on an unanswered question. Each master owns its cards (by the session that posts them, or --owner)
-# and publishes a goal card. Taps are read live from GitHub by the scratch server (read-only).
+# and publishes a goal card. Mac app polish is the lead, so everything else folds under it, and its
+# thread holds two update cards (tap.py card): one with a timeline and a question Hayden answered, one
+# with a progress bar, two items, two pictures to approve and an open question. Taps are read live
+# from GitHub by the scratch server (read-only).
 #
 # A scratch server never pushes to a phone (it has no APNs keys), a seeded one reads only its own
 # Claude Code folder, and seed.sh only ever wipes a folder it made itself.
@@ -248,6 +251,20 @@ req = urllib.request.Request(url + "/api/chat", data=json.dumps({"agent": agent,
 print(json.loads(urllib.request.urlopen(req, timeout=10).read())["ok"])
 PY
 }
+# Hayden's answer to an update card (CONTRACT section 2), on the SCRATCH server only. The server writes its body.
+answer() {   # answer <NAME> <answer-json>
+    python3 - "$URL" "$1" "$2" <<'PY'
+import json, sys, urllib.request, uuid
+url, agent, ans = sys.argv[1:4]
+a = json.loads(ans)
+req = urllib.request.Request(url + "/api/chat", headers={"content-type": "application/json"},
+                             data=json.dumps({"agent": agent, "nonce": f"{a['card']}:seed:{uuid.uuid4().hex[:8]}",
+                                              "answer": a}).encode())
+print(json.loads(urllib.request.urlopen(req, timeout=10).read())["ok"])
+PY
+}
+# The stored row's id from tap.py card's answer.
+card_id() { python3 -c 'import json, sys; print(json.load(sys.stdin)["message"]["id"])'; }
 decide_change() {
     python3 - "$URL" "$1" "$2" <<'PY'
 import json, sys, urllib.request
@@ -312,10 +329,25 @@ tap "$SID_M" goal --as "$M" "The Mac app shows every master's goal, steps and no
 tap "$SID_F" goal --as "$F" "Expert takes v2 on the fantasy board" --steps "Spec|Build|Verify|Ship" --current 2 >/dev/null
 tap "$SID_F" step --as "$F" --note "Matching each expert to their picture" >/dev/null
 
+echo "==> Mac app polish leads; two update cards in its thread"
+tap - lead --as "$M" >/dev/null
+CARD1=$(tap "$SID_M" card --as "$M" "Both boards are moving" --timeline "Audit|Spec|Build|Review|Open the PR" --at Review \
+    --item "$F=Expert pages load from the recorded list" \
+    --ask "Keep both going?" --check "Yes" --check "Pause Expert takes" | card_id)
+answer "$M" "{\"card\": $CARD1, \"checks\": [\"c1\"]}" >/dev/null
+# Expert takes moves a step between the cards, so the second one shows that change.
+tap "$SID_F" step --as "$F" next >/dev/null
+CARD2=$(tap "$SID_M" card --as "$M" "Expert takes moved a step, two pictures need your eyes" --progress "3/5:3 of 5 steps" \
+    --item "$F=Matching each expert to their picture" --item "$M=The cards are in the thread now" \
+    --image "$SHOTS/2a987b7a7e/2.png=Sunday glance" --image "$SHOTS/8d1e93788e/1.png=NBA weekly league" \
+    --ask "Which one ships first?" --check "Sunday glance" --check "NBA weekly league" --text | card_id)
+echo "    Mac app polish: card $CARD1 (answered: Yes), card $CARD2 (two pictures and a question waiting)"
+
 cat <<EOF
 
 Scratch TapSpace is up: $URL  (PID $PID, data $DATA)
-Masters: Mac app polish (goal at 3 of 5), Expert takes v2 (thinking, goal at 2 of 4, two cards sent back with notes)
+Masters: Mac app polish (the lead, goal at 3 of 5, two update cards in its thread), Expert takes v2 (thinking,
+goal at 3 of 4, two cards sent back with notes)
 Right before a render, let them exchange a message (the link stays active for 10 minutes):
   $0 --link $DATA
 Render the app on it (offscreen, never takes focus):
