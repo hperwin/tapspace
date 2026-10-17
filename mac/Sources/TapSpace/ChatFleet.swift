@@ -75,8 +75,7 @@ struct ChatFleetStrip: View {
             .help(open ? "Fold everything under \(lead)" : "Show every agent and tap")
             .accessibilityLabel(open ? "Fold everything under \(lead)" : "Show every agent and tap")
         }
-        // The text column of the lead's row: row padding 12 + orb 38 + spacing 12.
-        .padding(.leading, 50)
+        // The orb column of the lead's row (its padding 12), so 6 beads plus "+N" fit the 300 pt rail (CONTRACT 17).
         .padding(.horizontal, 12)
         .padding(.vertical, 4)
         .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
