@@ -1173,6 +1173,7 @@ const taplist = $('#taplist');
 let current = store('tapspace.thread') || '';
 let agents = [];                  // rows of GET /api/agents: name (hidden key), title, state, first, seen, last_master, progress, notes, notes_read
 let links = [];                   // agent-to-agent links of GET /api/agents: {a, b, from, last, count, summary, active}
+let focusKey = '';                // GET /api/agents focus: the thread Hayden's newest own message went to (contract section 6)
 const notesHidden = {};           // NAME -> newest note ts this page marked read (hides the rows before the server answers)
 let chat = {agent: '', messages: []};   // the open agent thread
 const agentKey = n => 'agent:' + n;
@@ -1376,9 +1377,14 @@ function cardTimes(card){                 // ms after arrival
 }
 // ---- end pure: cards ----
 
+// ---- pure: rail (no DOM; tests/test_web_rail.py runs this block in node, after the cards block) ----
+// Contract section 6: a thread is quiet when it is the focus or the one on screen; the tab counts distinct keys with news.
+const quietKey = (key, focus, onScreen) => !!key && (key === focus || key === onScreen);
+const newsCount = (threads, focus, onScreen) =>
+  new Set(threads.filter(t => !quietKey(t.key, focus, onScreen) && (t.unread || t.holding)).map(t => t.key)).size;
+// ---- end pure: rail ----
+
 /* unread = the other side said something after you last looked at that thread */
-/* O2 (contract section 6): the focus rule lands here in wave 2 (quiet(k) = k == focus || on screen); every dot, the
-   Progress cards and the tab badge read isUnread. */
 function lastTheirs(key){
   if (isAgent(key)){ const a = agents.find(x => agentKey(x.name) === key); return a && a.last_master ? a.last_master * 1000 : 0; }
   const t = taps.items.find(x => x.key === key); if (!t) return 0;
@@ -1386,7 +1392,10 @@ function lastTheirs(key){
 }
 function readAt(key){ return +(store('tapspace.read.' + key) || 0); }
 function markRead(key){ store('tapspace.read.' + key, String(Date.now())); }
-function isUnread(key){ return lastTheirs(key) > readAt(key) && !(document.body.classList.contains("chatmode") && key === current && document.hasFocus()); }
+/* O2 (contract section 6): the conversation Hayden is having never badges; only news on other threads does. Every dot,
+   the Progress cards, the fold and the tab count read this. */
+function onScreenKey(){ return document.body.classList.contains("chatmode") && document.hasFocus() ? current : ''; }
+function isUnread(key){ return lastTheirs(key) > readAt(key) && !quietKey(key, focusKey, onScreenKey()); }
 
 /* ---- per agent: the cards you sent change notes on (newest first), and who it is talking with ---- */
 function titleOf(name){ const a = agents.find(x => x.name === name); return a ? (a.title || 'Claude') : ''; }
@@ -1526,10 +1535,10 @@ function renderRail(){
       return tapAvatar(t) + `<span class="tx${t.phase === 'closed' ? ' dim' : ''}"><div class="nm">${esc(tapName(t))}</div>
         <div class="sub">${sub}</div></span><span class="unread"></span>`;
     }, taps.fetched ? 'No taps flying under your name.' : (taps.error ? 'Couldn’t reach GitHub: ' + esc(taps.error) : 'Looking for your taps…'));
-  /* O2: the Chat tab badge (wave 2: the number of distinct keys with news). */
-  const needs = taps.items.filter(isHolding).length;
-  const unread = [...agents.map(a => agentKey(a.name)), ...taps.items.map(t => t.key)].filter(isUnread).length;
-  const bc = $('#badge-chat'); const n = Math.max(needs, unread);
+  /* O2: the Chat tab counts distinct threads with news (an unread reply or a holding tap), never the quiet ones */
+  const threads = [...agents.map(a => { const k = agentKey(a.name); return {key: k, unread: lastTheirs(k) > readAt(k), holding: false}; }),
+                   ...taps.items.map(t => ({key: t.key, unread: lastTheirs(t.key) > readAt(t.key), holding: isHolding(t)}))];
+  const bc = $('#badge-chat'), n = newsCount(threads, focusKey, onScreenKey());
   bc.textContent = n; bc.classList.toggle('show', n > 0);
 }
 
@@ -2114,7 +2123,7 @@ function renderThread(){
   want.forEach((el, i) => { if (msgsEl.children[i] !== el) msgsEl.insertBefore(el, msgsEl.children[i] || null); });
   rendered = {key: current, sig, loaded, stick};
   if (stick) scrollEnd(switched);
-  if (document.body.classList.contains("chatmode")) markRead(current);
+  if (document.body.classList.contains("chatmode") && document.hasFocus()) markRead(current);   // never read behind his back (O2)
   showCards(switched);
 }
 function msgEl(m){ const el = document.createElement('div'); el.className = 'msg ' + m.who; return el; }
@@ -2247,7 +2256,7 @@ async function pollAgents(){
   // while he looked).
   const key = current, had = agentsLoaded && isAgent(key) ? newestNote(agentOf(key)) : null;
   agents = d.agents; links = Array.isArray(d.links) ? d.links : []; agentsLoaded = true;
-  /* W2 (contract sections 5 and 6): the served fleet and focus land here (d.fleet, d.focus). */
+  focusKey = typeof d.focus === 'string' ? d.focus : '';
   // A note that lands while its master's thread is open and the page is in front is read at once. Rows already listed
   // wait for an explicit open: switching to Chat or the window coming forward never reads them.
   if (had !== null && current === key && document.body.classList.contains("chatmode") && document.hasFocus() &&
