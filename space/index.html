@@ -1401,6 +1401,7 @@ function cardMoved(it){                   // the item's snapshot moved since the
   const w = it && it.was;
   if (!w || typeof w !== 'object') return false;
   if ('phase' in w && w.phase !== it.phase) return true;
+  if (typeof w.state === 'string' && typeof it.state === 'string' && w.state !== it.state) return true;   // a master's face (contract 12)
   if (Array.isArray(w.goals) && String(w.goals) !== String(it.goals)) return true;
   return 'current' in w && !!it.progress && w.current !== it.progress.current;
 }
