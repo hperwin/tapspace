@@ -326,12 +326,16 @@ struct CardActionView: View {
     }
 
     private var said: CardSaid? {
-        let now = Date().timeIntervalSince1970
-        if row.state.action?.approve == true || CardAccepts.fresh(row.id, now: now) {
-            // Right after his Accept the tap card's words; a card read later just says it was accepted.
-            return CardSaid(word: "Accepted", color: .up, note: CardAccepts.fresh(row.id, now: now) ? "It shows as Done in a moment." : "")
+        let fresh = CardAccepts.fresh(row.id, now: Date().timeIntervalSince1970)
+        guard let v = row.state.action else {
+            return fresh ? CardSaid(word: "Accepted", color: .up, note: "It shows as Done in a moment.") : nil
         }
-        guard let v = row.state.action else { return nil }
+        if v.approve {
+            // An Accept on its way keeps its button ("Accepting…"), as the tap card's does: it closes the tap on
+            // GitHub. Right after it, the tap card's words; a card read later just says it was accepted.
+            if v.sending && !fresh { return nil }
+            return CardSaid(word: "Accepted", color: .up, note: fresh ? "It shows as Done in a moment." : "")
+        }
         if v.sending || sentHold { return CardSaid(word: "Sent", color: .dim, sending: true) }
         return CardSaid(word: "Not quite", color: .tapBlue, note: v.note)
     }
