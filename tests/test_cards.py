@@ -358,6 +358,17 @@ class CardRuleTests(unittest.TestCase):
             with self.subTest(raw=raw), self.assertRaises(ValueError):
                 self.card(raw, n)
 
+    def test_an_item_may_carry_a_short_name(self):
+        c = self.card({"line": "L", "items": [{"ref": "fixture-app#7", "name": "  Beta   look ", "note": "Ready"},
+                                              {"ref": "Muddi", "name": "  "}, {"ref": "Chat update cards", "name": None}]})
+        self.assertEqual(c["items"], [{"ref": TAP["key"], "name": "Beta look", "note": "Ready"}, {"ref": "agent:Muddi"},
+                                      {"ref": "agent:Claude · t · 1"}])
+        self.assertEqual(self.card({"line": "L", "items": [{"ref": "Muddi", "name": "x" * 40}]})["items"][0]["name"], "x" * 40)
+        for bad in ("x" * 41, 'The "beta" look', "Beta — look", "Beta <look>"):
+            with self.subTest(name=bad), \
+                    self.assertRaisesRegex(ValueError, "^item name: one plain line up to 40 characters$"):
+                self.card({"line": "L", "items": [{"ref": "Muddi", "name": bad}]})
+
 
 STORED = {"v": 1, "line": "Fleet moved", "face": "agent:Muddi",
           "faces": {"agent:Muddi": {"kind": "lead", "look": 0, "title": "Muddi", "state": "here"},
@@ -537,6 +548,16 @@ class CardFillTests(unittest.TestCase):
         self.assertEqual(self.fill({"line": "L"})["faces"], {})
         self.assertEqual(set(self.fill({"line": "L", "items": [{"ref": TAP["key"]}]})["faces"]), {TAP["key"]})
 
+    def test_a_name_rides_beside_the_title_it_stands_in_for(self):
+        c = self.fill({"line": "L", "items": [{"ref": TAP["key"], "name": "Lineup", "note": "Fixed"},
+                                              {"ref": "Claude · t · 1", "name": "Cards"}]})
+        self.assertEqual(c["items"], [
+            {"ref": TAP["key"], "name": "Lineup", "note": "Fixed", "kind": "tap", "title": TAP_TITLE, "phase": "landed",
+             "word": "Landed", "goals": [2, 3]},
+            {"ref": "agent:Claude · t · 1", "name": "Cards", "kind": "master", "title": "Chat update cards",
+             "state": "thinking", "progress": {"current": 2, "steps": ["Audit", "Spec", "Build"]}}])
+        self.assertEqual(c["faces"][TAP["key"]]["title"], TAP_TITLE)        # faces keep the title; clients pick the name
+
 
 class CardApiTests(Taps):
     """POST /api/chat/reply with a card: stored, served, pushed, refused whole."""
@@ -677,6 +698,21 @@ class CardApiTests(Taps):
                "state": "OPEN", "comments": [], "url": "u", "createdAt": "2026-10-16T19:00:00Z", "closedAt": None}
         self.assertEqual(S._tap("SnappStats/snapp-ios", 1583, iss)["initial"], "S")
         self.assertEqual(self.gh_calls(), [])
+
+    def test_a_short_name_is_stored_beside_the_title(self):
+        a = name("short")
+        join(a)
+        m = sent(a, {"line": "The beta look is ready",
+                     "items": [{"ref": "fixture-app#7", "name": "Beta look", "note": "Ready for your look"}]})
+        it = m["card"]["items"][0]
+        self.assertEqual((it["name"], it["title"], it["note"]), ("Beta look", TAP_TITLE, "Ready for your look"))
+        self.assertEqual(m["card"]["face"], TAP["key"])                     # the one item is the subject
+        self.assertEqual(thread(a), [m])
+        for bad in ("x" * 41, 'The "beta" look'):
+            with self.subTest(name=bad):
+                code, r = send(a, {"line": "L", "items": [{"ref": TAP["key"], "name": bad}]})
+                self.assertEqual((code, r), (400, {"error": "item name: one plain line up to 40 characters"}))
+        self.assertEqual(thread(a), [m])
 
 
 class AnswerApiTests(Taps):

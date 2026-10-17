@@ -1068,7 +1068,7 @@ def _card_ask(a):
 
 
 def _card(raw, sender, n_images, agents, taps):
-    """An update card as a master sends it -> the checked card: v, line, face, visual?, items [{ref, note?}],
+    """An update card as a master sends it -> the checked card: v, line, face, visual?, items [{ref, name?, note?}],
     images (one {label?} per attached image), ask?, action? (the one action a card may carry: tap_accept, the
     reviewer's Accept of one tap). face and refs come back as face keys (_ref). face is the card's one subject:
     given, else the one item, else None (several items or none), never the sender, whose thread it already is.
@@ -1088,6 +1088,8 @@ def _card(raw, sender, n_images, agents, taps):
         if any(x["ref"] == ref for x in out_items):
             _bad(f"items: {ref} is in the card twice")
         x = {"ref": ref}
+        if " ".join(str(it.get("name") or "").split()):         # a short name the clients show over its title
+            x["name"] = _plain(it["name"], 40) or _bad("item name: one plain line up to 40 characters")
         if " ".join(str(it.get("note") or "").split()):
             x["note"] = _plain(it["note"], 80) or _bad("item note: one plain line up to 80 characters")
         out_items.append(x)
