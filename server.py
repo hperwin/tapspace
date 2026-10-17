@@ -348,6 +348,8 @@ def _agent_touch(name, **extra):
     with _lock:
         a = _agents()
         row = a.get(name) or {"name": name, "first": time.time()}
+        if "heard" in extra:            # listen's cursor only moves forward: two polls for one NAME can cross
+            extra["heard"] = max(extra["heard"], row.get("heard") or 0)
         row.update(extra)
         row["seen"] = time.time()
         a[name] = row
@@ -452,26 +454,32 @@ CHAT_SEQ = DATA / "chat-seq"           # last id ever used, so ids stay unique a
 
 def _chat_add(agent, role, body, images=None, nonce="", card=None, answer=None):
     with _lock:
-        rows = _chat_rows()
-        try:
-            seq = int(CHAT_SEQ.read_text())
-        except Exception:
-            seq = 0
-        nid = max(seq, rows[-1]["id"] if rows else 0) + 1
-        CHAT_SEQ.write_text(str(nid))
-        row = {"id": nid, "agent": agent,
-               "role": role, "body": body, "ts": time.time()}
-        if images:
-            row["images"] = images
-        if nonce:
-            row["nonce"] = nonce
-        if card:
-            row["card"] = card
-        if answer:
-            row["answer"] = answer
-        with CHAT.open("a") as fh:
-            fh.write(json.dumps(row) + "\n")
+        row = _chat_append(agent, role, body, images, nonce, card, answer)
     _bump("chat", "agents")
+    return row
+
+
+def _chat_append(agent, role, body, images=None, nonce="", card=None, answer=None):
+    """_chat_add's write, for a caller that holds _lock (it checks the thread in the same hold); it bumps after."""
+    rows = _chat_rows()
+    try:
+        seq = int(CHAT_SEQ.read_text())
+    except Exception:
+        seq = 0
+    nid = max(seq, rows[-1]["id"] if rows else 0) + 1
+    CHAT_SEQ.write_text(str(nid))
+    row = {"id": nid, "agent": agent,
+           "role": role, "body": body, "ts": time.time()}
+    if images:
+        row["images"] = images
+    if nonce:
+        row["nonce"] = nonce
+    if card:
+        row["card"] = card
+    if answer:
+        row["answer"] = answer
+    with CHAT.open("a") as fh:
+        fh.write(json.dumps(row) + "\n")
     return row
 
 
@@ -510,17 +518,20 @@ def _title(info):
     return "Claude"
 
 
-def _focus(allrows, taps):
+def _focus(allrows, taps, said=None):
     """The thread the reviewer is talking in: the one his newest own message went to, a chat row of his
-    (agent:NAME) or a comment of his on a tap that no agent sent for him (that tap's key); None when he never
-    wrote. Clients never badge the focus. allrows: every chat row; taps: TAPS items."""
+    (agent:NAME) or a comment he sent on a tap through TapSpace himself (that tap's key); None when he never
+    wrote. An agent's own gh comment is signed in as him too, so a tap comment counts only when the say route
+    recorded it (said: tap-said.json's urls, read when None). Clients never badge the focus. allrows: every chat
+    row; taps: TAPS items."""
+    said = _said() if said is None else said
     best, key = None, None
     for r in allrows:
         if r.get("role") == "you" and (best is None or r.get("ts", 0) >= best):
             best, key = r.get("ts", 0), "agent:" + r["agent"]
     for t in taps:
         for m in t.get("messages") or []:
-            if m.get("who") == "you" and not m.get("via") and (best is None or _epoch(m["ts"]) > best):
+            if m.get("who") == "you" and m.get("url") in said and (best is None or _epoch(m["ts"]) > best):
                 best, key = _epoch(m["ts"]), t["key"]
     return key
 
@@ -566,32 +577,41 @@ def _agent_rows(allrows=None):
         # what the lead is doing right now, read from its own Claude session's transcript (activity.py)
         lead["activity"] = activity.of(
             lead["name"], agents[lead["name"]], lead["state"], CLAIMS, _proc_start,
-            waits=lambda: _waits_on_you([m for m in allrows if m.get("agent") == lead["name"]]),
+            waits=lambda: _waits_on_you([m for m in allrows if m.get("agent") == lead["name"]], TAPS["items"]),
             titles=lambda: {n: _title(i) for n, i in agents.items()}, taps=TAPS["items"])
         out = [lead] + [r for r in out if r is not lead and r["parent"] == lead["name"]] + \
               [r for r in out if r is not lead and r["parent"] != lead["name"]]
     return out
 
 
+def _newest_card(thread):
+    """The newest card row in one agent's thread, or None: the only card that can still wait on the reviewer."""
+    return next((r for r in reversed(thread) if r.get("role") == "master" and isinstance(r.get("card"), dict)), None)
+
+
 def _ask_open(thread):
-    """True when the newest card in this thread that asks something has no answer to its ask yet."""
-    asked = next((r["id"] for r in reversed(thread)
-                  if r.get("role") == "master" and (r.get("card") or {}).get("ask")), None)
-    return asked is not None and not any(r.get("role") == "you" and (r.get("answer") or {}).get("card") == asked
-                                         and "checks" in r["answer"] for r in thread)
+    """True when the newest card in this thread asks something and its ask has no answer yet. Like its images,
+    an older card's question is left behind once a newer card comes."""
+    row = _newest_card(thread)
+    return bool(row and row["card"].get("ask")) and not any(
+        r.get("role") == "you" and (r.get("answer") or {}).get("card") == row["id"] and "checks" in r["answer"]
+        for r in thread)
 
 
-def _waits_on_you(thread):
-    """True when a master's thread waits on the reviewer: its newest question is unanswered (_ask_open), or its
-    newest card still has an image without a verdict, or an Accept / Not quite nobody pressed yet."""
+def _waits_on_you(thread, taps=()):
+    """True when a master's thread waits on the reviewer: its newest card's question is unanswered (_ask_open),
+    or it still has an image without a verdict, or an Accept / Not quite nobody pressed while its tap is open
+    (taps: TAPS items; a tap accepted elsewhere, done or closed, settles it)."""
     if _ask_open(thread):
         return True
-    row = next((r for r in reversed(thread) if r.get("role") == "master" and isinstance(r.get("card"), dict)), None)
+    row = _newest_card(thread)
     if not row:
         return False
     said = [r["answer"] for r in thread if r.get("role") == "you" and (r.get("answer") or {}).get("card") == row["id"]]
     if row["card"].get("action"):
-        return not any("action" in a for a in said)          # the images are the action's picture
+        tap = next((t for t in taps if t.get("key") == row["card"]["action"].get("tap")), {})
+        return tap.get("phase") not in ("done", "closed") and \
+            not any("action" in a for a in said)             # the images are the action's picture
     return any(not any(a.get("image") == i for a in said) for i in range(len(row["card"].get("images") or [])))
 
 
@@ -616,7 +636,7 @@ def _fleet(rows, taps, chat):
             continue
         out.append({"key": "agent:" + r["name"], "kind": "master", "title": r["title"], "look": r["look"],
                     "state": r["state"], "done": done, "total": len(steps),
-                    "needs_you": _waits_on_you(threads.get(r["name"], [])),
+                    "needs_you": _waits_on_you(threads.get(r["name"], []), taps),
                     "working": r["state"] in ("thinking", "starting", "switching"),
                     "at": max(r["last"], pg.get("updated") or 0)})
     for t in taps:
@@ -1396,13 +1416,15 @@ def _accept_card(cid, key):
 def _accepted(row):
     """After an Accept from a card went through: the reviewer's answer row in that card's thread ({card, action:
     accept}, "Accepted: <tap title>"), so the master hears it on listen like any answer. One per card: pressing
-    it again gets the same row."""
+    it again gets the same row (checked and written in one _lock hold, so two presses at once write one)."""
     a = {"card": row["id"], "action": "accept"}
-    dup = next((r for r in _chat_rows(row["agent"]) if r.get("role") == "you" and r.get("answer") == a), None)
+    body = _answer_line(a, row["card"])
+    with _lock:
+        dup = next((r for r in _chat_rows(row["agent"]) if r.get("role") == "you" and r.get("answer") == a), None)
+        out = dup or _chat_append(row["agent"], "you", body, answer=a)
     if dup:
         return dup
-    body = _answer_line(a, row["card"])
-    out = _chat_add(row["agent"], "you", body, answer=a)
+    _bump("chat", "agents")
     _inbox({"kind": "tapspace-chat", "agent": row["agent"], "id": out["id"], "message": body, "images": [], "answer": a})
     return out
 
@@ -1778,11 +1800,19 @@ TAP_HOT_EVERY = 6
 _UNLISTED = {}              # tap key -> when it was first kept although GitHub search did not list it yet
 TAP_SEARCH_LAG = 15 * 60    # how long such a tap is kept without the search listing it
 VIA = DATA / "tap-via.json"  # comment url -> the agent that sent it for the reviewer
+SAID = DATA / "tap-said.json"  # comment url -> when the reviewer sent it himself through TapSpace (say with no via)
 
 
 def _via():
     try:
         return json.loads(VIA.read_text())
+    except Exception:
+        return {}
+
+
+def _said():
+    try:
+        return json.loads(SAID.read_text())
     except Exception:
         return {}
 
@@ -2818,11 +2848,15 @@ class H(BaseHTTPRequestHandler):
             except Exception as e:
                 self._json({"error": str(e)}, 502)
                 return
-            if via:
-                with _lock:
+            with _lock:
+                if via:
                     v = _via()
                     v[url] = via
                     VIA.write_text(json.dumps(v, indent=1))
+                else:       # his own words from a TapSpace surface: the only tap comments that move focus (_focus)
+                    s = _said()
+                    s[url] = time.time()
+                    SAID.write_text(json.dumps(s, indent=1))
             _inbox({"kind": "tapspace-tap-say", "tap": key, "message": body, "url": url,
                     "via": via})
             _hot(key, 0.15)

@@ -196,6 +196,23 @@ elif a[:2] not in (["issue", "close"], ["issue", "edit"]):
     sys.exit("fake gh: unexpected call " + " ".join(a))
 ''' % sys.executable
 
+GH_SAY = '''#!%s
+"""Fake gh for the say route: hperwin's tap, each comment the next url; records every call; never reaches GitHub."""
+import json, os, sys
+a = sys.argv[1:]
+log = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gh-argv.jsonl")
+with open(log, "a") as f:
+    f.write(json.dumps(a) + "\\n")
+if a[:2] == ["issue", "view"]:
+    print(json.dumps({"author": {"login": "hperwin"}, "labels": [{"name": "flightdeck"}]}))
+elif a[:2] == ["issue", "comment"]:
+    print("https://github.com/hperwin/fixture-say/issues/9#issuecomment-%%d" %% sum(1 for _ in open(log)))
+elif a[:2] == ["api", "user"]:
+    print("hperwin")
+else:
+    sys.exit("fake gh: unexpected call " + " ".join(a))
+''' % sys.executable
+
 
 class Taps(unittest.TestCase):
     """One landed tap of the reviewer's is served (TAP), its proof images come from a fake _proof_image, pushes
@@ -926,6 +943,34 @@ class AcceptFromCardTests(Taps):
         self.assertEqual(self.writes(), [["issue", "close"]])
         self.assertEqual(thread(a), rows)
 
+    def test_two_presses_at_once_write_one_row(self):
+        a = name("twice")
+        join(a)
+        c = self.accept_card(a)
+        reads = S._chat_rows
+        self.addCleanup(setattr, S, "_chat_rows", reads)
+
+        def slow(*args):                       # widen the gap between reading the thread and writing the row
+            got = reads(*args)
+            time.sleep(0.05)
+            return got
+        S._chat_rows = slow
+        got, gate = [], threading.Barrier(4)
+
+        def press():
+            gate.wait()
+            got.append(S._accepted(c)["id"])
+        presses = [threading.Thread(target=press) for _ in range(4)]
+        for t in presses:
+            t.start()
+        for t in presses:
+            t.join(10)
+        S._chat_rows = reads
+        rows = [x for x in thread(a) if (x.get("answer") or {}).get("action") == "accept"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(got, [rows[0]["id"]] * 4)
+        self.assertEqual([e["id"] for e in self.new_inbox() if e["kind"] == "tapspace-chat"], [rows[0]["id"]])
+
 
 class ListenTests(Taps):
     """GET /api/chat/listen: the heard cursor (R6) and the answer fields it adds."""
@@ -963,6 +1008,19 @@ class ListenTests(Taps):
         self.assertEqual(ids(join(a)), [two])
         self.assertEqual(S._agents()[a]["heard"], two)
 
+    def test_heard_never_moves_back(self):
+        a = name("cross")
+        join(a)
+        one = say(a, "one")
+        self.assertEqual(ids(join(a)), [one])
+        sent(a, {"line": "Fleet moved"})                       # its card, posted before its next listen
+        S._agent_touch(a, heard=one - 1)                       # a poll that read the rows before `one` writes last
+        self.assertEqual(S._agents()[a]["heard"], one)
+        self.assertEqual(ids(join(a)), [])                     # so `one` is never handed over twice
+        two = say(a, "two")
+        self.assertEqual(ids(join(a)), [two])                  # and it still moves forward
+        self.assertEqual(S._agents()[a]["heard"], two)
+
     def test_listen_hands_an_answer_over_with_its_card_line_label_and_file(self):
         a = name("handover")
         join(a)
@@ -979,6 +1037,31 @@ class ListenTests(Taps):
         stored = {r["id"]: r for r in thread(a)}
         self.assertEqual(stored[img["id"]]["answer"], {"card": c["id"], "image": 0, "verdict": "approve"})
         self.assertEqual(stored[ask["id"]]["answer"], {"card": c["id"], "checks": ["c1"]})
+
+
+class TapCardWaitTests(Taps):
+    """tap.py card waits up to 120 s for the server's answer, which reads the proof images from GitHub first; its
+    other calls keep 30 s. tap.py runs in-process against this module's server."""
+
+    def test_the_card_post_waits_up_to_120_s(self):
+        spec = importlib.util.spec_from_file_location("tapspace_tap_card_wait_under_test", ROOT / "tap.py")
+        T = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(T)
+        T.BASE, T._who = BASE, lambda: {}                       # this server, no Claude session headers
+        a = name("wait")
+        join(a)
+        real, waits = urllib.request.urlopen, []
+        self.addCleanup(setattr, urllib.request, "urlopen", real)
+
+        def spy(req, timeout=None, **k):
+            waits.append((urllib.parse.urlsplit(req.full_url).path, timeout))
+            return real(req, timeout=timeout, **k)
+        urllib.request.urlopen = spy
+        r = T._card_try(a, {"line": "Two proofs to look at"}, [], [], [(TAP["key"], None)])
+        urllib.request.urlopen = real
+        self.assertTrue(r.get("ok"), r)
+        self.assertEqual(len(r["message"]["images"]), 2)
+        self.assertEqual(waits, [("/api/taps", 30), ("/api/chat/reply", 120)])
 
 
 class LookTests(unittest.TestCase):
@@ -1085,6 +1168,42 @@ class FleetTests(Taps):
         self.assertFalse(w([acc, self.you("m", 1, 2, action="accept")]))
         self.assertTrue(w([acc, self.you("m", 1, 2, image=0, verdict="approve")]))       # the picture is the action's
 
+    def test_only_the_newest_card_asks_and_an_accept_settles_with_its_tap(self):
+        ask = {"q": "Q?", "checks": [{"id": "c1", "label": "A"}], "text": False}
+        w = S._waits_on_you
+        # a newer card leaves an older question behind, like its images (CONTRACT 18)
+        moved_on = [self.ask_card("m", 1, ask=ask), self.ask_card("m", 2)]
+        self.assertFalse(S._ask_open(moved_on))
+        self.assertFalse(w(moved_on))
+        self.assertTrue(w([self.ask_card("m", 1, ask=ask), self.you("m", 1, 2, checks=["c1"]), self.ask_card("m", 3, ask=ask)]))
+        self.assertFalse(w([self.ask_card("m", 1, ask=ask), self.ask_card("m", 3, ask=ask), self.you("m", 3, 4, checks=[])]))
+        # an Accept card is settled by its answer row, or once its tap is no longer open (accepted on its tap card or
+        # on GitHub, or closed)
+        acc = self.ask_card("m", 5, images=[{"label": "One"}], action={"kind": "tap_accept", "tap": TAP["key"]})
+        for phase, waits in (("landed", True), ("holding", True), ("done", False), ("closed", False)):
+            with self.subTest(phase=phase):
+                self.assertEqual(w([acc], [tap(TAP["key"], phase, TAP["last"])]), waits)
+        self.assertTrue(w([acc], [tap("hperwin/other-app#1", "done", TAP["last"])]))     # another tap says nothing
+        self.assertTrue(w([acc], []))                                                     # not served: still waits
+        # the fleet's needs_you reads the same rule
+        rows = [self.master("lead", "here", role="lead"), self.master("m", "here", last="19:40")]
+        f = lambda phase: next(x for x in S._fleet(rows, [tap(TAP["key"], phase, "2026-10-16T19:50:00Z")], [acc])
+                               if x["key"] == "agent:m")
+        self.assertTrue(f("landed")["needs_you"])
+        self.assertFalse(f("done")["needs_you"])
+
+    def test_the_leads_waiting_word_reads_the_same_rule(self):
+        lead = name("waitlead")
+        join(lead)
+        self.assertEqual(call("/api/agents/lead", {"name": lead})[0], 200)
+        sent(lead, {"line": "The lineup fix is ready to accept", "action": {"kind": "tap_accept", "tap": TAP["key"]}})
+        self.addCleanup(setattr, S.activity, "of", S.activity.of)
+        S.activity.of = lambda *a, waits, **k: {"waits": waits()}       # what the lead's activity is handed
+        S.TAPS["items"] = [dict(TAP, phase="landed", phase_word="Landed")]
+        self.assertEqual(row(lead)["activity"], {"waits": True})
+        S.TAPS["items"] = [dict(TAP, phase="done", phase_word="Done")]       # Hayden accepted it on its tap card
+        self.assertEqual(row(lead)["activity"], {"waits": False})
+
     def test_no_lead_no_fleet(self):
         self.assertEqual(S._fleet([self.master("m1", "thinking", 1, 3)], [tap("a/app#1", "holding", "2026-10-16T19:50:00Z")],
                                   []), [])
@@ -1099,23 +1218,35 @@ class FleetTests(Taps):
 
 
 class FocusTests(Taps):
-    """focus: the thread the reviewer's newest own message went to (CONTRACT section 6)."""
+    """focus: the thread the reviewer's newest own message went to (CONTRACT section 6). A tap comment counts only
+    when he sent it through TapSpace (the say route records it); an agent's own gh comment never does (section 18)."""
 
     def iso(self, ts):
         return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts))
+
+    def his(self, ts):
+        """A tap comment the reviewer sent through TapSpace, as _tap serves it, recorded the way the say route does."""
+        url = f"{TAP['url']}#issuecomment-{uuid.uuid4().int % 10 ** 9}"
+        with S._lock:
+            S.SAID.write_text(json.dumps({**S._said(), url: time.time()}))
+        return {"who": "you", "ts": self.iso(ts), "via": "", "body": "go", "url": url}
 
     def test_the_newest_own_message_names_the_thread(self):
         t0 = S._epoch("2026-10-16T19:00:00Z")
         chat = [{"id": 1, "agent": "A", "role": "you", "ts": t0 + 10}, {"id": 2, "agent": "B", "role": "master", "ts": t0 + 50},
                 {"id": 3, "agent": "B", "role": "you", "ts": t0 + 20}, {"id": 4, "agent": "C", "role": "system", "ts": t0 + 90}]
-        msg = lambda who, ts, via="": {"who": who, "ts": self.iso(ts), "via": via, "body": "b"}
-        self.assertEqual(S._focus(chat, []), "agent:B")
+        msg = lambda who, ts, via="": {"who": who, "ts": self.iso(ts), "via": via, "body": "b",
+                                       "url": f"{TAP['url']}#issuecomment-{int(ts)}"}
+        said = {msg("you", t0 + 30)["url"], msg("you", t0 + 15)["url"]}           # what the say route recorded
+        self.assertEqual(S._focus(chat, [], said), "agent:B")
         t = dict(TAP, messages=[msg("you", t0 + 30), msg("tap", t0 + 80), msg("you", t0 + 70, via="Muddi")])
-        self.assertEqual(S._focus(chat, [t]), TAP["key"])
-        self.assertEqual(S._focus(chat, [dict(TAP, messages=[msg("you", t0 + 15)])]), "agent:B")
-        self.assertEqual(S._focus(chat[:1], []), "agent:A")
-        self.assertIsNone(S._focus([], [dict(TAP, messages=[msg("tap", t0)])]))
-        self.assertIsNone(S._focus([chat[1], chat[3]], []))
+        self.assertEqual(S._focus(chat, [t], said), TAP["key"])
+        self.assertEqual(S._focus(chat, [dict(TAP, messages=[msg("you", t0 + 15)])], said), "agent:B")
+        self.assertEqual(S._focus(chat[:1], [], said), "agent:A")
+        self.assertIsNone(S._focus([], [dict(TAP, messages=[msg("tap", t0)])], said))
+        self.assertIsNone(S._focus([chat[1], chat[3]], [], said))
+        # an agent's own gh comment is signed in as him too, but no TapSpace surface sent it: never the focus
+        self.assertEqual(S._focus(chat, [dict(TAP, messages=[msg("you", t0 + 95)])], said), "agent:B")
 
     def test_served_and_it_moves_with_each_message(self):
         a, b = name("focusa"), name("focusb")
@@ -1127,7 +1258,7 @@ class FocusTests(Taps):
         self.assertEqual(call("/api/agents")[1]["focus"], "agent:" + a)            # a card is not his message
         answer(b, {"card": c["id"], "image": 0, "verdict": "approve"})
         self.assertEqual(call("/api/agents")[1]["focus"], "agent:" + b)            # an answer is
-        S.TAPS["items"] = [dict(TAP, messages=[{"who": "you", "ts": self.iso(time.time() + 60), "via": "", "body": "go"}])]
+        S.TAPS["items"] = [dict(TAP, messages=[self.his(time.time() + 60)])]
         self.assertEqual(call("/api/agents")[1]["focus"], TAP["key"])
 
     def test_a_tap_comment_that_moves_focus_wakes_agents(self):
@@ -1139,13 +1270,46 @@ class FocusTests(Taps):
             if "agents" not in r["changed"]:
                 break
         # no write, no bump: only the watch's signature (focus) can notice this
-        S.TAPS["items"] = [dict(TAP, messages=[{"who": "you", "ts": self.iso(time.time() + 3600), "via": "", "body": "go"}])]
+        S.TAPS["items"] = [dict(TAP, messages=[self.his(time.time() + 3600)])]
         seen, deadline = set(), time.time() + 5
         while "agents" not in seen and time.time() < deadline:
             r = call(f"/api/wait?since={cur}&timeout=3")[1]
             seen.update(r["changed"])
             cur = r["cursor"]
         self.assertIn("agents", seen)
+
+    def test_his_say_moves_focus_and_an_agents_own_comment_never_does(self):
+        shim = pathlib.Path(TMP.name) / "gh-say"
+        shim.mkdir(exist_ok=True)
+        (shim / "gh").write_text(GH_SAY)
+        (shim / "gh").chmod(0o755)
+        S.GH = str(shim / "gh")
+        key = "hperwin/fixture-say#9"
+        self.addCleanup(S.HOT.pop, key, None)
+        code, r = call("/api/taps/say", {"key": key, "body": "Ship the lineup first"})     # a TapSpace surface
+        self.assertEqual(code, 200, r)
+        his = r["url"]
+        code, r = call("/api/taps/say", {"key": key, "body": "On it", "via": "Muddi"})     # tap.py tap-say
+        self.assertEqual(code, 200, r)
+        for_him = r["url"]
+        self.assertIn(his, S._said())
+        self.assertNotIn(for_him, S._said())
+        self.assertEqual(S._via()[for_him], "Muddi")
+        # the tap as _tap serves it: his comment, Muddi's tap-say, then Muddi's own gh comment, signed in as him too
+        t0 = float(int(time.time()))                       # whole seconds, like GitHub's createdAt
+        said = [("Ship the lineup first", his), ("On it", for_him),
+                ("Accepted: all three goals", "https://github.com/hperwin/fixture-say/issues/9#issuecomment-999")]
+        iss = {"author": {"login": "hperwin"}, "title": "A tap", "body": "- [ ] it works", "labels": [{"name": "flightdeck"}],
+               "state": "OPEN", "url": "https://github.com/hperwin/fixture-say/issues/9", "createdAt": self.iso(t0 - 600),
+               "closedAt": None, "stateReason": None,
+               "comments": [{"author": {"login": "hperwin"}, "body": b, "createdAt": self.iso(t0 + k), "url": u}
+                            for k, (b, u) in enumerate(said, 1)]}
+        item = S._tap("hperwin/fixture-say", 9, iss)
+        self.assertEqual([(m["who"], m["via"]) for m in item["messages"]], [("you", ""), ("you", "Muddi"), ("you", "")])
+        self.assertEqual(S._focus([{"id": 1, "agent": "Muddi", "role": "you", "ts": t0}], [item]), key)
+        # Muddi's thread stays the focus while Muddi talks on the tap (its tap-say at +2 s, its own comment at +3 s)
+        self.assertEqual(S._focus([{"id": 1, "agent": "Muddi", "role": "you", "ts": t0 + 1.5}], [item]), "agent:Muddi")
+        self.assertIsNone(S._focus([], [dict(item, messages=item["messages"][1:])]))
 
 
 if __name__ == "__main__":
