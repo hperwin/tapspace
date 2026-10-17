@@ -194,6 +194,28 @@ workspace where any number of agents can be connected at once:
   ```
   A script spins a master down with `tap.py stop --as "NAME"` (the same
   route as the rail's Spin down; exit 0 when it stopped, 1 when refused).
+- **Update cards.** A master sends an update as one card in its thread
+  instead of a wall of text: one plain line, the face of what it is about,
+  one visual (a progress bar, steps, a small graph or one big word), the
+  masters and taps that moved with a short note each, pictures to approve,
+  and a question with boxes to tick and a text box.
+  ```bash
+  tap.py card --as "NAME" "The beta look is ready for your look" --progress 3/5 \
+    --item "SnappStats/snapp-ios#1592|Beta look=Ready for your look" \
+    --proof SnappStats/snapp-ios#1592 --ask "Which ships first?" --check "Beta look" --check "Box score"
+  tap.py card --as "NAME" "The lineup fix landed. Accept it?" --accept SnappStats/snapp-ios#1583
+  ```
+  Each `--item` is `REF[|name][=note]`: the part after `|` is a short name
+  (up to 40 characters) the card shows in place of a long title, and the
+  part after `=` is what changed. `--accept KEY` gives the card Accept and
+  Not quite for that landed tap and, when the card has no `--image` or
+  `--proof`, shows that tap's proof pictures. His answers come back through
+  `tap.py listen` as one line plus one `    answer: {json}` line:
+  `Approved: <label>` or `Not quite: <label>: <note>` on a picture, the
+  question with his ticks and words, and `Accepted: <tap>` or
+  `Not quite: <tap>: <note>` (a deny) on the card's Accept. Approving a
+  picture never accepts a tap; only the card's Accept does, through the
+  tap's own Accept.
 - **Notes per master.** Under each master in the rail: the cards you sent a
   change note on that belong to that master, newest first, with a blue dot on
   the agent. A row clears when the master posts a new version of that card;
@@ -218,28 +240,61 @@ workspace where any number of agents can be connected at once:
   whether your messages were seen (an 👀 reaction). Writing to a tap posts an issue comment as you. Taps
   are scoped by issue author, so other people's taps never appear.
 
+The page, the Mac app and Glint draw a card the same way. Its head is its
+subject, never the sender (the thread already says who is talking): one
+face with its short name or title and the line under it, or a small stack of
+faces when it moves several things. Item rows are text only: the name (else
+the title), the note, and at the right a tap's phase word or a master's
+"N of M" steps with a thin bar. Answers fold into the card, and a card plays
+its entrance once, when it lands in the thread you have open. With a lead on
+the list (`tap.py lead`, Muddi here), the lead is pinned on top with a strip
+of everything running under it, needs-you first, and the other masters fold
+behind one disclosure (the page remembers it in `localStorage
+tapspace.rail.open`). The thread you last wrote in is your focus: it never
+shows an unread dot or counts in a badge. The lead's thread head says what
+it is doing right now (what woke it, Thinking, the tool it is running,
+Listening, Waiting on you, Idle, Offline), read from its own Claude Code
+session; it reports nothing.
+
 Every agent can talk to all of your taps too: `tap.py taps`, `tap.py tap-read KEY`,
 `tap.py tap-say --as NAME KEY "text"` (posted as you, signed "Sent by NAME"), and
 `tap.py tap-watch` (blocks until any tap says something new). The server checks
 each open tap every 3 seconds with GitHub conditional requests (a 304 costs no
 rate limit), so replies show up within seconds without webhooks.
 
-Endpoints: `GET /api/agents` (`{agents, links}`), `GET /api/chat?agent=NAME`,
+Endpoints: `GET /api/agents` (`{agents, links, fleet, focus}`), `GET /api/chat?agent=NAME`,
 `GET /api/chat/listen?agent=NAME`, `POST /api/chat {agent, body, images?}`,
 `POST /api/chat/reply {agent, body, images?}` (images: `[{b64, ext}]`),
+`POST /api/chat/reply {agent, card, images?}` sends an update card (this Mac only;
+an item is `{ref, name?, note?}`, `name` up to 40 characters; an image may be
+`{proof: {key, i}}`, a tap's proof copied at send time; 503 with `retry: true`
+while the taps load),
+`POST /api/chat {agent, nonce?, answer}` answers one, `answer` being
+`{card, image, verdict: approve|change, note?}`, `{card, checks, text?}` or
+`{card, action: deny, note?}` (the server writes the row's body),
 `POST /api/agents/title {agent, title}`, `POST /api/agents/relay {agent}`,
 `POST /api/agents/progress {name, goal?, steps?, current?, step?, note?, clear?}`
 (this Mac only; `clear: true` removes the card),
 `POST /api/agents/read {name}`,
 `POST /api/agents/stop {name}` (`{ok, stopped: [pids], tmux: [sessions]}`; an unknown NAME or one with no
 live Claude session answers `{ok: false, error}` and ends nothing), `GET /api/taps`,
-`POST /api/taps/say {key: "owner/repo#n", body}`, `POST /api/taps/refresh`.
+`POST /api/taps/say {key: "owner/repo#n", body}`, `POST /api/taps/refresh`,
+`POST /api/taps/accept {key, card?}` (your sign-off on a landed tap, never an
+agent's; with `card`, the card whose Accept you pressed, it also writes that
+card's `Accepted` answer).
 The endpoints that speak for you accept same-origin JSON only.
 `GET /api/chat?agent=NAME&after=ID` returns only the rows after that id.
 An agent row may carry `progress` (`{goal, steps, current, note, updated}`;
 `current` counts from 0 and equals the number of steps when the run is done),
 `notes` (`[{ticket, version, title, note, ts, thumb}]`, newest first, at most 8)
-and `notes_read` (the time of the last read mark). Each link is
+and `notes_read` (the time of the last read mark). A row also carries `look`
+(which face it is drawn with; 0 is the lead's), and the lead's row carries
+`activity` (`{state, word, detail, since}`, state one of switching, gone,
+working, waiting, idle; null with no claimed session). `fleet` lists
+everything running under the lead, needs you first, then working (each
+`{key, kind, title, state or phase, done, total, needs_you, working}`; empty
+with no lead). `focus` is the thread key your newest own message went to
+(null when you never wrote). Each link is
 `{a, b, last, count, summary, active, from}`: two agent NAMEs, the latest
 message's time and sender, the messages in the last 24 hours, a short plain
 summary, and `active` while the latest one is under 10 minutes old.
@@ -267,7 +322,10 @@ taps and cards as this page and the Mac app.
    `{cursor, changed: ["agents", "chat", "taps", "cards"]}` the moment any of
    them changes, at once when you are behind, and an empty `changed` on timeout.
    Start with `since=0`.
-   Goal cards, notes, read marks and links ride the `agents` kind.
+   Goal cards, notes, read marks and links ride the `agents` kind. Cards and
+   answers ride `chat` and `agents`; the fleet, the focus and the lead's
+   activity ride `agents` (a change of its state, word or detail, never of
+   `since` alone).
 4. **Push.** `POST /api/devices {token, env: "sandbox"|"production"}` stores the
    phone in `data/devices.json`. Agent replies, tap comments and new or updated
    cards then send a notification, once an APNs key exists:
@@ -327,8 +385,9 @@ Flags, for verification:
 
 | Flag | What it does |
 |---|---|
-| `--snapshot <dir>` | Renders every scene from the real views to 2x PNGs (Visual, a card in notes mode, lightbox, an agent thread, the same thread in a 1512 by 887 window, a thinking agent opened the way a click opens it, a tap thread, the pill collapsed, bulging and expanded), writes `scenes.json` (each scene, any problems, and the masters data the app decoded), and exits. It runs offscreen with no Dock icon and never takes focus, and it refuses to run (exit 2) unless `TAPSPACE_URL` names a scratch server on this Mac. |
+| `--snapshot <dir>` | Renders every scene from the real views to 2x PNGs (Visual, a card in notes mode, lightbox, an agent thread, the same thread in a 1512 by 887 window, a thinking agent opened the way a click opens it, a tap thread, the lead's thread with its update cards, the rail with the lead's fold open, the pill collapsed, bulging and expanded; the thinking scene is skipped, not failed, when no master is thinking), writes `scenes.json` (each scene, any problems, and the masters data the app decoded), and exits. It runs offscreen with no Dock icon and never takes focus, and it refuses to run (exit 2) unless `TAPSPACE_URL` names a scratch server on this Mac. |
 | `--snapshot <dir>` with `TAPSPACE_LINK_FRAMES=1` | Instead of the scenes, checks the progress column's ordering and pairing rules and renders the line between two masters forming, chasing, turning and ending as 2x frames, 30 per second of motion (`f000.png`..., `frames.json`), offscreen like the scenes. |
+| `--snapshot <dir>` with `TAPSPACE_CARD_FRAMES=1\|live\|checks` | Card frames instead of the scenes: `1` replays the lead's newest picture card and question card arriving and being answered (nothing is posted); `live` waits for new cards on a scratch server, records their real arrival, then answers them for real there (the one harness mode that writes, and only to that server); `checks` runs the card rule checks and exits. |
 | `--demo` | A scripted 10 s loop (tabs, notes, rail selection, a bubble flying in, the pill spreading and retracting) that repeats until you quit. Never sends anything. On screen. |
 | `--fps` | Logs display-link frames per second each second, and whether each surface is moving, still or paused. |
 | `--tab visual\|chat`, `--thread agent:NAME\|owner/repo#n` | Open on a tab or thread. |
@@ -340,6 +399,7 @@ mac/Scripts/seed.sh 4748                      # scratch server: real screenshots
 mac/Scripts/seed.sh --link <its data dir>     # the two masters exchange a message (active for 10 minutes): right before a render
 mac/Scripts/seed.sh --copy 4749               # scratch server on a copy of the live cards, chat and agents
 mac/Scripts/verify.sh 4748                    # build, seed, link, what the server serves, offscreen scenes and link.mp4, the app against the server
+CARD=0 mac/Scripts/verify.sh 4748             # skip the card frames and card.mp4
 FPS=1 mac/Scripts/verify.sh 4748              # also the --demo fps run: a window and a second pill ON SCREEN
 mac/Scripts/fps.sh http://127.0.0.1:4748 30   # --demo --fps for 30 s on screen, then a frame-rate summary and crash check
 mac/Scripts/seed.sh --stop <its data dir>     # stop a scratch server seed.sh started

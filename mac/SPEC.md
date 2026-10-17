@@ -54,8 +54,9 @@ TAPSPACE_URL, default http://127.0.0.1:4747. If the server is down at launch, st
 
 ### Chat tab (parity with the web Chat tab, natively)
 Naming: Hayden's GitHub agent issues are called TAPS. Never show the word "pilot" anywhere in the UI.
-- Left rail: "Agents" section (GET /api/agents, poll ~2s): each agent row = a glossy blue ORB (radial gradient sphere) that pulses
-  with an expanding ripple while "thinking", is lively while "here", desaturated while "away"; name + state + where. Then
+- Left rail: "Agents" section (GET /api/agents, poll ~2s): each agent row = an ORB, a flat face disc in the master's look (its
+  tone and mark; look 0 is the lead's) whose face follows its state (happy while "here", focused and pulsing with an
+  expanding ripple while "thinking", wide-eyed while starting or switching cars, sleepy on a grey disc while "away"); name + state + where. Then
   "Your taps" (GET /api/taps, poll ~5s): ring avatar per tap (spinning arc = flying, breathing blue = needs-you, dotted slow spin =
   boarding, green check = landed), title, status, repo, age. Unread dot (springs in) per thread (persist read times in UserDefaults).
   The selected-row highlight is ONE liquid white body that springs from row to row (like the WAU body), not a per-row background.
