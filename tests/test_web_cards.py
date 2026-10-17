@@ -226,6 +226,80 @@ class UrlTests(unittest.TestCase):
         self.assertLess(len(n), 64)                                 # the server keeps 64 characters
 
 
+@unittest.skipUnless(NODE, "node is not installed")
+class NameTests(unittest.TestCase):
+    """Contract A4 and A5: an item's short name in its row and as a single subject, and a master's "N of M"."""
+    LONG = "[Snapp] Simulator screenshots of Snapp show the app the way beta users see it"
+
+    @staticmethod
+    def defn(name):
+        # one top-level definition as the page writes it: a function to its matching brace, a const to its semicolon
+        i = re.search(rf"^(?:function {name}\(|const {name} = )", PAGE, re.M).start()
+        if PAGE.startswith("const", i):
+            return PAGE[i:PAGE.index(";\n", i) + 1]
+        depth = 0
+        for j in range(PAGE.index("{", i), len(PAGE)):
+            depth += {"{": 1, "}": -1}.get(PAGE[j], 0)
+            if not depth:
+                return PAGE[i:j + 1]
+
+    def draw(self, cards):
+        # the page's own itemRow and paintCard over stubbed page state: each card's rows (html) and its head's name
+        page = "\n".join(self.defn(n) for n in ("agentKey", "isAgent", "agentOf", "esc", "MASTER", "PHASES", "PHASE_WORD",
+                                                "tapName", "titleOf", "setPart", "faceTitle", "itemTitle", "itemState",
+                                                "itemRow", "paintCard"))
+        stubs = """
+let agents = [{name: 'Cards', title: 'Chat update cards'}], taps = {items: []};
+const cardMsgs = new Map(), when = () => '', paintFace = () => {};
+const draw = c => { const parts = {}, part = s => parts[s] = parts[s] || {dataset: {}, innerHTML: ''};
+  const el = {querySelector: s => s === '.uask' || s === '.uact' ? null : part(s), querySelectorAll: () => []};
+  paintCard(el, {id: 'm1', rid: 1, ts: 1, card: c, cst: {shots: [], ask: null, act: null}}, true);
+  return {who: parts['.ucwho'].innerHTML, rows: cardHead(c).rows.map(i => itemRow(c.items[i], c, i))}; };
+"""
+        code = PURE + "\n" + page + stubs + f"\nprocess.stdout.write(JSON.stringify({json.dumps(cards)}.map(draw)))"
+        out = subprocess.run([NODE, "-e", code], capture_output=True, text=True, timeout=30)
+        if out.returncode:
+            raise AssertionError(out.stderr)
+        return json.loads(out.stdout)
+
+    def test_a_short_name_shows_in_the_row_and_the_single_subject(self):
+        tap = {"ref": "SnappStats/snapp-ios#1592", "kind": "tap", "title": self.LONG, "phase": "landed", "word": "Landed"}
+        mst = {"ref": "agent:Cards", "kind": "master", "title": "Archived card updates", "state": "here"}
+        one, two, faced = self.draw([
+            {"v": 1, "line": "Ready", "face": tap["ref"], "items": [dict(tap, name="Beta look", note="Ready for your look")]},
+            {"v": 1, "line": "Two", "face": None, "items": [dict(tap, name="Beta look"), mst]},
+            {"v": 1, "line": "Three", "face": "agent:Cards", "items": [tap, dict(mst, name="Card fix")]}])
+        self.assertEqual((one["who"], one["rows"]), ("Beta look", []))       # the one subject, never repeated as a row
+        self.assertEqual(two["who"], "")                                     # a stack: the line leads, unchanged
+        self.assertIn('<span class="nm">Beta look</span>', two["rows"][0])
+        self.assertIn('<span class="nm">Archived card updates</span>', two["rows"][1])   # no name: today's title
+        self.assertEqual(faced["who"], "Card fix")                           # the face is one of the items: its name wins
+        self.assertIn("Simulator screenshots of Snapp show the app", faced["rows"][0])   # an unnamed tap keeps its title
+        for drawn in (one["who"], two["rows"][0]):
+            self.assertNotIn("Simulator screenshots", drawn)
+
+    def test_a_blank_or_odd_name_keeps_the_title_and_a_name_is_escaped(self):
+        tap = {"ref": "o/r#1", "kind": "tap", "title": "[Snapp] Lineup card", "phase": "holding"}
+        drawn = self.draw([{"v": 1, "line": "x", "items": [dict(tap, name=n)]} for n in ("   ", 7, None)] +
+                          [{"v": 1, "line": "x", "items": [dict(tap, name=" <b>Box & score</b> ")]}])
+        self.assertEqual([d["who"] for d in drawn[:3]], ["Lineup card"] * 3)
+        self.assertEqual(drawn[3]["who"], "&lt;b&gt;Box &amp; score&lt;/b&gt;")
+
+    def test_a_master_at_its_last_step_reads_n_of_n(self):
+        self.assertEqual(js("[stepCount(0, 4), stepCount(2, 4), stepCount(3, 4), stepCount(4, 4), stepCount(0, 0)]"),
+                         ["1 of 4", "3 of 4", "4 of 4", "4 of 4", ""])
+        steps = ["Audit", "Spec", "Build", "PR open"]
+        mst = {"ref": "agent:Cards", "kind": "master", "title": "Archived card updates", "note": "Fix ready, needs your merge"}
+        tap = {"ref": "o/r#1", "kind": "tap", "title": "Lineup card", "phase": "landed", "word": "Landed", "goals": [3, 3]}
+        rows = self.draw([{"v": 1, "line": "x", "face": None, "items": [
+            dict(mst, progress={"current": 4, "steps": steps}), dict(mst, progress={"current": 3, "steps": steps}), tap]}])[0]["rows"]
+        for row in rows[:2]:
+            self.assertIn('<span class="ucn">4 of 4</span>', row)
+            self.assertNotIn("Done", row)
+        self.assertIn('<i style="width:100%"></i>', rows[0])                   # the thin bar stays: full at the end
+        self.assertIn('<span class="ucn">Landed</span>', rows[2])               # a tap keeps its phase word
+
+
 class MarkupTests(unittest.TestCase):
     GLOBAL = {"card", "chat", "state", "meta", "title", "agent", "ver", "acts", "shot", "shotwrap", "note", "notes", "plan"}
 

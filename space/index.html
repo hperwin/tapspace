@@ -1395,7 +1395,8 @@ function timeLine(v){
   const steps = (Array.isArray(v && v.steps) ? v.steps : []).map(String).slice(0, 7), n = steps.length, at = clampInt(v && v.at, 0, n);
   return {steps, n, at, count: at >= n ? 'Done' : (at + 1) + ' of ' + n, text: at >= n ? n + ' of ' + n : steps[at]};
 }
-const stepCount = (cur, n) => !n ? '' : cur >= n ? 'Done' : (cur + 1) + ' of ' + n;   // a master item's place in its goal card
+// A master item's place in its goal card: its last step and past it read "n of n", never "Done" (contract A5).
+const stepCount = (cur, n) => !n ? '' : Math.min(cur + 1, n) + ' of ' + n;
 // A graph visual's line in a w x 36 box (P7 2.0, the same on every client): 2 clear on each side, straight segments, flat
 // at mid height when every point is equal.
 function sparkPath(points, w = 320){
@@ -1910,7 +1911,9 @@ function itemFace(it, snap, kind, w, size){         // an item's face from the c
   return tapAvatar({key: ref, repo: (t && t.repo) || ref.split('#')[0], initial: (t && t.initial) || snap.initial, status: '',
                     phase: PHASES.has(ph) ? ph : 'done', replying: false}, st);
 }
-const itemTitle = (it, ref, snap) => String(it.title || snap.title || '').replace(/^\[[^\]]*\]\s*/, '') || faceTitle(ref, snap);
+// An item's name in its row and as a single subject: the sender's short name (contract A4), else its title.
+const itemTitle = (it, ref, snap) => typeof it.name === 'string' && it.name.trim() ? it.name.trim() :
+  String(it.title || snap.title || '').replace(/^\[[^\]]*\]\s*/, '') || faceTitle(ref, snap);
 // An item's state in words, with the thin bar where there is progress (w: as it was): a tap's phase word and its goals,
 // a master's "3 of 7" when it has a goal card, else its state word; a project has none.
 function itemState(it, kind, ref, w){
