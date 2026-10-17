@@ -272,5 +272,44 @@ class TapCards(unittest.TestCase):
         self.assertNotIn("proof", r.stdout)
 
 
+
+class AcceptShowsTheProof(unittest.TestCase):
+    """tap.py card --accept KEY with no --image or --proof: the card shows that tap's own proof images, since a
+    decision card is mostly the picture. TapCards' stub server and helpers, without running its cases again."""
+    setUpClass = classmethod(TapCards.setUpClass.__func__)
+    tearDownClass = classmethod(TapCards.tearDownClass.__func__)
+    setUp, tearDown, tap, card, posts, calls = (TapCards.setUp, TapCards.tearDown, TapCards.tap, TapCards.card,
+                                                TapCards.posts, TapCards.calls)
+    P0, P1 = {"proof": {"key": "hperwin/x#7", "i": 0}}, {"proof": {"key": "hperwin/x#7", "i": 1}}
+
+    def test_accept_alone_sends_every_proof_image(self):
+        r, card = self.card("The lineup fix is ready. Accept it?", "--accept", "x#7")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.posts("/api/chat/reply")[-1]["images"], [self.P0, self.P1])
+        self.assertEqual(card["action"], {"kind": "tap_accept", "tap": "hperwin/x#7"})
+        self.assertNotIn("images", card)                 # no labels sent: the server labels them from the captions
+        self.assertEqual(self.calls(), [("GET", "/api/taps"), ("POST", "/api/chat/reply")])   # one look-up
+
+    def test_pictures_given_are_the_only_pictures(self):
+        self.card("Line", "--accept", "x#7", "--proof", "x#7:2")
+        self.assertEqual(self.posts("/api/chat/reply")[-1]["images"], [self.P1])
+        _, card = self.card("Line", "--accept", "x#7", "--image", f"{self.png}=Grid")
+        self.assertEqual(self.posts("/api/chat/reply")[-1]["images"], [{"b64": base64.b64encode(PNG).decode(), "ext": "png"}])
+        self.assertEqual(card["images"], [{"label": "Grid"}])
+
+    def test_a_tap_with_no_proof_still_gets_its_card(self):
+        Stub.answers["/api/taps"] = (200, {"fetched": 1.0, "items": [{"key": "hperwin/x#7"}]})
+        r, card = self.card("Line", "--accept", "x#7")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.posts("/api/chat/reply")[-1]["images"], [])
+        self.assertEqual(card["action"], {"kind": "tap_accept", "tap": "hperwin/x#7"})
+
+    def test_no_accept_no_pictures(self):
+        r, card = self.card("Line", "--item", "x#7")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.posts("/api/chat/reply")[-1]["images"], [])
+        self.assertEqual(self.calls(), [("POST", "/api/chat/reply")])
+
+
 if __name__ == "__main__":
     unittest.main()

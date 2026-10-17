@@ -58,7 +58,8 @@
                                             --proof), a question; prints the stored row. REF = a master's NAME or
                                             title, a tap (owner/repo#n or repo#n) or project:NAME; --proof KEY alone
                                             sends all its proof images; --accept KEY gives the card Accept and Not
-                                            quite for that tap. His answers come back through listen.
+                                            quite for that tap (and its proof images when the card has no --image
+                                            or --proof). His answers come back through listen.
                                             exit 0 = stored, 1 = refused (the reason is printed)
   Any number of agents can be in the space at once; NAME defaults to $TAPSPACE_AGENT.
   tap.py pair [--off]                    -> opens the phone's route to this Mac (Tailscale Serve when
@@ -356,7 +357,8 @@ def _your_tap(flag, key, items):
 
 def _card_try(name, card, images, labels, proofs, accept=None):
     """One try at sending the card: the --accept tap and each --proof tap are looked up first and the proof
-    images numbered. The server's answer, or {error, retry: true} while the taps load."""
+    images numbered; an --accept card with no --image or --proof shows that tap's own proof (a decision card is
+    mostly the picture). The server's answer, or {error, retry: true} while the taps load."""
     card, images, labels = dict(card), list(images), list(labels)
     if proofs or accept:
         got = _call("/api/taps")
@@ -368,6 +370,10 @@ def _card_try(name, card, images, labels, proofs, accept=None):
             if why:
                 return why
             card["action"] = {"kind": "tap_accept", "tap": t["key"]}
+            if not images and not proofs:       # a decision card is mostly the picture: the tap's own proof
+                for i in range(len(t.get("proof") or [])):
+                    images.append({"proof": {"key": t["key"], "i": i}})
+                    labels.append({})
         for key, idx in proofs:
             t, why = _your_tap("--proof", key, items)
             if why:
@@ -511,7 +517,8 @@ def main():
     cd.add_argument("--check", action="append", default=[], help="a box he can tick under --ask (repeatable)")
     cd.add_argument("--text", action="store_true", help="a text box under --ask (on by itself when there is no --check)")
     cd.add_argument("--accept", help="a landed tap (owner/repo#n or repo#n) the reviewer can accept from the card: "
-                                     "its buttons become Accept and Not quite")
+                                     "its buttons become Accept and Not quite; with no --image or --proof the card "
+                                     "shows that tap's proof images")
 
     a = ap.parse_args()
 
