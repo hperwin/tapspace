@@ -28,8 +28,8 @@ enum HarnessCard {
     static func run(app: AppDelegate, dir: URL) {
         let drive = CardDrive(app: app, dir: dir)
         Task { @MainActor in
-            try? await Task.sleep(for: .seconds(240))
-            drive.fail("watchdog: gave up after 240 s")
+            try? await Task.sleep(for: .seconds(600))
+            drive.fail("watchdog: gave up after 600 s")
             drive.finish()
         }
         Task { @MainActor in await drive.go() }
@@ -359,18 +359,16 @@ private final class CardDrive {
         for _ in 0..<n { await frame() }
     }
 
-    /// Step every spring by 1/30 s, let SwiftUI commit, render the window and keep the thread pane.
+    /// Step every spring by 1/30 s, let SwiftUI commit, and render the thread pane alone (the window's own drawing
+    /// of that rect, at 2x: a whole window per frame is slow on a real rail and progress column).
     private func frame() async {
         Motion.main.run(seconds: 1.0 / 30, step: 1.0 / 240)
         try? await Task.sleep(for: .milliseconds(30))
         let i = frames.count
-        guard let view = app.window.contentView, let full = HarnessSnapshot.render(view) else {
+        guard let view = app.window.contentView, let image = pane(view) ?? HarnessSnapshot.render(view) else {
             fail(String(format: "f%03d: render failed", i))
             return
         }
-        let r = CardPose.shared.pane.insetBy(dx: -8, dy: -8).intersection(view.bounds)
-        let image = (r.isEmpty ? nil : full.cropping(to: CGRect(x: r.minX * 2, y: r.minY * 2, width: r.width * 2,
-                                                                height: r.height * 2).integral)) ?? full
         if i == 0, HarnessSnapshot.ink(image) < 0.003 { fail("f000 looks blank") }
         let name = String(format: "f%03d.png", i)
         guard let png = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]),
@@ -379,6 +377,22 @@ private final class CardDrive {
             return
         }
         frames.append(["file": name, "t": Double(i) / 30])
+    }
+
+    /// The pane plus 8 pt (CardPose.pane, top-left origin) through cacheDisplay; nil before it has a frame.
+    private func pane(_ view: NSView, scale: CGFloat = 2) -> CGImage? {
+        let r = CardPose.shared.pane.insetBy(dx: -8, dy: -8).intersection(view.bounds).integral
+        guard r.width > 0, r.height > 0,
+              let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(r.width * scale), pixelsHigh: Int(r.height * scale),
+                                         bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                         colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)
+        else { return nil }
+        view.layoutSubtreeIfNeeded()
+        view.displayIfNeeded()
+        rep.size = r.size
+        view.cacheDisplay(in: view.isFlipped ? r : CGRect(x: r.minX, y: view.bounds.height - r.maxY, width: r.width, height: r.height),
+                          to: rep)
+        return rep.cgImage
     }
 
     /// Snap every spring to rest across a few layout passes (HarnessSnapshot's settle).
