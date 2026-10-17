@@ -127,7 +127,7 @@ class ActivityTests(unittest.TestCase):
         return js(f"headSub({json.dumps(a)})", self.HEAD)
 
     def test_the_face_follows_what_it_does(self):
-        self.assertEqual(js("ACT_STATE"), {"working": "thinking", "switching": "switching", "waiting": "here", "idle": "away", "gone": "away"})
+        self.assertEqual(js("ACT_STATE"), {"working": "thinking", "switching": "switching", "waiting": "here", "idle": "idle", "gone": "away"})
         self.assertEqual(js("['working', 'gone', 'planning', 'constructor', '__proto__', null].map(actKind)"),
                          ["working", "gone", "", "", "", ""])
 
@@ -143,6 +143,16 @@ class ActivityTests(unittest.TestCase):
                          '<span class="act"><i></i><span class="aw">&lt;b&gt;Planning&lt;/b&gt;</span></span>')
         self.assertEqual(self.sub({"role": "master", "first": 1, "activity": {"state": "working", "word": "Thinking"}}), "Started 6h")
         self.assertEqual(self.sub(dict(lead, activity={"state": "idle", "word": "  "})), "Started 6h")
+
+    def test_idle_sleeps_on_its_own_tone_and_gone_is_greyed(self):
+        # contract 18: an idle lead is not offline; only gone wears the grey disc
+        faces = js("['idle', 'gone', 'waiting', 'working'].map(s => masterFace({look: 0, state: ACT_STATE[s]}))")
+        self.assertEqual([re.match(r'<span class="([^"]*)"', f).group(1) for f in faces],
+                         ["orb t0 idle", "orb t0 away", "orb t0 here", "orb t0 thinking"])
+        self.assertEqual(js("[faceArt(0, ACT_STATE.idle), faceArt(0, ACT_STATE.gone)]"), [js("faceArt(0, 'away')")] * 2)   # both asleep
+        self.assertEqual(js("orbCls({look: 2, state: ACT_STATE.idle})"), "orb t1 idle")   # the lead's look keeps its tone
+        self.assertNotRegex(CSS, r"\.orb\.idle\b")                                         # nothing greys an idle face
+        self.assertIn(".orb.away{background:#d1d1d6", CSS)
 
     def test_head_wiring(self):
         head = block("function renderHead(", "/* ---- a tap's action card")
@@ -191,6 +201,30 @@ class MarkupTests(unittest.TestCase):
         self.assertIn('classList.contains("chatmode") && document.hasFocus()) markRead(current)',
                       block("function renderThread(", "function msgEl("))
         self.assertIn("focusKey = typeof d.focus === 'string'", block("async function pollAgents(", "async function pollChat("))
+
+    def test_the_chat_tab_reads_only_a_focused_page(self):
+        # contract 18: focus gates the read mark, including the one the Chat tab writes at page load; a visible page that
+        # is not focused still shows its cards
+        if not NODE:
+            self.skipTest("node is not installed")
+        tab = block("function setTab(name, instant){", "tabs.addEventListener('click'")
+
+        def run(focused):
+            code = f"""(() => {{
+const did = [], document = {{body: {{classList: {{toggle: () => {{}}}}}}, hasFocus: () => {json.dumps(focused)}}};
+const tabs = {{querySelectorAll: () => []}}, placePill = () => {{}}, store = () => {{}};
+const location = {{hash: '#chat'}}, history = {{replaceState: () => {{}}}};
+const current = 'agent:M', markRead = k => did.push('read ' + k), scrollEnd = () => did.push('end');
+const showCards = () => did.push('cards'), fitStrip = () => {{}};
+{tab}
+setTab('chat', true);
+process.stdout.write(JSON.stringify(did)); }})()"""
+            out = subprocess.run([NODE, "-e", code], capture_output=True, text=True, timeout=30)
+            self.assertEqual(out.returncode, 0, out.stderr)
+            return json.loads(out.stdout)
+
+        self.assertEqual(run(True), ["read agent:M", "end", "cards"])
+        self.assertEqual(run(False), ["end", "cards"])
 
     def test_a_bead_opens_its_thread_and_leaves_the_group_as_it_is(self):
         fleet = block("function syncFleet(", "function beadHtml(")

@@ -299,6 +299,84 @@ const draw = c => { const parts = {}, part = s => parts[s] = parts[s] || {datase
         self.assertIn('<i style="width:100%"></i>', rows[0])                   # the thin bar stays: full at the end
         self.assertIn('<span class="ucn">Landed</span>', rows[2])               # a tap keeps its phase word
 
+    def test_a_masters_now_and_was_words_count_the_same_way(self):
+        # contract 18: the step being worked on (current + 1) while current < M, M of M from the last step on, for the
+        # word as it is now and as it was before the change beat
+        page = "\n".join(self.defn(n) for n in ("agentKey", "isAgent", "MASTER", "PHASES", "PHASE_WORD", "itemState"))
+        steps = ["Audit", "Spec", "Early look", "Build"]
+        cases = [(2, 1), (3, 2), (4, 3), (4, 4)]
+        code = PURE + "\n" + page + f"""
+const words = {json.dumps(cases)}.map(([now, was]) => {{ const it = {{progress: {{current: now, steps: {json.dumps(steps)}}}, was: {{current: was}}}};
+  return [itemState(it, 'master', 'agent:Cards', null).word, itemState(it, 'master', 'agent:Cards', it.was).word]; }});
+process.stdout.write(JSON.stringify(words));"""
+        out = subprocess.run([NODE, "-e", code], capture_output=True, text=True, timeout=30)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(json.loads(out.stdout), [["3 of 4", "2 of 4"], ["4 of 4", "3 of 4"], ["4 of 4", "4 of 4"], ["4 of 4", "4 of 4"]])
+
+
+@unittest.skipUnless(NODE, "node is not installed")
+class ReviewFixTests(unittest.TestCase):
+    """Contract 18 on the web: the timeline's words, an Accept card whose tap is done, an ask answered with ticks only."""
+
+    @staticmethod
+    def run_page(names, code):
+        page = "\n".join(NameTests.defn(n) for n in names)
+        out = subprocess.run([NODE, "-e", PURE + "\n" + page + "\n" + code], capture_output=True, text=True, timeout=30)
+        if out.returncode:
+            raise AssertionError(out.stderr)
+        return json.loads(out.stdout)
+
+    def test_the_timeline_reads_count_then_step(self):
+        got = self.run_page(("esc", "CHECK", "visualHtml"), """
+const steps = ['Audit', 'Review', 'Build', 'Ship'];
+process.stdout.write(JSON.stringify([1, 4].map(at => visualHtml({kind: 'timeline', steps, at}).match(/<span class="uvlabel">.*<\\/span>$/)[0])));""")
+        self.assertEqual(got, ['<span class="uvlabel"><b>2 of 4</b> · Review</span>', '<span class="uvlabel"><b>Done</b> · 4 of 4</span>'])
+
+    def test_an_accept_card_reads_accepted_once_its_tap_is_done(self):
+        # contract 18 (Glint's rule): no answer and the live tap done reads "Accepted" in place of the buttons; an answer wins
+        got = self.run_page(("agentKey", "isAgent", "agentOf", "esc", "tapName", "titleOf", "setPart", "faceTitle", "fresh",
+                             "CHECK", "SENT", "says", "tapDone", "paintAct"), """
+let agents = [], taps = {items: []};
+const cardUi = new Map(), acceptAt = {}, cardSwap = () => {}, CK = CHECK;
+const paint = (phase, answer, pressedOnTapCard) => {
+  taps = {items: phase ? [{key: 'o/r#7', title: 'Lineup card', phase}] : []};
+  for (const k in acceptAt) delete acceptAt[k];
+  if (pressedOnTapCard) acceptAt['o/r#7'] = Date.now();
+  const cls = new Set(), parts = {}, part = s => parts[s] = parts[s] || {dataset: {}, innerHTML: '', className: '',
+    classList: {remove(){}, add(){}}, querySelector: () => ({value: ''})};
+  const ac = {classList: {toggle: (c, on) => on ? cls.add(c) : cls.delete(c)}, querySelectorAll: () => [],
+              querySelector: s => s === '[data-uc=confirm]' ? null : part(s)};
+  const st = Object.assign({verdict: '', note: '', pending: false}, answer || {});
+  paintAct(ac, {rid: 7, card: {action: {kind: 'tap_accept', tap: 'o/r#7'}, faces: {}}}, st, true);
+  return [cls.has('answered'), parts[':scope > .usays'].innerHTML.replace(CK, '')];
+};
+process.stdout.write(JSON.stringify([paint('landed'), paint('done'), paint('done', null, true), paint('done', {verdict: 'deny', note: 'off'}),
+  paint('landed', {verdict: 'accept'}), paint('closed'), paint('')]));""")
+        self.assertEqual(got, [[False, ""], [True, "Accepted"], [True, "Accepted"], [True, "Not quite: off"],
+                               [True, "Accepted"], [False, ""], [False, ""]])
+        # a tap turning done repaints the card: the render signature carries it
+        self.assertIn("(m.cst.act && tapDone(cardAction(m.card).tap) ? '~' : '')", PAGE)
+
+    def test_an_ask_answered_with_ticks_only_shows_no_empty_box(self):
+        got = self.run_page(("esc", "setPart", "SENT", "says", "syncAsk", "paintAsk"), """
+const cardSwap = () => {};
+const paint = st => {
+  const txt = {value: '', disabled: false, hidden: false}, cls = new Set(), parts = {};
+  const ak = {classList: {toggle: (c, on) => on ? cls.add(c) : cls.delete(c), contains: c => cls.has(c)},
+              querySelectorAll: () => [], querySelector: s => s === 'textarea' ? txt :
+                (parts[s] = parts[s] || {dataset: {}, innerHTML: '', className: '', disabled: false})};
+  paintAsk(ak, Object.assign({checks: ['c1'], text: '', done: true, pending: false}, st), true);
+  return [txt.hidden, txt.disabled, txt.value];
+};
+process.stdout.write(JSON.stringify([paint({}), paint({pending: true}), paint({text: 'ship box score first'}),
+  paint({done: false, checks: []})]));""")
+        self.assertEqual(got, [[True, True, ""], [True, True, ""], [False, True, "ship box score first"], [False, False, ""]])
+
+    def test_the_fields_ask_the_same_words_on_every_client(self):
+        self.assertIn('placeholder="What should change?"', CARDS)          # Not quite, on a picture or an action
+        self.assertIn('placeholder="Your answer…"', CARDS)                 # the ask
+        self.assertNotIn("Tell the agent what to change", CARDS)
+
 
 class MarkupTests(unittest.TestCase):
     GLOBAL = {"card", "chat", "state", "meta", "title", "agent", "ver", "acts", "shot", "shotwrap", "note", "notes", "plan"}

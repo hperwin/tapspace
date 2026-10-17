@@ -1127,7 +1127,10 @@ function setTab(name, instant){
   placePill(instant);
   store('tapspace.tab', name);
   if (location.hash !== '#' + name) history.replaceState(null, '', '#' + name);
-  if (name === 'chat'){ markRead(current); scrollEnd(true); showCards(false); fitStrip(); }   // a card waiting on the Chat tab plays now
+  if (name === 'chat'){                             // a card waiting on the Chat tab plays now; read only while he looks (O2)
+    if (document.hasFocus()) markRead(current);
+    scrollEnd(true); showCards(false); fitStrip();
+  }
 }
 tabs.addEventListener('click', e => { const b = e.target.closest('.tab'); if (b) setTab(b.dataset.tab); });
 
@@ -1304,7 +1307,8 @@ function faceArt(look, state){
   return `<svg class="fa" viewBox="0 0 88 88" aria-hidden="true"><path d="${FACE_EYES[x]}"/><path class="ln" d="${FACE_MOUTH[x]}"/>` +
     (ln ? `<path class="ln" d="${ln}"/>` : '') + (dot ? `<path d="${dot}"/>` : '') + '</svg>';
 }
-const FACE_STATES = new Set(['here', 'thinking', 'starting', 'switching', 'away']);   // a state lands in a class name: only these
+const FACE_STATES = new Set(['here', 'thinking', 'starting', 'switching', 'away', 'idle']);   // a state lands in a class name: only these
+// (idle: the lead's head while it idles, asleep on its own tone; away is the grey disc)
 const orbCls = a => `orb t${faceLook(a.look)[0]} ${FACE_STATES.has(a.state) ? a.state : 'away'}`;
 function masterFace(a, st = ''){ return `<span class="${orbCls(a)}"${st}>${faceArt(a.look, a.state)}</span>`; }
 // a repo's or project's letter, the server's _initial rule: the first letter or digit after the last '/', upper case
@@ -1436,8 +1440,9 @@ const ringPct = f => f && f.total > 0 ? Math.round(100 * clampInt(f.done, 0, f.t
 const quietKey = (key, focus, onScreen) => !!key && (key === focus || key === onScreen);
 const newsCount = (threads, focus, onScreen) =>
   new Set(threads.filter(t => !quietKey(t.key, focus, onScreen) && (t.unread || t.holding)).map(t => t.key)).size;
-// Contract section 7: the lead's face by its activity (working focused, waiting happy, idle and gone asleep).
-const ACT_STATE = {working: 'thinking', switching: 'switching', waiting: 'here', idle: 'away', gone: 'away'};
+// Contract sections 7 and 18: the lead's face by its activity (working focused, waiting happy, idle asleep on its own
+// tone, gone asleep and greyed).
+const ACT_STATE = {working: 'thinking', switching: 'switching', waiting: 'here', idle: 'idle', gone: 'away'};
 const actKind = s => typeof s === 'string' && Object.hasOwn(ACT_STATE, s) ? s : '';   // a state this page does not know: none
 // ---- end pure: rail ----
 
@@ -1935,7 +1940,7 @@ function itemRow(it, c, i){                         // beat 3: one thing that mo
     (it.note ? `<span class="sub">${esc(String(it.note))}</span>` : '') + `</span>` + (end ? `<span class="uend">${end}</span>` : '') + `</div>`;
 }
 function drawHtml(v, uc){                           // the Not quite field: the Visual tab's drawer, its words and Send
-  return `<div class="ucdraw"><textarea maxlength="2000" placeholder="Tell the agent what to change…">${esc(v)}</textarea>` +
+  return `<div class="ucdraw"><textarea maxlength="2000" placeholder="What should change?">${esc(v)}</textarea>` +
     `<button type="button" class="send" data-uc="${uc}"${v.trim() ? '' : ' disabled'}>Send</button></div>`;
 }
 function shotHtml(m, s, i, decide){                 // beat 4: one picture; on a card without an action, Approve and Not quite under it
@@ -2004,9 +2009,11 @@ function paintShot(t, st, first){                   // an image's verdict: its b
   if (!v && was && !first) cardSwap(t.querySelector('.ucacts'));   // refused: the buttons come back
   says(t, v, v === 'ok' ? CHECK + 'Approved' : v === 'sent' ? SENT : v === 'no' ? 'Not quite' + (st.note ? ': ' + esc(st.note) : '') : '', first);
 }
+// An action card's tap is done: accepted on its tap card or another client, so with no answer here it reads Accepted (contract 18).
+const tapDone = key => taps.items.some(t => t.key === key && t.phase === 'done');
 function paintAct(ac, m, st, first){                // contract A1: Accept through the page's own Accept confirm, or Not quite
-  const tap = cardAction(m.card).tap, ui = cardUi.get(m.rid) || {};
-  const v = st.verdict === 'accept' || ui.accepted ? 'ok' : st.verdict === 'deny' ? (st.pending ? 'sent' : 'no') : '';
+  const tap = cardAction(m.card).tap, ui = cardUi.get(m.rid) || {}, shut = !st.verdict && tapDone(tap);
+  const v = st.verdict === 'accept' || ui.accepted || shut ? 'ok' : st.verdict === 'deny' ? (st.pending ? 'sent' : 'no') : '';
   ac.classList.toggle('answered', !!v);
   ac.classList.toggle('confirming', !v && !!ui.confirm);
   const draw = ac.querySelector('.ucdraw');
@@ -2018,7 +2025,7 @@ function paintAct(ac, m, st, first){                // contract A1: Accept throu
     `<button type="button" class="rbtn clear" data-uc="cancel">Cancel</button><button type="button" class="rbtn go" data-uc="confirm">Accept</button></div></div>`);
   ac.querySelectorAll('.ucconfirm button').forEach(b => { b.disabled = !!ui.busy; });
   const yes = ac.querySelector('[data-uc=confirm]'); if (yes) yes.textContent = ui.busy ? 'Accepting…' : 'Accept';
-  says(ac, v, v === 'ok' ? CHECK + (fresh(acceptAt[tap]) ? 'Accepted. It shows as Done in a moment.' : 'Accepted')
+  says(ac, v, v === 'ok' ? CHECK + (fresh(acceptAt[tap]) && !shut ? 'Accepted. It shows as Done in a moment.' : 'Accepted')
     : v === 'sent' ? SENT : v === 'no' ? 'Not quite' + (st.note ? ': ' + esc(st.note) : '') : '', first);
 }
 function paintAsk(ak, st, first){
@@ -2027,7 +2034,8 @@ function paintAsk(ak, st, first){
     boxes.forEach(b => { const on = st.checks.includes(b.dataset.c); b.classList.toggle('on', on); b.classList.remove('tick'); b.setAttribute('aria-checked', on); });
     if (txt && txt.value !== st.text) txt.value = st.text;
   }
-  boxes.forEach(b => { b.disabled = st.done; }); if (txt) txt.disabled = st.done;
+  boxes.forEach(b => { b.disabled = st.done; });
+  if (txt){ txt.disabled = st.done; txt.hidden = st.done && !st.text; }   // answered with ticks only: no empty box
   ak.classList.toggle('answered', st.done);
   syncAsk(ak);
   says(ak, st.pending ? 'sent' : st.done ? 'done' : '', st.pending ? SENT : st.done ? 'Answered' : '', first);
@@ -2042,11 +2050,12 @@ function cardSwap(x){                               // a word or line swapped in
   x.classList.remove('uswap'); void x.offsetWidth; x.classList.add('uswap');
   clearTimeout(x._sw); x._sw = setTimeout(() => x.classList.remove('uswap'), 750);   // a later display flip never replays it
 }
-// First view (contract 10): a card plays its beats the first time it is on screen in the open, focused thread, when it
-// arrived live on this page or is newer than the thread's read mark as it stood when the thread opened. At most the newest
-// two play per open, once the open has settled; every other card is already at rest, as a played card ends.
+// First view (contract 10 and 18): a card plays its beats the first time it is on screen in the open thread of a visible
+// page (focus is not needed: it gates only the read mark), when it arrived live on this page or is newer than the thread's
+// read mark as it stood when the thread opened. At most the newest two play per open, once the open has settled; every
+// other card is seen at rest, as a played card ends, and never plays later.
 const CARD_SETTLE = 700;                  // ms after a thread opens: the head's swapin (#panehead.swap) has finished
-const cardsOnScreen = () => document.body.classList.contains('chatmode') && document.visibilityState === 'visible' && document.hasFocus();
+const cardsOnScreen = () => document.body.classList.contains('chatmode') && document.visibilityState === 'visible';
 function showCards(opened){
   if (!cardsOnScreen()) return;
   const due = [];
@@ -2248,7 +2257,8 @@ function renderThread(){
   // the first fetch is history and never blurs in row by row.
   const loaded = !d.agent || chat.agent === d.agent.name;
   const sig = current + '|' + d.msgs.map(m => m.id + (m.seen ? 's' : '') + (m.pending ? 'p' : '') + ((m.images || []).length) +
-    (m.via ? '@' + titleOf(m.via) : '') + (m.cst ? '#' + JSON.stringify(m.cst) : '')).join(',') + '|' + d.typing + '|' + d.switching +
+    (m.via ? '@' + titleOf(m.via) : '') + (m.cst ? '#' + JSON.stringify(m.cst) + (m.cst.act && tapDone(cardAction(m.card).tap) ? '~' : '') : '')).join(',') +
+    '|' + d.typing + '|' + d.switching +
     (d.tap && hasPhase(d.tap) ? '|' + tapWord(d.tap) : '') + (d.agent ? '|' + d.agent.state + '|' + d.agent.look : '');
   if (sig === rendered.sig){ if (loaded) rendered.loaded = true; showCards(false); return; }
   const switched = rendered.key !== current || !rendered.loaded;
