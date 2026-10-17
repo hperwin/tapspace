@@ -399,8 +399,9 @@ final class ChatGeometry {
 
 /// Bubble entrances: a new message springs in (blur + offset + scale); a
 /// message Hayden just sent flies up out of the composer. An update card plays
-/// its beats when it springs in (CONTRACT 10): on arrival, and for the newest
-/// two Hayden had not seen when the thread opened, once the open has settled.
+/// its beats when it springs in (CONTRACT 10), and so do the newest two Hayden
+/// had not seen when the thread opened: they wait out of sight while the open
+/// settles, then come in on their own (ChatCardView's `hold`).
 @MainActor
 final class BubbleAnimator {
     private var boxes: [String: SpringBox] = [:]
@@ -409,8 +410,8 @@ final class BubbleAnimator {
     private var loaded = false
     /// The open thread's read mark from just before it opened.
     private var openMark: Double = 0
-    /// Cards held out of sight while the thread's open settles.
-    private var held: Set<String> = []
+    /// The unseen cards that play once the thread's open settles.
+    private var opening: Set<String> = []
     /// Rows that had their entrance this session: a card never plays at an open after that.
     private var entered: Set<String> = []
     weak var geo: ChatGeometry?
@@ -423,7 +424,7 @@ final class BubbleAnimator {
     /// in, as on any later open (springing in, every laid-out row re-rendered on
     /// every frame). The exception is `cards` (key, time) newer than `mark()`,
     /// the read mark from before the open, read once per thread switch: the
-    /// newest two of them come in together after `openHold` when `plays`.
+    /// newest two of them play together after `openHold` when `plays`.
     func sync(thread: String, loaded: Bool, keys: [String], fly: Set<String>,
               cards: [(key: String, ts: Double)] = [], mark: () -> Double = { .infinity }, plays: Bool = false) {
         if thread != self.thread { openMark = mark() }
@@ -432,13 +433,10 @@ final class BubbleAnimator {
             self.loaded = loaded
             known = Set(keys)
             boxes.removeAll()
-            held.removeAll()
+            opening.removeAll()
             guard loaded, plays else { return }
             for k in Self.opening(cards, after: openMark) where !entered.contains(k) {
-                let b = SpringBox(0, .chatIn)
-                b.set(1, delay: Self.openHold)
-                boxes[k] = b
-                held.insert(k)
+                opening.insert(k)
                 entered.insert(k)
             }
             return
@@ -460,8 +458,8 @@ final class BubbleAnimator {
 
     func box(_ k: String) -> SpringBox? { boxes[k] }
 
-    /// A card waiting for its thread's open to settle: it plays once its entrance starts.
-    func isHeld(_ k: String) -> Bool { held.contains(k) }
+    /// A card that plays once its thread's open settles (it arrives on its own, after `openHold`).
+    func opens(_ k: String) -> Bool { opening.contains(k) }
 
     /// The cards that play when a thread opens (CONTRACT 10, 12): of the cards newer than the read mark from
     /// before the open, the newest two (`cards` in thread order).
@@ -861,7 +859,7 @@ struct MessageList: View {
                             }
                         }
                         ForEach(ProcessInfo.processInfo.environment["CHATEXP_NOLIST"] == nil ? Array(rows.suffix(limit)) : [], id: \.1) { m, k in
-                            BubbleRow(m: m, box: animator.box(k), held: animator.isHeld(k), maxWidth: maxW, geo: geo)
+                            BubbleRow(m: m, box: animator.box(k), opens: animator.opens(k), maxWidth: maxW, geo: geo)
                                 .id(k)
                         }
                         // The dots' spring is scoped to the dots: on the list it would also
@@ -1029,8 +1027,8 @@ private let bubbleTail: CGFloat = 6
 struct BubbleRow: View {
     let m: DisplayMessage
     let box: SpringBox?
-    /// A card held for its thread's open to settle (BubbleAnimator): it plays once its entrance starts.
-    var held = false
+    /// An unseen card at its thread's open (BubbleAnimator): it waits for the open to settle, then plays.
+    var opens = false
     let maxWidth: CGFloat
     var geo: ChatGeometry? = nil
     @State private var row: CGRect = .zero
@@ -1048,13 +1046,11 @@ struct BubbleRow: View {
         VStack(alignment: m.mine ? .trailing : .leading, spacing: 4) {
             VStack(alignment: m.mine ? .trailing : .leading, spacing: 6) {
                 if let card = m.card {
-                    // Its own surface and beats; the row's received-bubble entrance below is beat 0. A row that
-                    // springs in plays them (once per session, the card's own claim); a held one is rebuilt to play
-                    // the moment its entrance starts.
-                    let play = box != nil && (!held || p > 0)
-                    ChatCardView(row: card, images: m.images, play: play, width: min(maxWidth, ChatCardView.maxWidth))
+                    // Its own surface and beats (once per session, the card's own claim). Arriving, the row's
+                    // received-bubble entrance below is beat 0; at an open, it holds and then arrives on its own.
+                    ChatCardView(row: card, images: m.images, play: box != nil || opens,
+                                 width: min(maxWidth, ChatCardView.maxWidth), hold: opens ? BubbleAnimator.openHold : 0)
                         .equatable()
-                        .id(play)
                 } else {
                     if !m.images.isEmpty {
                         ChatImageGrid(paths: m.images, mine: m.mine, maxWidth: maxWidth)
