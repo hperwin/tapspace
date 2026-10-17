@@ -319,6 +319,9 @@ struct ChatImageCell: View {
     let path: String
     var single: CGSize? = nil
     var square: CGFloat = 0
+    /// A card's picture (CONTRACT 18): exactly this box from the first layout, before the picture decodes, so a card
+    /// arriving live never shifts; the whole picture sits inside it at its own aspect, on the well.
+    var box: CGSize? = nil
     @State private var image: NSImage?
     @State private var hover = SpringBox(0, .snappy)
     @State private var frame: CGRect = .zero
@@ -333,7 +336,7 @@ struct ChatImageCell: View {
                 Image(nsImage: img)
                     .resizable()
                     .interpolation(.high)
-                    .aspectRatio(contentMode: .fill)
+                    .aspectRatio(contentMode: box == nil ? .fill : .fit)
                     .frame(width: size.width, height: size.height)
             }
         }
@@ -358,6 +361,7 @@ struct ChatImageCell: View {
     }
 
     private func cellSize(_ img: NSImage?) -> CGSize {
+        if let box { return CGSize(width: pixel(box.width), height: pixel(box.height)) }
         guard let single else { return CGSize(width: square, height: square) }
         guard let img, img.size.width > 0, img.size.height > 0 else { return CGSize(width: 240, height: 180) }
         let aspect = img.size.width / img.size.height

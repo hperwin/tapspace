@@ -15,7 +15,8 @@
   tap.py listen --as NAME [--timeout 3600]
                                          -> a master agent joins the space under NAME (its own Chat
                                             thread) and blocks until the reviewer writes to it; prints his
-                                            unanswered messages. exit 0 = message, 4 = timeout
+                                            unanswered messages; an answer to a card adds one
+                                            "    answer: {json}" line. exit 0 = message, 4 = timeout
   tap.py title --as NAME "Stat card redesign"
                                          -> names the agent after its work (2 to 4 plain words; the
                                             only name the reviewer sees)
@@ -40,7 +41,7 @@
   Taps (the reviewer's GitHub agent issues; every agent can talk to all of them):
   tap.py taps                            -> list them: key, phase (Proposed, Flying, Needs you, Landed, Done,
                                             Closed), title, last message
-  tap.py tap-read KEY                    -> the whole thread of one tap (KEY = owner/repo#n)
+  tap.py tap-read KEY                    -> the whole thread of one tap (KEY = owner/repo#n), with its numbered proof images
   tap.py tap-say --as NAME KEY "text"    -> message a tap as the reviewer (signed "Sent by NAME")
   tap.py tap-watch [--timeout 3600]      -> blocks until any tap posts something new or changes state
   tap.py relay --as NAME                 -> this session is handing off to its next car: the thread
@@ -48,6 +49,19 @@
   tap.py reply --as NAME "text" [--image a.png ...]
                                          -> that agent answers the reviewer in its thread (images optional;
                                             images the reviewer attaches print as absolute file paths)
+  tap.py card --as NAME "one plain line" [--face REF]
+              [--progress 3/5[:label] | --timeline "a|b|c" [--at N] | --graph "3,5,8[:label]" | --word W]
+              [--item REF[|name][=note] ...] [--image FILE[=label] ...] [--proof KEY[:1,3] ...]
+              [--ask "question" [--check "label" ...] [--text]] [--accept KEY]
+                                         -> one update card in NAME's thread: a face, one visual, how far each item
+                                            got, images for the reviewer to approve (your --image files, then each
+                                            --proof), a question; prints the stored row. REF = a master's NAME or
+                                            title, a tap (owner/repo#n or repo#n) or project:NAME; name = a short name
+                                            the card shows in place of its title (up to 40 characters); --proof KEY
+                                            alone sends all its proof images; --accept KEY gives the card Accept and Not
+                                            quite for that tap (and its newest 4 proof images when the card has no
+                                            --image or --proof). His answers come back through listen.
+                                            exit 0 = stored, 1 = refused (the reason is printed)
   Any number of agents can be in the space at once; NAME defaults to $TAPSPACE_AGENT.
   tap.py pair [--off]                    -> opens the phone's route to this Mac (Tailscale Serve when
                                             logged in, else an ngrok tunnel) and prints the Glint
@@ -123,14 +137,14 @@ def _daemon_env(env):
     return {k: v for k, v in env.items() if k not in SESSION_ENV}
 
 
-def _call(path, payload=None):
+def _call(path, payload=None, timeout=30):
     headers = dict(_who())
     if payload is not None:
         headers["content-type"] = "application/json"
     req = urllib.request.Request(BASE + path, headers=headers,
                                  data=None if payload is None else json.dumps(payload).encode())
     try:
-        with urllib.request.urlopen(req, timeout=30) as r:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
             return json.loads(r.read().decode())
     except urllib.error.HTTPError as e:
         try:
@@ -255,6 +269,132 @@ def _to_step(to):
     return {"current": int(to) - 1} if to.isdigit() else {"step": to}
 
 
+def _at(to, steps):
+    """--at as the wire's at (0 = on the first step, len(steps) = all done): a step number counted from 1, a
+    step's name, or done; the first step when unset."""
+    if to is None:
+        return 0
+    w = to.strip()
+    if w.lower() == "done":
+        return len(steps)
+    if w.isdigit() and 1 <= int(w) <= len(steps):
+        return int(w) - 1
+    hit = next((i for i, s in enumerate(steps) if s.casefold() == w.casefold()), None)
+    if hit is None:
+        sys.exit(f"--at: a step number from 1 to {len(steps)}, a step's name, or done")
+    return hit
+
+
+def _card_parse(a):
+    """tap.py card's flags -> (card, images, labels, proofs), before anything is sent; a flag that does not
+    parse exits here. images and labels hold the --image files; proofs [(KEY, [i, ...] or None for all)] and
+    --accept's KEY are looked up on each try (_card_try)."""
+    card = {"line": a.line}
+    if a.face:
+        card["face"] = a.face
+    if a.at is not None and a.timeline is None:
+        sys.exit("--at goes with --timeline")
+    if a.progress is not None:
+        m = re.fullmatch(r"\s*(\d+)\s*/\s*(\d+)\s*(?::(.*))?", a.progress)
+        if not m:
+            sys.exit('--progress: DONE/TOTAL, like 3/5 or "3/5:3 of 5 landed"')
+        card["visual"] = {"kind": "progress", "done": int(m[1]), "total": int(m[2]),
+                          **({"label": m[3].strip()} if (m[3] or "").strip() else {})}
+    elif a.timeline is not None:
+        steps = [s.strip() for s in a.timeline.split("|") if s.strip()]
+        card["visual"] = {"kind": "timeline", "steps": steps, "at": _at(a.at, steps)}
+    elif a.graph is not None:
+        nums, _, label = a.graph.partition(":")
+        try:
+            pts = [float(x) for x in nums.split(",")]
+            if not all(abs(x) < float("inf") for x in pts):     # nan and inf: not points, and not JSON
+                raise ValueError
+        except ValueError:
+            sys.exit('--graph: numbers with commas, like 3,5,8 or "3,5,8:visits"')
+        card["visual"] = {"kind": "graph", "points": [int(x) if x.is_integer() else x for x in pts],
+                          **({"label": label.strip()} if label.strip() else {})}
+    elif a.word is not None:
+        card["visual"] = {"kind": "word", "text": a.word}
+    if a.item:
+        card["items"] = []
+        for s in a.item:
+            left, _, note = s.partition("=")        # REF[|name][=note]: the note after the first =, the name after |
+            ref, _, short = left.partition("|")
+            card["items"].append({"ref": ref.strip(), **({"name": short.strip()} if short.strip() else {}),
+                                  **({"note": note.strip()} if note.strip() else {})})
+    if (a.check or a.text) and a.ask is None:
+        sys.exit("--check and --text go with --ask")
+    if a.ask is not None:
+        card["ask"] = {"q": a.ask, "checks": a.check, "text": a.text or not a.check}
+    if a.accept is not None and not a.accept.strip():
+        sys.exit("--accept: the tap to accept, owner/repo#n or repo#n")
+    images, labels = [], []
+    for s in a.image:
+        f, _, label = s.partition("=")
+        try:
+            images.append({"b64": _b64(f), "ext": f.rsplit(".", 1)[-1].lower()})
+        except OSError as e:
+            sys.exit(f"cannot read --image {f}: {e.strerror}")
+        labels.append({"label": label.strip()} if label.strip() else {})
+    proofs = []
+    for s in a.proof:
+        key, _, nums = s.partition(":")
+        try:
+            idx = [int(x) for x in nums.split(",")] if nums.strip() else None
+        except ValueError:
+            idx = [0]                   # not a number: refused below, as a 0 is
+        if not key.strip() or (idx is not None and min(idx) < 1):
+            sys.exit("--proof: KEY for all its proof images, or KEY:1,3 (they count from 1, as tap-read shows them)")
+        proofs.append((key.strip(), None if idx is None else [n - 1 for n in idx]))
+    return card, images, labels, proofs
+
+
+def _your_tap(flag, key, items):
+    """(the tap, None) for KEY (owner/repo#n, or repo#n when only one tap matches), else (None, the refusal)."""
+    k = key.casefold()
+    hits = [t for t in items
+            if t["key"].casefold() == k or ("/" not in k and t["key"].casefold().endswith("/" + k))]
+    if len(hits) == 1:
+        return hits[0], None
+    return None, {"error": f"{flag}: {'more than one of your taps is' if hits else 'none of your taps is'} "
+                           f"{key} (tap.py taps lists them)"}
+
+
+def _card_try(name, card, images, labels, proofs, accept=None):
+    """One try at sending the card: the --accept tap and each --proof tap are looked up first and the proof
+    images numbered; an --accept card with no --image or --proof shows that tap's newest 4 proof images (a decision
+    card is mostly the picture). The server's answer, or {error, retry: true} while the taps load."""
+    card, images, labels = dict(card), list(images), list(labels)
+    if proofs or accept:
+        got = _call("/api/taps")
+        if not got.get("fetched"):
+            return {"error": "taps are still loading; send it again in a minute", "retry": True}
+        items = got.get("items") or []
+        if accept:
+            t, why = _your_tap("--accept", accept.strip(), items)
+            if why:
+                return why
+            card["action"] = {"kind": "tap_accept", "tap": t["key"]}
+            if not images and not proofs:       # a decision card is mostly the picture: the tap's newest 4 proofs
+                for i in range(len(t.get("proof") or []))[-4:]:     # the last in its body, under the card's 10
+                    images.append({"proof": {"key": t["key"], "i": i}})
+                    labels.append({})
+        for key, idx in proofs:
+            t, why = _your_tap("--proof", key, items)
+            if why:
+                return why
+            n = len(t.get("proof") or [])
+            if not n or (idx and max(idx) >= n):
+                return {"error": f"--proof: {t['key']} has {n or 'no'} proof images (tap.py tap-read {t['key']})"}
+            for i in range(n) if idx is None else idx:
+                images.append({"proof": {"key": t["key"], "i": i}})
+                labels.append({})
+    if any(labels):
+        card["images"] = labels
+    # the server reads up to 10 proof images from GitHub before it answers: a sender that gave up would send again
+    return _call("/api/chat/reply", {"agent": name, "images": images, "card": card}, timeout=120)
+
+
 def _progress(name, body):
     """One change to NAME's goal card; prints the server's answer. Exit 0 on ok, 1 otherwise."""
     r = _call("/api/agents/progress", {"name": name, **body})
@@ -364,6 +504,30 @@ def main():
     rp.add_argument("text", nargs="?", default="")
     rp.add_argument("--image", action="append", default=[], help="attach an image (repeatable)")
 
+    cd = sub.add_parser("card")
+    cd.add_argument("--as", dest="name", default=me, required=not me)
+    cd.add_argument("line", help="what the reviewer reads first: one plain line (also the push and what older apps show)")
+    cd.add_argument("--face", help="whose face leads the card: a master's NAME or title, a tap (owner/repo#n or "
+                                   "repo#n) or project:NAME; default the one --item, else none")
+    vis = cd.add_mutually_exclusive_group()
+    vis.add_argument("--progress", help='how far: DONE/TOTAL, e.g. "3/5" or "3/5:3 of 5 landed"')
+    vis.add_argument("--timeline", help='steps in order, e.g. "Audit|Spec|Build" (where it is: --at)')
+    vis.add_argument("--graph", help='a small line graph: numbers, e.g. "3,5,8" or "3,5,8:visits"')
+    vis.add_argument("--word", help="one big word, e.g. Landed")
+    cd.add_argument("--at", help="where the timeline is: a step number (1 = first), a step's name, or done")
+    cd.add_argument("--item", action="append", default=[],
+                    help="a master or tap the card moves: REF[|name][=note], name a short name the card shows "
+                         "for it in place of its title (repeatable)")
+    cd.add_argument("--image", action="append", default=[], help="an image to approve: FILE or FILE=label (repeatable)")
+    cd.add_argument("--proof", action="append", default=[],
+                    help="a tap's proof images to approve: KEY for all, KEY:1,3 for some (repeatable)")
+    cd.add_argument("--ask", help="a question for the reviewer, one plain line")
+    cd.add_argument("--check", action="append", default=[], help="a box he can tick under --ask (repeatable)")
+    cd.add_argument("--text", action="store_true", help="a text box under --ask (on by itself when there is no --check)")
+    cd.add_argument("--accept", help="a landed tap (owner/repo#n or repo#n) the reviewer can accept from the card: "
+                                     "its buttons become Accept and Not quite; with no --image or --proof the card "
+                                     "shows that tap's newest 4 proof images")
+
     a = ap.parse_args()
 
     if a.cmd == "pair":
@@ -458,6 +622,8 @@ def main():
             print(f"{t['key']}  [{word(t)}]  {t['title']}\n{t['url']}")
             for g in t["goals"]:
                 print(f"  [{'x' if g['done'] else ' '}] {g['text']}")
+            for n, pf in enumerate(t.get("proof") or [], 1):
+                print(f"  proof {n}: {pf.get('alt') or 'image'}")
             for m in t["messages"]:
                 who = "tap" if m["who"] == "tap" else ("you" + (f" (via {m['via']})" if m.get("via") else ""))
                 print(f"\n--- {who} · {m['ts']}{' · seen' if m.get('seen') else ''}\n{m['body']}")
@@ -568,6 +734,8 @@ def main():
             if pending:
                 for m in pending:
                     print(f"[{m['id']}] {m['body']}")
+                    if m.get("answer"):
+                        print("    answer: " + json.dumps(m["answer"]))
                     for f in m.get("files", []):
                         print(f"    image: {f}")
                 return 0
@@ -579,6 +747,20 @@ def main():
         imgs = [{"b64": _b64(f), "ext": f.rsplit(".", 1)[-1].lower()} for f in a.image]
         r = _call("/api/chat/reply", {"agent": a.name, "body": a.text, "images": imgs})
         print(json.dumps(r))
+        return 0 if r.get("ok") else 1
+
+    if a.cmd == "card":
+        card, images, labels, proofs = _card_parse(a)
+        deadline = time.time() + 60          # a server that just started reads the taps first
+        while True:
+            r = _card_try(a.name, card, images, labels, proofs, a.accept)
+            if not r.get("retry") or time.time() >= deadline:
+                break
+            time.sleep(2)
+        print(json.dumps(r))
+        if r.get("ok") and "card" not in (r.get("message") or {}):
+            print("this TapSpace has no update cards yet: it stored a plain reply", file=sys.stderr)
+            return 1
         return 0 if r.get("ok") else 1
 
     if a.cmd == "status":

@@ -223,9 +223,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     self.visual.focus(id)
                 }
             case .tap(let key), .agent(let key):
-                store.thread = key
-                store.tab = .chat
+                // open first: it keeps the thread's read mark before anything reads the thread, so its unread
+                // cards still play (CONTRACT 10 first view); the Chat tab's didSet would read it first.
                 store.open(key)
+                store.tab = .chat
             }
         }
         showWindow()

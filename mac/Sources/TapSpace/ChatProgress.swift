@@ -149,7 +149,9 @@ struct ChatProgressPanel: View {
         TimelineView(.periodic(from: .now, by: Self.tick)) { ctx in
             let list = column(now: ctx.date.timeIntervalSince1970)
             if Self.unscrolled {
-                list.frame(maxHeight: .infinity, alignment: .top).clipped()
+                // minHeight 0: a column taller than the window is cut at its edge instead of growing the window's
+                // whole layout past it (a frame with no minimum takes its content's height).
+                list.frame(minHeight: 0, maxHeight: .infinity, alignment: .top).clipped()
             } else {
                 ScrollView(.vertical) { list }
                     .scrollIndicators(.never)
@@ -227,7 +229,7 @@ struct ChatProgressCard: View {
         let goal = ChatProgressBoard.oneLine(progress?.goal ?? "")
         Button(action: open) {
             HStack(alignment: .top, spacing: 10) {
-                ChatProgressFace(state: agent.state, still: still)
+                ChatProgressFace(state: agent.state, still: still, look: agent.look)
                 VStack(alignment: .leading, spacing: 0) {
                     HStack(spacing: 6) {
                         Text(agent.title)
@@ -290,10 +292,12 @@ struct ChatProgressCard: View {
 struct ChatProgressFace: View {
     let state: String
     let still: Bool
+    /// The master's face look (0 the lead's); nil draws look 0.
+    var look: Int? = nil
 
     var body: some View {
         let dot = ChatProgressBoard.dot(state)
-        OrbView(state: state)
+        OrbView(state: state, look: look)
             .frame(width: 26, height: 26)
             .overlay(alignment: .bottomTrailing) {
                 BreathingDot(color: dot.color, period: 1.7, low: 0.45, animated: dot.breathe && !still)

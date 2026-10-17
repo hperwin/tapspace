@@ -22,6 +22,9 @@ shows under that master until it posts a new version or its thread is opened. Ag
 messages show as links (links.py). Spin down (POST /api/agents/stop) ends a master's Claude
 session and takes it off the list.
 
+A master can send an update card (tap.py card): one row with its line, its faces, one visual,
+what moved, images to approve and a question; Hayden's answers come back as rows listen hands over.
+
 Run:  python3 server.py     (or: python3 tap.py up)
 URL:  http://127.0.0.1:4747
 """
@@ -45,6 +48,7 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import quote, urlencode
 
+import activity
 import links
 import qr
 
@@ -311,16 +315,41 @@ def _agents():
 
 
 def _agents_write(a):
-    """agents.json, atomically. The caller holds _lock."""
+    """agents.json, atomically, every master row with its look (_looks). The caller holds _lock."""
+    _looks(a)
     tmp = AGENTS.with_suffix(".tmp")
     tmp.write_text(json.dumps(a, indent=1))
     tmp.replace(AGENTS)
+
+
+LOOKS = 18                            # 3 tones x 6 marks; look 0 is the lead's
+LOOK_HOLD = 86400                     # a master seen within this long keeps its look to itself (the rail's longest quiet)
+
+
+def _look(info):
+    """The look a master's face is drawn with: 0 for the lead (by role, so it follows tap.py lead), else its own."""
+    return 0 if info.get("role") == "lead" else info.get("look", 0)
+
+
+def _looks(a):
+    """Gives every master row without a look one, in the order they first joined: the lowest of 1..17 that no
+    other master seen in the last day holds, else the one held least (the lowest of those). The lead holds none
+    and gets none stored. A look, once stored, never moves. The caller holds _lock."""
+    now = time.time()
+    held = [r["look"] for r in a.values() if type(r.get("look")) is int and r.get("role") != "lead"
+            and not r.get("stopped") and now - r.get("seen", 0) < LOOK_HOLD]
+    for r in sorted((r for r in a.values() if "look" not in r and r.get("role") != "lead"),
+                    key=lambda r: r.get("first", 0)):
+        r["look"] = min(range(1, LOOKS), key=lambda k: (held.count(k), k))
+        held.append(r["look"])
 
 
 def _agent_touch(name, **extra):
     with _lock:
         a = _agents()
         row = a.get(name) or {"name": name, "first": time.time()}
+        if "heard" in extra:            # listen's cursor only moves forward: two polls for one NAME can cross
+            extra["heard"] = max(extra["heard"], row.get("heard") or 0)
         row.update(extra)
         row["seen"] = time.time()
         a[name] = row
@@ -358,28 +387,41 @@ def _chat_rows(agent=None):
 
 
 def _chat_images(p):
-    """Saves a post's attached images ([{b64, ext}], max 10, 20 MB each) under
-    data/chat-media and returns their served paths. Raises ValueError on bad input."""
-    out = []
+    """Saves a post's attached images (max 10) under data/chat-media and returns their served paths, in order.
+    An item is {url} (already imported by /api/chat/import), {b64, ext} (20 MB each), or {proof: {key, i}}:
+    proof image i of one of your taps, its clean original copied here so it outlives the tap. Every item is
+    read (a proof fetched) before any file is written, so a refused post leaves nothing behind. Raises
+    ValueError: 400, or its code (503 while the taps load, 502 when GitHub did not serve it)."""
     imgs = p.get("images") or []
     if not isinstance(imgs, list) or len(imgs) > 10:
         raise ValueError("up to 10 images")
+    got = []                              # (served path, None) or (ext, bytes)
     for im in imgs:
-        served = str((im or {}).get("url") or "")
+        im = im if isinstance(im, dict) else {}
+        served = str(im.get("url") or "")
         if served:
             # already imported by /api/chat/import
             f = (DATA / served.lstrip("/")).resolve()
             if not served.startswith("/chat-media/") or not f.is_file() or \
                not str(f).startswith(str(MEDIA.resolve()) + "/"):
                 raise ValueError("unknown image")
-            out.append(served)
+            got.append((served, None))
             continue
-        ext = str((im or {}).get("ext", "")).lower().lstrip(".")
+        if "proof" in im:
+            got.append(_proof_copy(im["proof"]))
+            continue
+        ext = str(im.get("ext", "")).lower().lstrip(".")
         if ext not in _CHAT_IMG_EXTS:
             raise ValueError(f"unsupported image type {ext!r}")
         raw = base64.b64decode(im.get("b64") or "", validate=False)
         if not raw or len(raw) > 20_000_000:
             raise ValueError("empty or too large image")
+        got.append((ext, raw))
+    out = []
+    for ext, raw in got:
+        if raw is None:
+            out.append(ext)
+            continue
         MEDIA.mkdir(parents=True, exist_ok=True)
         name = f"{uuid.uuid4().hex[:12]}.{ext}"
         (MEDIA / name).write_bytes(raw)
@@ -410,31 +452,44 @@ def _chat_import(path):
 CHAT_SEQ = DATA / "chat-seq"           # last id ever used, so ids stay unique after a clear
 
 
-def _chat_add(agent, role, body, images=None, nonce=""):
+def _chat_add(agent, role, body, images=None, nonce="", card=None, answer=None):
     with _lock:
-        rows = _chat_rows()
-        try:
-            seq = int(CHAT_SEQ.read_text())
-        except Exception:
-            seq = 0
-        nid = max(seq, rows[-1]["id"] if rows else 0) + 1
-        CHAT_SEQ.write_text(str(nid))
-        row = {"id": nid, "agent": agent,
-               "role": role, "body": body, "ts": time.time()}
-        if images:
-            row["images"] = images
-        if nonce:
-            row["nonce"] = nonce
-        with CHAT.open("a") as fh:
-            fh.write(json.dumps(row) + "\n")
+        row = _chat_append(agent, role, body, images, nonce, card, answer)
     _bump("chat", "agents")
     return row
 
 
-def _chat_pending(rows):
-    """Reviewer messages after the agent's last reply (rows of ONE agent)."""
+def _chat_append(agent, role, body, images=None, nonce="", card=None, answer=None):
+    """_chat_add's write, for a caller that holds _lock (it checks the thread in the same hold); it bumps after."""
+    rows = _chat_rows()
+    try:
+        seq = int(CHAT_SEQ.read_text())
+    except Exception:
+        seq = 0
+    nid = max(seq, rows[-1]["id"] if rows else 0) + 1
+    CHAT_SEQ.write_text(str(nid))
+    row = {"id": nid, "agent": agent,
+           "role": role, "body": body, "ts": time.time()}
+    if images:
+        row["images"] = images
+    if nonce:
+        row["nonce"] = nonce
+    if card:
+        row["card"] = card
+    if answer:
+        row["answer"] = answer
+    with CHAT.open("a") as fh:
+        fh.write(json.dumps(row) + "\n")
+    return row
+
+
+def _chat_pending(rows, heard=None):
+    """Reviewer messages for the agent (rows of ONE agent): every one after its last reply, as before, plus,
+    once listen has marked what it handed over (heard), any that came in after that mark, so a reply or card
+    the agent posts before its next listen never hides one. _agent_state calls it without heard: Thinking
+    keeps the old rule."""
     last = max((r["id"] for r in rows if r["role"] == "master"), default=0)
-    return [r for r in rows if r["role"] == "you" and r["id"] > last]
+    return [r for r in rows if r["role"] == "you" and (r["id"] > last or (heard is not None and r["id"] > heard))]
 
 
 def _agent_state(info, rows):
@@ -463,9 +518,27 @@ def _title(info):
     return "Claude"
 
 
-def _agent_rows():
+def _focus(allrows, taps, said=None):
+    """The thread the reviewer is talking in: the one his newest own message went to, a chat row of his
+    (agent:NAME) or a comment he sent on a tap through TapSpace himself (that tap's key); None when he never
+    wrote. An agent's own gh comment is signed in as him too, so a tap comment counts only when the say route
+    recorded it (said: tap-said.json's urls, read when None). Clients never badge the focus. allrows: every chat
+    row; taps: TAPS items."""
+    said = _said() if said is None else said
+    best, key = None, None
+    for r in allrows:
+        if r.get("role") == "you" and (best is None or r.get("ts", 0) >= best):
+            best, key = r.get("ts", 0), "agent:" + r["agent"]
+    for t in taps:
+        for m in t.get("messages") or []:
+            if m.get("who") == "you" and m.get("url") in said and (best is None or _epoch(m["ts"]) > best):
+                best, key = _epoch(m["ts"]), t["key"]
+    return key
+
+
+def _agent_rows(allrows=None):
     out = []
-    allrows = _chat_rows()
+    allrows = _chat_rows() if allrows is None else allrows
     agents = _agents()
     with _lock:
         state = _load()
@@ -488,7 +561,7 @@ def _agent_rows():
                     "title": _title(info),
                     "progress": info.get("progress"),
                     "notes": [n for n in notes.get(name, []) if n["ts"] > (read or 0)][:NOTES_MAX],
-                    "notes_read": read})
+                    "notes_read": read, "look": _look(info)})
     rank = {"thinking": 0, "switching": 0, "starting": 0, "here": 1, "away": 2}
     out.sort(key=lambda r: -r["last"])
     out.sort(key=lambda r: rank[r["state"]])
@@ -501,9 +574,83 @@ def _agent_rows():
             (lead["name"] if lead and r is not lead else None)
     if lead:
         lead["role"] = "lead"
+        # what the lead is doing right now, read from its own Claude session's transcript (activity.py)
+        lead["activity"] = activity.of(
+            lead["name"], agents[lead["name"]], lead["state"], CLAIMS, _proc_start,
+            waits=lambda: _waits_on_you([m for m in allrows if m.get("agent") == lead["name"]], TAPS["items"]),
+            titles=lambda: {n: _title(i) for n, i in agents.items()}, taps=TAPS["items"])
         out = [lead] + [r for r in out if r is not lead and r["parent"] == lead["name"]] + \
               [r for r in out if r is not lead and r["parent"] != lead["name"]]
     return out
+
+
+def _newest_card(thread):
+    """The newest card row in one agent's thread, or None: the only card that can still wait on the reviewer."""
+    return next((r for r in reversed(thread) if r.get("role") == "master" and isinstance(r.get("card"), dict)), None)
+
+
+def _ask_open(thread):
+    """True when the newest card in this thread asks something and its ask has no answer yet. Like its images,
+    an older card's question is left behind once a newer card comes."""
+    row = _newest_card(thread)
+    return bool(row and row["card"].get("ask")) and not any(
+        r.get("role") == "you" and (r.get("answer") or {}).get("card") == row["id"] and "checks" in r["answer"]
+        for r in thread)
+
+
+def _waits_on_you(thread, taps=()):
+    """True when a master's thread waits on the reviewer: its newest card's question is unanswered (_ask_open),
+    or it still has an image without a verdict, or an Accept / Not quite nobody pressed while its tap is open
+    (taps: TAPS items; a tap accepted elsewhere, done or closed, settles it)."""
+    if _ask_open(thread):
+        return True
+    row = _newest_card(thread)
+    if not row:
+        return False
+    said = [r["answer"] for r in thread if r.get("role") == "you" and (r.get("answer") or {}).get("card") == row["id"]]
+    if row["card"].get("action"):
+        tap = next((t for t in taps if t.get("key") == row["card"]["action"].get("tap")), {})
+        return tap.get("phase") not in ("done", "closed") and \
+            not any("action" in a for a in said)             # the images are the action's picture
+    return any(not any(a.get("image") == i for a in said) for i in range(len(row["card"].get("images") or [])))
+
+
+def _fleet(rows, taps, chat):
+    """GET /api/agents fleet: everything running under the lead. Needs you first (taps holding or landed, masters
+    whose newest card waits on you), then working (masters thinking, starting or switching cars, taps flying),
+    then the rest, newest first within each. A master is in it unless it is away with its run done (or no run);
+    a tap while it is proposed, flying, holding or landed. [] when no lead is served. Clients render it as is
+    and never work membership out themselves. rows: _agent_rows(chat); taps: TAPS items; chat: every row."""
+    lead = next((r for r in rows if r.get("role") == "lead"), None)
+    if not lead:
+        return []
+    threads = {}
+    for m in chat:
+        threads.setdefault(m.get("agent"), []).append(m)
+    out = []
+    for r in rows:
+        pg = r.get("progress") or {}
+        steps = pg.get("steps") or []
+        done = min(pg.get("current") or 0, len(steps))
+        if r is lead or (r["state"] == "away" and done >= len(steps)):
+            continue
+        out.append({"key": "agent:" + r["name"], "kind": "master", "title": r["title"], "look": r["look"],
+                    "state": r["state"], "done": done, "total": len(steps),
+                    "needs_you": _waits_on_you(threads.get(r["name"], []), taps),
+                    "working": r["state"] in ("thinking", "starting", "switching"),
+                    "at": max(r["last"], pg.get("updated") or 0)})
+    for t in taps:
+        if t.get("phase") not in ("holding", "landed", "enroute", "proposed"):
+            continue
+        g = t.get("goals") or []
+        out.append({"key": t["key"], "kind": "tap", "title": _note_words(_undash(t["title"]), 80),
+                    "initial": _initial(t["repo"].split("/")[-1]), "phase": t["phase"], "word": t["phase_word"],
+                    "done": sum(1 for x in g if x.get("done")), "total": len(g),
+                    "needs_you": t["phase"] in ("holding", "landed"), "working": t["phase"] == "enroute",
+                    "at": _epoch(t["last"])})
+    out.sort(key=lambda f: -f["at"])
+    out.sort(key=lambda f: 0 if f["needs_you"] else 1 if f["working"] else 2)
+    return [{k: v for k, v in f.items() if k != "at"} for f in out]
 
 
 def _set_lead(name):
@@ -556,12 +703,15 @@ def _agents_watch():
     last = None
     while True:
         try:
-            rows = _agent_rows()
+            chat = _chat_rows()
+            rows = _agent_rows(chat)
+            # focus too: a tap comment of his moves it through the taps refresh, not a chat write
             sig = ([(r["name"], r["state"], r["where"], r["title"], (r["progress"] or {}).get("updated"),
                      r["notes_read"], [(n["ticket"], n["version"], n["ts"]) for n in r["notes"]],
-                     r.get("role"), r["parent"])
+                     r.get("role"), r["parent"], r["look"],
+                     tuple((r.get("activity") or {}).get(k) for k in ("state", "word", "detail")))
                     for r in rows],
-                   links.rows({r["name"] for r in rows}))
+                   links.rows({r["name"] for r in rows}), _focus(chat, TAPS["items"]))
             if sig != last:
                 last = sig
                 _bump("agents")
@@ -824,6 +974,474 @@ def _progress_change(old, p):
         new["note"] = (_plain(note, 80) or _bad("note: one plain line up to 80 characters")) if note else None
     new["updated"] = time.time()
     return {k: new.get(k) for k in ("goal", "steps", "current", "note", "updated")}
+
+
+# ---- update cards: a master's update in its thread, and the reviewer's answers to it ----
+# A card is a master row with a card object; an answer is a reviewer row with an answer object. Rows are never
+# edited: a newer update is a new card. The server writes both bodies as one plain line, so old clients, the push,
+# the Chat-list preview and tap.py listen read them like any message.
+CARD_MAX = 8192                       # bytes of one stored card, filled in
+_TAP_KEY = re.compile(r"^[\w.-]+/[\w.-]+#\d+$")
+
+
+class _Refused(ValueError):
+    """A refused send whose http code is not 400: 503 while the taps are still loading (send it again; the
+    answer says retry: true), 502 when GitHub did not serve a proof image."""
+
+    def __init__(self, msg, code):
+        super().__init__(msg)
+        self.code = code
+
+
+def _refusal(e):
+    """(http code, answer) for a refused send."""
+    code = e.code if isinstance(e, _Refused) else 400
+    return code, {"error": str(e), **({"retry": True} if code == 503 else {})}
+
+
+def _loading():
+    """The 503 a send gets while the taps have not loaded since this server started."""
+    why = f" (GitHub said: {TAPS['error'][:120]})" if TAPS["error"] else ""
+    return _Refused("taps are still loading; send it again in a minute" + why, 503)
+
+
+def _one_line(s):
+    """s as one line: each line's whitespace folded, the lines joined with " / " (card and answer bodies)."""
+    return " / ".join(x for x in (" ".join(line.split()) for line in str(s or "").splitlines()) if x)
+
+
+def _initial(s):
+    """The letter a tap's or a project's face carries: the first letter or digit of s, upper case."""
+    return next((c.upper() for c in str(s) if c.isalnum()), "?")
+
+
+def _ref(label, agents, taps, what):
+    """The face key for what a sender typed: agent:NAME (a NAME or one agent's title; agent: optional),
+    owner/repo#n (one of your taps, or repo#n when exactly one of them matches) or project:NAME.
+    ValueError when nothing matches; the 503 while the taps load (taps is None)."""
+    s = " ".join(str(label or "").split())
+    if not s:
+        _bad(f"{what}: a master's NAME or title, a tap (owner/repo#n) or project:NAME")
+    if s.startswith("project:"):
+        return "project:" + (_plain(s[8:], 60) or _bad(f"{what}: project: and a plain name up to 60 characters"))
+    hit = _match_agent(s[6:] if s.startswith("agent:") else s, agents)
+    if hit:
+        return "agent:" + hit
+    if re.match(r"^(?:[\w.-]+/)?[\w.-]+#\d+$", s):
+        if taps is None:
+            raise _loading()
+        k = s.casefold()
+        keys = [t["key"] for t in taps
+                if t["key"].casefold() == k or ("/" not in k and t["key"].casefold().endswith("/" + k))]
+        if len(keys) == 1:
+            return keys[0]
+        _bad(f"{what}: {'more than one of your taps is' if keys else 'none of your taps is'} {s} (tap.py taps lists them)")
+    _bad(f"{what}: no master, tap or project by that name: {s}")
+
+
+def _card_visual(v):
+    """The card's one visual (pure): progress {done, total, label?}, timeline {steps, at} (at counts from 0;
+    len(steps) = all done), graph {points, label?} or word {text}. ValueError says what to fix."""
+    kind = v.get("kind") if isinstance(v, dict) else None
+    if kind == "progress":
+        d, t = v.get("done"), v.get("total")
+        if type(d) is not int or type(t) is not int or not 0 <= d <= t <= 999 or t < 1:
+            _bad("progress: whole numbers done and total, 0 <= done <= total, total from 1 to 999")
+        out = {"kind": kind, "done": d, "total": t}
+    elif kind == "timeline":
+        steps = [_plain(s, 24) for s in v["steps"]] if isinstance(v.get("steps"), list) else []
+        if not 2 <= len(steps) <= 7 or None in steps:
+            _bad("timeline: 2 to 7 plain steps, up to 24 characters each")
+        at = v.get("at", 0)
+        if type(at) is not int or not 0 <= at <= len(steps):
+            _bad(f"timeline at: 0 to {len(steps)} (0 = on the first step, {len(steps)} = all done)")
+        out = {"kind": kind, "steps": steps, "at": at}
+    elif kind == "graph":
+        pts = v.get("points")
+        if not isinstance(pts, list) or not 2 <= len(pts) <= 24 or \
+           any(type(x) not in (int, float) or not -1e12 < x < 1e12 for x in pts):     # also refuses NaN and inf
+            _bad("graph: 2 to 24 numbers")
+        out = {"kind": kind, "points": pts}
+    elif kind == "word":
+        out = {"kind": kind, "text": _plain(v.get("text"), 16) or _bad("word: one plain word or two, up to 16 characters")}
+    else:
+        _bad("visual kind: progress, timeline, graph or word")
+    if kind in ("progress", "graph") and " ".join(str(v.get("label") or "").split()):
+        out["label"] = _plain(v["label"], 40) or _bad(f"{kind} label: one plain line up to 40 characters")
+    return out
+
+
+def _card_ask(a):
+    """The card's question (pure): q, checks [{id: c1..cN, label}], text (whether it shows a text box)."""
+    a = a if isinstance(a, dict) else {}
+    q = _plain(a.get("q"), 120) or _bad("ask: a plain question up to 120 characters")
+    raw = a.get("checks") or []
+    labels = [_plain(c, 40) for c in raw] if isinstance(raw, list) else [None]
+    if len(labels) > 6 or None in labels or len({c.casefold() for c in labels}) != len(labels):
+        _bad("ask checks: up to 6 different plain labels, up to 40 characters each")
+    text = a.get("text", False)
+    if type(text) is not bool:
+        _bad("ask text: true or false (a text box under the question)")
+    if not labels and not text:
+        _bad("ask: boxes to tick (checks), a text box (text: true), or both")
+    return {"q": q, "checks": [{"id": f"c{i + 1}", "label": c} for i, c in enumerate(labels)], "text": text}
+
+
+def _card(raw, sender, n_images, agents, taps):
+    """An update card as a master sends it -> the checked card: v, line, face, visual?, items [{ref, name?, note?}],
+    images (one {label?} per attached image), ask?, action? (the one action a card may carry: tap_accept, the
+    reviewer's Accept of one tap). face and refs come back as face keys (_ref). face is the card's one subject:
+    given, else the one item, else None (several items or none), never the sender, whose thread it already is.
+    agents: agents.json; taps: TAPS items, or None while they load (pure except that its 503 names
+    TAPS["error"]). ValueError says what to fix."""
+    if not isinstance(raw, dict):
+        _bad("card: an object with a line")
+    line = _plain(raw.get("line"), 120) or _bad(
+        "line: one plain line up to 120 characters (no quotes, angle brackets or long dashes)")
+    items = raw.get("items") or []
+    if not isinstance(items, list) or len(items) > 8:
+        _bad("items: up to 8")
+    out_items = []
+    for it in items:
+        it = it if isinstance(it, dict) else {}
+        ref = _ref(it.get("ref"), agents, taps, "item")
+        if any(x["ref"] == ref for x in out_items):
+            _bad(f"items: {ref} is in the card twice")
+        x = {"ref": ref}
+        if " ".join(str(it.get("name") or "").split()):         # a short name the clients show over its title
+            x["name"] = _plain(it["name"], 40) or _bad("item name: one plain line up to 40 characters")
+        if " ".join(str(it.get("note") or "").split()):
+            x["note"] = _plain(it["note"], 80) or _bad("item note: one plain line up to 80 characters")
+        out_items.append(x)
+    face = _ref(raw["face"], agents, taps, "face") if " ".join(str(raw.get("face") or "").split()) else \
+        out_items[0]["ref"] if len(out_items) == 1 else None
+    card = {"v": 1, "line": line, "face": face}
+    if raw.get("visual") is not None:
+        card["visual"] = _card_visual(raw["visual"])
+    card["items"] = out_items
+    labels = raw.get("images") or []
+    if not isinstance(labels, list) or len(labels) > n_images:
+        _bad(f"card images: at most one label per attached image ({n_images} attached)")
+    card["images"] = []
+    for i in range(n_images):
+        lab = (labels[i] if i < len(labels) and isinstance(labels[i], dict) else {}).get("label")
+        card["images"].append({"label": _plain(lab, 40) or _bad(f"image {i + 1} label: one plain line up to 40 characters")}
+                              if " ".join(str(lab or "").split()) else {})
+    if raw.get("ask") is not None:
+        card["ask"] = _card_ask(raw["ask"])
+    if raw.get("action") is not None:
+        act = raw["action"] if isinstance(raw["action"], dict) else {}
+        if act.get("kind") != "tap_accept":
+            _bad("action kind: tap_accept (the reviewer's Accept of one of your taps)")
+        tap = _ref(act.get("tap"), agents, taps, "action tap")
+        if tap.startswith(("agent:", "project:")):
+            _bad("action tap: one of your taps (owner/repo#n), not a master or a project")
+        card["action"] = {"kind": "tap_accept", "tap": tap}
+    return card
+
+
+def _face(key, rows, agents, taps):
+    """What a client needs to draw one face key when its own store does not know it: kind (lead, master, tap,
+    project) and title, a master's look and state, a tap's initial and phase, a project's initial."""
+    if key.startswith("agent:"):
+        info, r = agents.get(key[6:]) or {}, rows.get(key[6:])
+        return {"kind": "lead" if info.get("role") == "lead" else "master", "look": _look(info),
+                "title": _title(info), "state": r["state"] if r else "away"}
+    if key.startswith("project:"):
+        name = key[8:].rsplit("/", 1)[-1]
+        return {"kind": "project", "title": name, "initial": _initial(name)}
+    t = next((t for t in taps if t["key"] == key), {})
+    return {"kind": "tap", "title": _note_words(_undash(t.get("title") or ""), 80) or key.split("/", 1)[-1],
+            "initial": _initial(key.split("/", 1)[-1]), **({"phase": t["phase"]} if t else {})}
+
+
+def _now(ref, rows, agents, taps):
+    """One item as it stands now: kind and title, a tap's phase, word and goals [done, total], a master's
+    state and progress {current, steps} (when it has a goal card)."""
+    f = _face(ref, rows, agents, taps)
+    out = {"kind": f["kind"], "title": f["title"]}
+    if f["kind"] == "tap":
+        t = next((t for t in taps if t["key"] == ref), None)
+        if t:
+            g = t.get("goals") or []
+            out.update(phase=t["phase"], word=t["phase_word"], goals=[sum(1 for x in g if x.get("done")), len(g)])
+    elif f["kind"] in ("lead", "master"):
+        out["state"] = f["state"]
+        pg = (rows.get(ref[6:]) or agents.get(ref[6:]) or {}).get("progress")
+        if pg and pg.get("steps"):
+            out["progress"] = {"current": pg.get("current", 0), "steps": pg["steps"]}
+    return out
+
+
+def _was(old, now):
+    """Where an item's change beat starts, from that item's snapshot in an earlier card: a tap's phase and goals,
+    a master's state and current step (the step only when its steps are the same list); None when there is
+    nothing to move from."""
+    if not old:
+        return None
+    if now["kind"] == "tap":
+        return {"phase": old["phase"], **({"goals": old["goals"]} if old.get("goals") else {})} \
+            if old.get("phase") else None
+    out = {"state": old["state"]} if old.get("state") else {}
+    if now.get("progress") and (old.get("progress") or {}).get("steps") == now["progress"]["steps"]:
+        out["current"] = old["progress"]["current"]
+    return out or None
+
+
+def _card_fill(card, sources, served, agents, taps, thread):
+    """The card as stored (pure): faces (a snapshot of every face it names, so a master that left or a tap that
+    aged out still draws), each item as it stands now plus was (that item in the latest earlier card of this
+    thread that showed it), visual.from (the last card's progress when it had the same face, or none like this
+    one), and each image's label (given, else its proof's alt text, else Image N) and source. sources: each
+    posted image item's proof ref ({key, i}) or None; served: _agent_rows(); agents: agents.json; taps: TAPS
+    items; thread: this agent's chat rows."""
+    rows = {r["name"]: r for r in served}
+    earlier = [r["card"] for r in thread if r.get("role") == "master" and isinstance(r.get("card"), dict)]
+    keys = ([card["face"]] if card["face"] else []) + [it["ref"] for it in card["items"]] + \
+        ([card["action"]["tap"]] if card.get("action") else [])
+    out = {"v": 1, "line": card["line"], "face": card["face"],
+           "faces": {k: _face(k, rows, agents, taps) for k in keys}}
+    vis, last = card.get("visual"), earlier[-1] if earlier else {}
+    if vis:
+        out["visual"] = vis
+        if vis["kind"] == "progress" and last.get("face") == card["face"] and \
+           (last.get("visual") or {}).get("kind") == "progress":
+            out["visual"] = {**vis, "from": min(last["visual"]["done"], vis["total"])}
+    out["items"] = []
+    for it in card["items"]:
+        x = {**it, **_now(it["ref"], rows, agents, taps)}
+        old = next((y for c in reversed(earlier) for y in c.get("items") or [] if y.get("ref") == it["ref"]), None)
+        was = _was(old, x)
+        if was:
+            x["was"] = was
+        out["items"].append(x)
+    out["images"] = []
+    for i, im in enumerate(card["images"]):
+        src = sources[i] if i < len(sources) and isinstance(sources[i], dict) else {}
+        key, n = str(src.get("key") or ""), src.get("i")
+        tap = next((t for t in taps if t["key"] == key), None) if type(n) is int and n >= 0 else None
+        proof = (tap.get("proof") or []) if tap else []
+        alt = (proof[n].get("alt") or "") if tap and n < len(proof) else ""
+        label = im.get("label") or _proof_label(alt) or f"Image {i + 1}"
+        out["images"].append({"label": label, **({"from": {"tap": key, "i": n}} if tap else {})})
+    if card.get("ask"):
+        out["ask"] = card["ask"]
+    if card.get("action"):
+        out["action"] = card["action"]
+    return out
+
+
+def _cut_words(s, cap=40):
+    """s cut at a word boundary to at most cap characters, ending in ... when it was cut (labels, and the tap titles
+    in answer bodies)."""
+    s = " ".join(str(s or "").split())
+    return s if len(s) <= cap else s[:cap - 3].rsplit(" ", 1)[0].rstrip(" ,;:.") + "..."
+
+
+def _proof_label(alt):
+    """A proof image's caption as its card label: the caption without its double quotes, cut at a word boundary
+    under 40 characters; None when there is no caption, it is just "Image", or it is not plain."""
+    s = " ".join(re.sub(r'["\u201c\u201d]', "", str(alt or "")).split())
+    return _plain(_cut_words(s), 40) if s and s.casefold() != "image" else None
+
+
+def _proof_copy(pr):
+    """(ext, bytes) for a {proof: {key, i}} image item: the clean original of one of your taps' proof images,
+    through _proof_image (its data/proof cache, else GitHub). Raises ValueError (400), or the 503 / 502 _Refused."""
+    pr = pr if isinstance(pr, dict) else {}
+    key, i = str(pr.get("key") or ""), pr.get("i")
+    if not _TAP_KEY.match(key) or type(i) is not int or i < 0:
+        raise ValueError("proof image: {key: owner/repo#n, i: its number counted from 0}")
+    if not TAPS["fetched"]:
+        raise _loading()
+    try:
+        raw, ctype, _ = _proof_image(key, i)
+    except LookupError as e:                       # "no such tap" | "no such image"
+        raise ValueError(f"proof image {i + 1} of {key}: {e} (tap.py tap-read {key} numbers them)")
+    except Exception as e:
+        raise _Refused(f"proof image {i + 1} of {key}: GitHub did not serve it ({str(e)[:160]})", 502)
+    return _PROOF_TYPES[ctype][1:], raw
+
+
+def _send_card(name, p, who):
+    """POST /api/chat/reply with a card (this Mac only) -> (http code, answer). The card is checked before
+    anything is written; then the reply counts as listening, the server fills the card in (_card_fill), copies
+    its images (a tap's proof included) into chat-media, stores one row and pushes its line. Two cards from one
+    NAME in the same instant may read the same earlier card for was; tap.py sends one at a time."""
+    posted = p["images"] if isinstance(p.get("images"), list) else []
+    try:
+        card = _card(p["card"], name, len(posted), _agents(), TAPS["items"] if TAPS["fetched"] else None)
+    except ValueError as e:
+        return _refusal(e)
+    _agent_touch(name, listen=time.time())
+    _claim(who, name, "reply")
+    # outside _lock: _agent_rows takes it, and threading.Lock is not reentrant
+    card = _card_fill(card, [im.get("proof") if isinstance(im, dict) else None for im in posted],
+                      _agent_rows(), _agents(), TAPS["items"], _chat_rows(name))
+    if len(json.dumps(card)) > CARD_MAX:
+        return 400, {"error": f"card: over {CARD_MAX // 1024} KB once filled in; send fewer items or shorter words"}
+    try:
+        images = _chat_images(p)
+    except ValueError as e:
+        return _refusal(e)
+    body = _one_line(p.get("body")) or card["line"]
+    row = _chat_add(name, "master", body, images, card=card)
+    _push(_title(_agents().get(name, {})), body, key="agent:" + name)
+    return 200, {"ok": True, "message": row}
+
+
+def _answer(raw, card_row):
+    """An answer to a card as a client sends it (pure) -> the checked answer: {card, image, verdict, note?} for
+    one image, {card, checks, text?} for the question (checks in the card's order, each once), or {card,
+    action: deny, note?} for Not quite on the card's Accept (Accept itself goes through the tap's own route,
+    _accepted). card_row is that card's row in this thread, or None. Hayden's note and text are kept as he wrote
+    them (trimmed, up to 2000 characters). ValueError says what to fix."""
+    if not isinstance(raw, dict) or type(raw.get("card")) is not int:
+        _bad("answer: {card: the card's message id, then image and verdict, or checks and text}")
+    if not card_row:
+        _bad("answer card: no card by that id in this thread")
+    c, out = card_row["card"], {"card": card_row["id"]}
+    for k in ("note", "text"):
+        if raw.get(k) is not None and not isinstance(raw[k], str):
+            _bad(f"answer {k}: words")
+        if len((raw.get(k) or "").strip()) > 2000:
+            _bad(f"answer {k}: up to 2000 characters")
+    note, text = (raw.get("note") or "").strip(), (raw.get("text") or "").strip()
+    if "action" in raw:
+        if any(k in raw for k in ("image", "verdict", "checks", "text")):
+            _bad("answer: the card's Accept, one image or the question, one at a time")
+        if not c.get("action"):
+            _bad("answer action: that card has no Accept")
+        if raw["action"] != "deny":
+            _bad("answer action: deny (Not quite); Accept is the tap's own button (POST /api/taps/accept with the card)")
+        out.update(action="deny", **({"note": note} if note else {}))
+        return out
+    if "image" in raw:
+        if "checks" in raw or "text" in raw:
+            _bad("answer: one image or the question, not both")
+        n, i = len(c.get("images") or []), raw["image"]
+        if type(i) is not int or not 0 <= i < n:
+            _bad(f"answer image: 0 to {n - 1}" if n else "answer image: that card has no images")
+        if raw.get("verdict") not in ("approve", "change"):
+            _bad("answer verdict: approve or change")
+        if note and raw["verdict"] != "change":
+            _bad("answer note: only with change (Not quite)")
+        out.update(image=i, verdict=raw["verdict"], **({"note": note} if note else {}))
+        return out
+    if "checks" not in raw and "text" not in raw:
+        _bad("answer: image and verdict, or checks and text")
+    ask = c.get("ask")
+    if not ask:
+        _bad("answer: that card asks nothing")
+    ids, got = [x["id"] for x in ask.get("checks") or []], raw.get("checks") or []
+    if not isinstance(got, list) or any(x not in ids for x in got):
+        _bad("answer checks: ids from the card (" + (", ".join(ids) or "it has none") + ")")
+    if text and not ask.get("text"):
+        _bad("answer text: that card has no text box")
+    if not got and not text and not ids:
+        _bad("answer text: write something to send")
+    out["checks"] = [x for x in ids if x in got]
+    if text:
+        out["text"] = text
+    return out
+
+
+def _action_title(card):
+    """The tap a card's Accept is for, as the card named it: the short name of the card's item for that tap when
+    it has one, else the tap's title in the card's faces."""
+    tap = card["action"]["tap"]
+    names = [str(it.get("name") or "").strip() for it in card.get("items") or [] if it.get("ref") == tap]
+    return next(filter(None, names), "") or ((card.get("faces") or {}).get(tap) or {}).get("title") or "the tap"
+
+
+def _answer_line(a, card):
+    """An answer row's body, one line: "Approved: <label>", "Not quite: <label>: <note>" (no note: just the label),
+    "Accepted: <tap>", "Not quite: <tap>: <note>" (the tap as _action_title names it), or "<q> <ticked labels>.
+    <text>" ("(no boxes ticked)" when the card has boxes and none is ticked)."""
+    if "action" in a:
+        title = _cut_words(_action_title(card))            # a long tap title would bury the note
+        if a["action"] == "accept":
+            return "Accepted: " + title
+        return "Not quite: " + title + (": " + _one_line(a["note"]) if a.get("note") else "")
+    if "image" in a:
+        label = card["images"][a["image"]]["label"]
+        if a["verdict"] == "approve":
+            return "Approved: " + label
+        return "Not quite: " + label + (": " + _one_line(a["note"]) if a.get("note") else "")
+    ask = card["ask"]
+    names = {x["id"]: x["label"] for x in ask["checks"]}
+    ticks = ", ".join(names[x] for x in a["checks"]) + "." if a["checks"] else "(no boxes ticked)" if names else ""
+    return " ".join(x for x in (ask["q"], ticks, _one_line(a.get("text"))) if x)
+
+
+def _send_answer(name, p):
+    """POST /api/chat with an answer to a card -> (http code, answer). The server writes the row's one-line body
+    (a body sent is ignored); a retry with the same nonce gets the same row; the INBOX line carries the answer.
+    It is never a ticket and never a tap's accept: nothing here reaches gh or _tap_act."""
+    if p.get("images"):
+        return 400, {"error": "an answer carries no images"}
+    rows, nonce = _chat_rows(name), str(p.get("nonce") or "")[:64]
+    dup = next((r for r in rows if nonce and r.get("nonce") == nonce), None)
+    if dup:
+        # the phone retries a send whose answer it lost: same nonce, same row
+        return 200, {"ok": True, "message": dup}
+    raw = p["answer"]
+    cid = raw.get("card") if isinstance(raw, dict) else None
+    card_row = next((r for r in rows if type(cid) is int and r["id"] == cid and r.get("role") == "master"
+                     and isinstance(r.get("card"), dict)), None)
+    try:
+        answer = _answer(raw, card_row)
+    except ValueError as e:
+        return 400, {"error": str(e)}
+    body = _answer_line(answer, card_row["card"])
+    row = _chat_add(name, "you", body, nonce=nonce, answer=answer)
+    _inbox({"kind": "tapspace-chat", "agent": name, "id": row["id"], "message": body, "images": [], "answer": answer})
+    return 200, {"ok": True, "message": row}
+
+
+def _accept_card(cid, key):
+    """The card an Accept came from (POST /api/taps/accept {key, card}): the master row whose card's action is
+    the Accept of that tap. Checked before gh is called, so a wrong card accepts nothing. ValueError says why."""
+    if type(cid) is not int:
+        _bad("card: the card's message id")
+    row = next((r for r in _chat_rows() if r["id"] == cid and r.get("role") == "master"
+                and isinstance(r.get("card"), dict)), None)
+    if not row:
+        _bad("card: no card by that id")
+    act = row["card"].get("action") or {}
+    if act.get("kind") != "tap_accept":
+        _bad("card: that card has no Accept")
+    if str(act.get("tap") or "").casefold() != str(key or "").casefold():
+        _bad("card: that card's Accept is for another tap")
+    return row
+
+
+def _accepted(row):
+    """After an Accept from a card went through: the reviewer's answer row in that card's thread ({card, action:
+    accept}, "Accepted: <tap title>"), so the master hears it on listen like any answer. One per card: pressing
+    it again gets the same row (checked and written in one _lock hold, so two presses at once write one)."""
+    a = {"card": row["id"], "action": "accept"}
+    body = _answer_line(a, row["card"])
+    with _lock:
+        dup = next((r for r in _chat_rows(row["agent"]) if r.get("role") == "you" and r.get("answer") == a), None)
+        out = dup or _chat_append(row["agent"], "you", body, answer=a)
+    if dup:
+        return dup
+    _bump("chat", "agents")
+    _inbox({"kind": "tapspace-chat", "agent": row["agent"], "id": out["id"], "message": body, "images": [], "answer": a})
+    return out
+
+
+def _heard_answer(a, row):
+    """An answer as listen hands it over (never stored): plus its card's line, for an image that image's label
+    and its file on this Mac, for the card's Accept or Not quite the tap's key."""
+    out = {**a, "line": row["card"]["line"]}
+    i = a.get("image")
+    if type(i) is int and 0 <= i < min(len(row.get("images") or []), len(row["card"].get("images") or [])):
+        out.update(label=row["card"]["images"][i]["label"], file=str(DATA / row["images"][i].lstrip("/")))
+    if "action" in a and row["card"].get("action"):
+        out["tap"] = row["card"]["action"]["tap"]
+    return out
 
 
 # ---- change notes per master: derived from the cards, never stored twice ----
@@ -1185,11 +1803,19 @@ TAP_HOT_EVERY = 6
 _UNLISTED = {}              # tap key -> when it was first kept although GitHub search did not list it yet
 TAP_SEARCH_LAG = 15 * 60    # how long such a tap is kept without the search listing it
 VIA = DATA / "tap-via.json"  # comment url -> the agent that sent it for the reviewer
+SAID = DATA / "tap-said.json"  # comment url -> when the reviewer sent it himself through TapSpace (say with no via)
 
 
 def _via():
     try:
         return json.loads(VIA.read_text())
+    except Exception:
+        return {}
+
+
+def _said():
+    try:
+        return json.loads(SAID.read_text())
     except Exception:
         return {}
 
@@ -1547,7 +2173,7 @@ def _tap(repo, number, iss):
     key = f"{repo}#{number}"
     prev = next((t.get("phase") for t in TAPS["items"] if t["key"] == key), None)
     phase = _phase(repo, number, iss, msgs, prev)
-    return {"key": key, "repo": repo, "number": number,
+    return {"key": key, "repo": repo, "number": number, "initial": _initial(repo.split("/")[-1]),
             "title": iss["title"], "url": iss["url"], "status": status,
             "goals": _goals(iss["body"]), "messages": msgs,
             # the tap has your latest message (👀) and has not answered yet
@@ -1571,7 +2197,7 @@ def _publish(items):
     TAPS.update({"items": items, "fetched": time.time(), "error": ""})
     if items == old:
         return
-    _bump("taps")
+    _bump("taps", "agents")      # the fleet on /api/agents shows taps too
     before = {t["key"]: len(t["messages"]) for t in old}
     for t in items if known else []:
         said = [m for m in t["messages"][before.get(t["key"], len(t["messages"])):] if m["who"] == "tap"]
@@ -1849,8 +2475,10 @@ class H(BaseHTTPRequestHandler):
                         "now": time.time(), "links": links.stats()})
             return
         if path == "/api/agents":
-            rows = _agent_rows()
-            self._json({"agents": rows, "links": links.rows({r["name"] for r in rows})})
+            chat = _chat_rows()
+            rows = _agent_rows(chat)
+            self._json({"agents": rows, "links": links.rows({r["name"] for r in rows}),
+                        "fleet": _fleet(rows, TAPS["items"], chat), "focus": _focus(chat, TAPS["items"])})
             return
         if path == "/api/projects":
             self._json({"projects": _projects()})
@@ -1890,17 +2518,25 @@ class H(BaseHTTPRequestHandler):
                          body).encode(), "text/html; charset=utf-8")
             return
         if path == "/api/chat/listen":
-            # an agent's poll: joins the space under its name, gets its unanswered messages
+            # an agent's poll: joins the space under its name and gets the messages it has not answered, plus
+            # any it was never handed (heard: a card it posted in between never hides one)
             name = self._q("agent")
             if not _NAME.match(name):
                 self._json({"error": "bad agent name"}, 400)
                 return
             _unstop(name, self._who())
-            _agent_touch(name, listen=time.time(), where=self._q("where")[:80])
+            rows = _chat_rows(name)
+            pend = _chat_pending(rows, (_agents().get(name) or {}).get("heard"))
+            # everything this poll hands over, and everything the agent already answered, is heard now
+            _agent_touch(name, listen=time.time(), where=self._q("where")[:80],
+                         heard=max((r["id"] for r in rows if r["role"] == "you"), default=0))
             _claim(self._who(), name, "listen")
-            pend = _chat_pending(_chat_rows(name))
+            cards = {r["id"]: r for r in rows if r.get("role") == "master" and isinstance(r.get("card"), dict)}
             for r in pend:
                 r["files"] = [str(DATA / u.lstrip("/")) for u in r.get("images", [])]
+                c = cards.get((r.get("answer") or {}).get("card"))
+                if c:
+                    r["answer"] = _heard_answer(r["answer"], c)
             self._json({"pending": pend})
             return
         if path == "/api/taps":
@@ -2109,7 +2745,17 @@ class H(BaseHTTPRequestHandler):
                     self._json({"error": f"{act} is Hayden's own {'sign-off' if act == 'accept' else 'button'}: {why}"},
                                403)
                     return
+                # an Accept pressed on a card (its action) answers that card too, once GitHub has it
+                card = None
+                if act == "accept" and p.get("card") is not None:
+                    try:
+                        card = _accept_card(p["card"], p.get("key"))
+                    except ValueError as e:
+                        self._json({"error": str(e)}, 400)
+                        return
                 code, out = _tap_act(p.get("key"), act)
+                if code == 200 and card:
+                    out["message"] = _accepted(card)
                 self._json(out, code)
                 return
             if self.path in ("/api/agents/lead", "/api/agents/adopt"):
@@ -2135,7 +2781,9 @@ class H(BaseHTTPRequestHandler):
             body = (p.get("body") or (str(p.get("text") or "") if self.path == "/api/taps/say" else "")
                     or "").strip()
             chatting = self.path in ("/api/chat", "/api/chat/reply")
-            if not body and not (chatting and p.get("images")):
+            # an agent's card (reply) or the reviewer's answer to one (chat): the server writes its body
+            own = {"/api/chat/reply": "card", "/api/chat": "answer"}.get(self.path)
+            if not body and not (chatting and (p.get("images") or (own and p.get(own) is not None))):
                 self._json({"error": "empty"}, 400)
                 return
             if chatting:
@@ -2149,10 +2797,22 @@ class H(BaseHTTPRequestHandler):
                 if self.path == "/api/chat" and (_agents().get(name) or {}).get("stopped"):
                     self._json({"error": "that agent was spun down"}, 404)
                     return
+                if own == "card" and p.get("card") is not None:
+                    if not self._local():          # like /api/agents/progress: a card is a master's, from this Mac
+                        self._json({"error": "only from this Mac"}, 403)
+                        return
+                    code, out = _send_card(name, p, self._who())
+                    self._json(out, code)
+                    return
+                if own == "answer" and p.get("answer") is not None:
+                    code, out = _send_answer(name, p)
+                    self._json(out, code)
+                    return
                 try:
                     images = _chat_images(p)
                 except Exception as e:
-                    self._json({"error": str(e)}, 400)
+                    code, out = _refusal(e)
+                    self._json(out, code)
                     return
                 nonce = str(p.get("nonce") or "")[:64]
                 if self.path == "/api/chat" and nonce:
@@ -2191,11 +2851,15 @@ class H(BaseHTTPRequestHandler):
             except Exception as e:
                 self._json({"error": str(e)}, 502)
                 return
-            if via:
-                with _lock:
+            with _lock:
+                if via:
                     v = _via()
                     v[url] = via
                     VIA.write_text(json.dumps(v, indent=1))
+                else:       # his own words from a TapSpace surface: the only tap comments that move focus (_focus)
+                    s = _said()
+                    s[url] = time.time()
+                    SAID.write_text(json.dumps(s, indent=1))
             _inbox({"kind": "tapspace-tap-say", "tap": key, "message": body, "url": url,
                     "via": via})
             _hot(key, 0.15)

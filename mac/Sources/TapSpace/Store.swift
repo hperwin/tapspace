@@ -38,6 +38,11 @@ final class Store {
     private(set) var agentsLoaded = false
     /// Masters messaging each other (from the agents poll; [] on older servers).
     private(set) var links: [AgentLink] = []
+    /// Everything running under the lead (the agents poll; [] with no lead or an older server). The rail's strip.
+    private(set) var fleet: [FleetEntry] = []
+    /// The thread Hayden's newest own message went to (the agents poll): the conversation he is having, which
+    /// never badges (CONTRACT section 6). nil when he never wrote, or from an older server.
+    private(set) var focus: String?
     private(set) var chats: [String: [ChatMessage]] = [:]
     private(set) var taps = TapsResponse()
     private(set) var activity: [ActivityRow] = []
@@ -206,15 +211,32 @@ final class Store {
         let had = agentsLoaded ? newestNote(key) : nil
         var changed = false
         if !agentsLoaded { agentsLoaded = true; changed = true }
-        if b.agents != agents { agents = b.agents; changed = true }
-        // Links feed the rail and the progress column, not the pill: no onChange.
+        if b.agents != agents {
+            // The lead's activity word moves with each of its tool calls: its strip redraws, the pill stays asleep.
+            if !Self.sameButActivity(b.agents, agents) { changed = true }
+            agents = b.agents
+        }
+        // Links and the fleet feed the rail and the progress column, not the pill: no onChange.
         if b.links != links { links = b.links }
+        if b.fleet != fleet { fleet = b.fleet }
+        // Focus moves what the pill counts.
+        if b.focus != focus { focus = b.focus; changed = true }
         afterThreadsLoaded()
         // A note that lands while its master's thread is on screen is read at once.
         // Rows already listed wait for an explicit open: switching to Chat or the
         // window coming forward never clears notes he has not seen.
         if let had, thread == key, isViewing(key), newestNote(key) > had { readNotes(key) }
         if changed { onChange?(); fetchFreshReplies() }
+    }
+
+    /// The same rows, field for field, apart from the lead's activity.
+    private static func sameButActivity(_ a: [Agent], _ b: [Agent]) -> Bool {
+        a.count == b.count && zip(a, b).allSatisfy { x, y in
+            var x = x, y = y
+            x.activity = nil
+            y.activity = nil
+            return x == y
+        }
     }
 
     /// An agent that replied in a thread that isn't open: fetch that thread
@@ -239,6 +261,7 @@ final class Store {
         guard let rows = try? await API.chat(name) else { return }
         if chats[name] != rows { chats[name] = rows }
         reconcilePending()
+        CardAnswers.shared.settle(name, rows)
     }
 
     func pollTaps() async {
@@ -331,8 +354,11 @@ final class Store {
 
     func isViewing(_ key: String) -> Bool { tab == .chat && thread == key && windowKey }
 
+    /// The conversation Hayden is having (the focus) or the thread on screen: news there never badges.
+    func isQuiet(_ key: String) -> Bool { key == focus || isViewing(key) }
+
     func isUnread(_ key: String) -> Bool {
-        lastTheirs(key) > readAt(key) && !isViewing(key)
+        lastTheirs(key) > readAt(key) && !isQuiet(key)
     }
 
     // MARK: Masters: progress, card notes, links (served on /api/agents)
@@ -385,11 +411,17 @@ final class Store {
     var waitingCards: [Ticket] {
         tickets.filter { $0.status == "waiting" && !decided.contains($0.versionKey) }
     }
-    var needsYouTaps: [Tap] { taps.items.filter { $0.status == "needs-you" } }
+    /// Taps waiting on Hayden (holding; an older server's needs-you), except the one he is talking in or looking at.
+    var needsYouTaps: [Tap] { taps.items.filter { holding($0) && !isQuiet($0.key) } }
+    /// Taps with news for him: waiting on him, or a reply he has not read.
+    var newsTaps: [Tap] { taps.items.filter { !isQuiet($0.key) && (holding($0) || isUnread($0.key)) } }
     var unreadAgents: [Agent] { agents.filter { isUnread($0.key) } }
 
+    private func holding(_ t: Tap) -> Bool { t.tapPhase.map { $0 == .holding } ?? (t.status == "needs-you") }
+
     var visualBadge: Int { waitingCards.count }
-    var chatBadge: Int { needsYouTaps.count + unreadAgents.count }
+    /// How many threads have news (CONTRACT section 6): each once, never the focus or the one on screen.
+    var chatBadge: Int { newsTaps.count + unreadAgents.count }
     var waitingTotal: Int { visualBadge + chatBadge }
 
     // MARK: Acting for Hayden
@@ -428,11 +460,7 @@ final class Store {
             do {
                 // The server hands back the stored row: swap it in now, no poll gap.
                 if let row = try await API.say(text, toAgent: name) {
-                    var rows = chats[name] ?? []
-                    if !rows.contains(where: { $0.id == row.id }) {
-                        rows.append(row)
-                        chats[name] = rows
-                    }
+                    insertRow(row)
                     reconcilePending()
                 }
                 chatPoller.kick()
@@ -463,6 +491,15 @@ final class Store {
             show("Didn’t send: \(error.localizedDescription)")
             return false
         }
+    }
+
+    /// A row the server just stored for Hayden (a message, an answer to a card): in its thread now, before the
+    /// next poll.
+    func insertRow(_ row: ChatMessage) {
+        var rows = chats[row.agent] ?? []
+        guard !rows.contains(where: { $0.id == row.id }) else { return }
+        rows.append(row)
+        chats[row.agent] = rows
     }
 
     /// New session: start a master agent (it picks its project itself) and open its thread.
