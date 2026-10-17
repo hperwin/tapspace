@@ -563,7 +563,7 @@ def _agent_rows(allrows=None):
             (lead["name"] if lead and r is not lead else None)
     if lead:
         lead["role"] = "lead"
-        # what the lead is doing right now, read from its own Claude session's transcript (activity.py, CONTRACT 7)
+        # what the lead is doing right now, read from its own Claude session's transcript (activity.py)
         lead["activity"] = activity.of(
             lead["name"], agents[lead["name"]], lead["state"], CLAIMS, _proc_start,
             waits=lambda: _waits_on_you([m for m in allrows if m.get("agent") == lead["name"]]),
@@ -1198,13 +1198,27 @@ def _card_fill(card, sources, served, agents, taps, thread):
         tap = next((t for t in taps if t["key"] == key), None) if type(n) is int and n >= 0 else None
         proof = (tap.get("proof") or []) if tap else []
         alt = (proof[n].get("alt") or "") if tap and n < len(proof) else ""
-        label = im.get("label") or (_plain(alt, 40) if alt.casefold() != "image" else None) or f"Image {i + 1}"
+        label = im.get("label") or _proof_label(alt) or f"Image {i + 1}"
         out["images"].append({"label": label, **({"from": {"tap": key, "i": n}} if tap else {})})
     if card.get("ask"):
         out["ask"] = card["ask"]
     if card.get("action"):
         out["action"] = card["action"]
     return out
+
+
+def _cut_words(s, cap=40):
+    """s cut at a word boundary to at most cap characters, ending in ... when it was cut (labels, and the tap titles
+    in answer bodies)."""
+    s = " ".join(str(s or "").split())
+    return s if len(s) <= cap else s[:cap - 3].rsplit(" ", 1)[0].rstrip(" ,;:.") + "..."
+
+
+def _proof_label(alt):
+    """A proof image's caption as its card label: the caption without its double quotes, cut at a word boundary
+    under 40 characters; None when there is no caption, it is just "Image", or it is not plain."""
+    s = " ".join(re.sub(r'["\u201c\u201d]', "", str(alt or "")).split())
+    return _plain(_cut_words(s), 40) if s and s.casefold() != "image" else None
 
 
 def _proof_copy(pr):
@@ -1318,9 +1332,10 @@ def _answer_line(a, card):
     "Accepted: <tap title>", "Not quite: <tap title>: <note>", or "<q> <ticked labels>. <text>" ("(no boxes
     ticked)" when the card has boxes and none is ticked)."""
     if "action" in a:
+        title = _cut_words(_action_title(card))            # a long tap title would bury the note
         if a["action"] == "accept":
-            return "Accepted: " + _action_title(card)
-        return "Not quite: " + _action_title(card) + (": " + _one_line(a["note"]) if a.get("note") else "")
+            return "Accepted: " + title
+        return "Not quite: " + title + (": " + _one_line(a["note"]) if a.get("note") else "")
     if "image" in a:
         label = card["images"][a["image"]]["label"]
         if a["verdict"] == "approve":
