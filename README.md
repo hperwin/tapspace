@@ -209,11 +209,12 @@ workspace where any number of agents can be connected at once:
   (up to 40 characters) the card shows in place of a long title, and the
   part after `=` is what changed. `--accept KEY` gives the card Accept and
   Not quite for that landed tap and, when the card has no `--image` or
-  `--proof`, shows that tap's proof pictures. His answers come back through
+  `--proof`, shows that tap's newest 4 proof pictures. His answers come back through
   `tap.py listen` as one line plus one `    answer: {json}` line:
   `Approved: <label>` or `Not quite: <label>: <note>` on a picture, the
   question with his ticks and words, and `Accepted: <tap>` or
-  `Not quite: <tap>: <note>` (a deny) on the card's Accept. Approving a
+  `Not quite: <tap>: <note>` (a deny) on the card's Accept, where `<tap>` is
+  the short name the card's `--item` gave that tap, else its title. Approving a
   picture never accepts a tap; only the card's Accept does, through the
   tap's own Accept.
 - **Notes per master.** Under each master in the rail: the cards you sent a
