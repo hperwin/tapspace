@@ -411,7 +411,7 @@
   .uline{font-size:14px;font-weight:600;line-height:1.4;overflow-wrap:anywhere}
   .uchead.one .uline{font-size:13px;font-weight:400;color:var(--dim)}
   .ustack{align-items:center}
-  .usf{position:relative;display:flex;flex:none}
+  .usf{position:relative;display:flex;flex:none;border-radius:50%;background:var(--card)}   /* a tinted ring never shows the face under it */
   .usf+.usf{margin-left:-10px}
   .usf>*{box-shadow:0 0 0 2px var(--card)}           /* each face ringed in the card, as Glint's group avatar */
   .umore{margin-left:5px;padding:4px 7px;border-radius:999px;background:rgba(0,0,0,.045);color:var(--dim);
@@ -472,10 +472,9 @@
      once, on first view: .play (removed when every beat is done); each piece's delay comes from cardTimes(). ---- */
   .ucard .orb,.ucard .orb::after,.ucard .tapav .arc{animation:none}   /* faces in a card hold still */
   .ucard .uface{position:relative;flex:none}
-  .ucard .uface::after,.ucard .usf::after{content:"";position:absolute;inset:-4px;border-radius:50%;border:1.5px solid rgba(var(--hl),.35);
+  .ucard .uface:not(.ustack)::after,.ucard .usf::after{content:"";position:absolute;inset:-4px;border-radius:50%;border:1.5px solid rgba(var(--hl),.35);
     opacity:0;transform:scale(.85);pointer-events:none}                 /* the .orb ping ring, on any face kind */
-  .ucard .ustack::after{content:none}                                  /* a stack rings each of its faces */
-  .ucard.play .uface::after{animation:ripple 1.2s ease-out .1s 1}      /* .orb.ping, at beat 1 */
+  .ucard.play .uface:not(.ustack)::after{animation:ripple 1.2s ease-out .1s 1}   /* .orb.ping, at beat 1 */
   .ucard.play .usf::after{animation:ripple 1.2s ease-out var(--d,.1s) 1}   /* a stack's faces 40 ms apart */
   .ucard.play .ucwho,.ucard.play .uline,.ucard.play .uvlabel,.ucard.play .uword{animation:swapin .7s cubic-bezier(.22,.9,.24,1) both}
   .ucard.play .upill{animation:thumbin .6s cubic-bezier(.3,1.4,.5,1) both}
