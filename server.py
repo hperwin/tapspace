@@ -1786,7 +1786,7 @@ def _spawn_master(folder, name, parent="", order="", restart=False):
     The server picks the session id and the tmux name, so the answer names them before the child exists.
     parent (a joined NAME) is stored on the row first, so the child is born under its lead; order is
     kept under data/orders/ and appended to its first prompt. restart: _restart_master already found
-    the row of that NAME offline, and new-master.sh runs through its login shell (LOGIN)."""
+    the row of that NAME offline. new-master.sh always runs through a login shell (LOGIN)."""
     home = pathlib.Path.home().resolve()
     f = pathlib.Path(folder).expanduser().resolve()
     if not f.is_dir() or not (str(f) + "/").startswith(str(home) + "/"):
@@ -1820,7 +1820,7 @@ def _spawn_master(folder, name, parent="", order="", restart=False):
         extra = [parent, str(path)]
     log = DATA / "spawn.log"
     with log.open("a") as fh:
-        subprocess.Popen([*(LOGIN if restart else ("bash",)), str(ROOT / "new-master.sh"), str(f), name] + extra,
+        subprocess.Popen([*LOGIN, str(ROOT / "new-master.sh"), str(f), name] + extra,
                          stdout=fh, stderr=subprocess.STDOUT, start_new_session=True,
                          env={**os.environ, "TAPSPACE_URL": f"http://127.0.0.1:{PORT}",
                               "TAPSPACE_MASTER_UUID": sid, "TAPSPACE_MASTER_TMUX": ts})
