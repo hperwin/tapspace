@@ -237,5 +237,44 @@ process.stdout.write(JSON.stringify(did)); }})()"""
         self.assertTrue(any(".bead" in b and "#rail .thread.enter" in b for b in blocks))
 
 
+
+class OfflineTests(unittest.TestCase):
+    """Contract item 5: an offline master reads Offline, shows Restart, and its Spin down reads Clear."""
+
+    @unittest.skipUnless(NODE, "node is not installed")
+    def test_offline_words(self):
+        self.assertEqual(js("[isOffline({state: 'offline'}), isOffline({state: 'away'}), isOffline(null)]"), [True, False, False])
+        clear = js("stopWords({state: 'offline'})")
+        self.assertEqual(clear["verb"], "Clear")
+        self.assertEqual("Clear Muddi? " + clear["tail"], "Clear Muddi? Its session already ended; the row leaves the list.")
+        self.assertEqual(js("stopWords({state: 'here'}).verb"), "Spin down")
+        self.assertEqual(js("[restartToast('Muddi', {ok: true}), restartToast('Muddi', {ok: false, error: 'it is still running'}), "
+                            "restartToast('Muddi', {})]"),
+                         ["Restarting Muddi", "Couldn't restart it: it is still running", "Couldn't restart it: TapSpace said no"])
+
+    def test_offline_label_and_chip(self):
+        self.assertIn("offline:'Offline'", block("const MASTER = {", "};"))
+        self.assertIn(".chip.offline", CSS)
+        self.assertNotIn("—", block("// Contract item 5", "// ---- end pure: rail ----"))
+
+    def test_rail_wiring(self):
+        sync = block("function syncAgents(", "// ---- New session")
+        create = block("if (!g){", "const [b, talk, notes] = g.children;")
+        self.assertNotIn("restart", create)                            # toggled per render, not made once
+        self.assertIn("isOffline(a) && !rst", sync)
+        self.assertIn("!isOffline(a) && rst) rst.remove()", sync)
+        self.assertIn("a.state + '|'", block("const sig = a.state", ";"))   # a state change re-renders the row
+        restart = block("async function restartAgent(", "// ---- Clear all")
+        self.assertIn("postJ('/api/agents/restart', {name: a.name})", restart)
+        self.assertIn("restartToast(", restart)
+        self.assertIn("if (r.ok) pollAgents();", restart)
+        self.assertNotIn("confirm", restart)
+        ask = block("function askStop(g){", "// ---- Restart")
+        self.assertIn("stopWords(a)", ask)
+        self.assertIn("${w.verb}", ask)
+        # Restart sits on its own line, always visible, never inside the hover-only stop control's rule
+        self.assertIn(".agrp .restart{", CSS)
+        self.assertNotIn("restart", block(".agrp:hover .stopbtn", "}"))
+
 if __name__ == "__main__":
     unittest.main()
