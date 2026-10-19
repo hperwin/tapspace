@@ -57,6 +57,10 @@ Naming: Hayden's GitHub agent issues are called TAPS. Never show the word "pilot
 - Left rail: "Agents" section (GET /api/agents, poll ~2s): each agent row = an ORB, a flat face disc in the master's look (its
   tone and mark; look 0 is the lead's) whose face follows its state (happy while "here", focused and pulsing with an
   expanding ripple while "thinking", wide-eyed while starting or switching cars, sleepy on a grey disc while "away"); name + state + where. Then
+  A master row has Spin down (right-click, or the power control on hover, behind a confirm; POST /api/agents/stop). After a crash
+  or reboot a master whose sessions all ended is served "offline": its row reads "Offline" on a grey sleepy orb, shows a visible
+  "Restart" button (POST /api/agents/restart, no confirm; toast "Restarting <title>", the row reads Starting at once), and its Spin
+  down reads "Clear" ("Clear <title>? Its session already ended; the row leaves the list.").
   "Your taps" (GET /api/taps, poll ~5s): ring avatar per tap (spinning arc = flying, breathing blue = needs-you, dotted slow spin =
   boarding, green check = landed), title, status, repo, age. Unread dot (springs in) per thread (persist read times in UserDefaults).
   The selected-row highlight is ONE liquid white body that springs from row to row (like the WAU body), not a per-row background.

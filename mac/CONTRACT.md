@@ -20,11 +20,13 @@ Files added for the masters' progress, notes and links (October 2026): `ChatNote
 
 Files added for update cards (October 2026): `ChatCard.swift` (the card view, its header and face stack), `ChatCardAsk.swift`, `ChatCardImages.swift` (pictures, Approve / Not quite, the card's Accept), `ChatCardItems.swift` (text-only item rows), `ChatCardMotion.swift` (the beats), `ChatCardRules.swift` (pure rules: `CardRow`, `CardState`, `CardFold`, `FaceKey`, `FaceExpression`), `ChatCardVisual.swift`, `ChatFace.swift` (`FaceView`, `ShellFace`, `ProjectFace`), `ChatFleet.swift` (the lead's strip and activity line) (chat); `CoreCard.swift` (`CardAnswers`, the drafts, `CardPose`) (core); `HarnessCard.swift` (harness).
 
+Files added for restart (October 2026): `Restart.swift` (`API.restartAgent`, `Store.restart`, `RestartButton`) beside `SpinDown.swift` (`API.stopAgent`, `Store.spinDown`, `SpinDownRow`, `SpinDownButton`) (chat). `agentLabel` (ChatView.swift) is internal so HarnessCard can check it.
+
 ## Models (API.swift, core). All `Decodable, Equatable`
 
 - `Ticket` (Identifiable): `id, agent, title, campaign?, version, versions: [TicketVersion], status`; `entry(_ v:)`, `current`, `isVideo`, `videoDeleted`, `lastTs`, `mediaPath(_ v:) -> String` (`/shots/<id>/<v>.<ext>`), `versionKey` (`"id#v"`).
 - `TicketVersion`: `v, note?, ts, media?, ext?, video_deleted?`; `isVideo`.
-- `Agent` (Identifiable, id = name): `name, state ("thinking"|"here"|"away"), seen, first?, where?, last, count, last_master?`; `key` = `"agent:" + name`.
+- `Agent` (Identifiable, id = name): `name, state ("thinking"|"here"|"away"|"switching"|"starting"|"offline"; offline: every claimed session ended), seen, first?, where?, last, count, last_master?`; `key` = `"agent:" + name`.
 - `ChatMessage` (Identifiable): `id: Int, agent, role ("master" = agent side, else Hayden), body, ts, images: [String]` (`/chat-media/<file>` paths, [] when none; the bubble grid and the pill read it directly).
 - `Tap` (Identifiable, id = key): `key ("owner/repo#n"), repo, number, title, url, status ("flying"|"needs-you"|"boarding"|"landed"), goals: [TapGoal], messages: [TapMessage], created, closed?, last`; `name`, `repoName`.
 - `TapGoal { text, done }`, `TapMessage { who ("you" = Hayden), body, ts (ISO), seen?, url? }` + `date: Double`.
@@ -42,6 +44,7 @@ Files added for update cards (October 2026): `ChatCard.swift` (the card view, it
 - `state() -> [Ticket]`, `agents() -> [Agent]`, `chat(_ agent:) -> [ChatMessage]`, `taps() -> TapsResponse`, `activity() -> ActivityResponse`. All `async throws`.
 - Added: `postData(_:_:speaksForHayden:) -> Data`, `say(_ body:, toAgent:) -> ChatMessage?` (POST /api/chat, returns the stored row), `APIError.decode` (server up, bad payload; never flips the connection to down), `APIError.isOffline(_:)`.
 - Masters: `board() -> AgentsBoard` (GET /api/agents, agents plus the top-level `links`; `agents()` is `board().agents`), `markAgentRead(_ name:)` (POST /api/agents/read `{name}`, speaksForHayden).
+- Spin down and restart: `stopAgent(_ name:)` (POST /api/agents/stop `{name}`; on an offline row it only clears the row) and `restartAgent(_ name:)` (POST /api/agents/restart `{name}`; 409 unless offline or stopped) (SpinDown.swift, Restart.swift). Both speak for Hayden.
 - Cards: `answer(_ a: ChatAnswer, toAgent:, nonce:) -> ChatMessage?` (POST /api/chat with `answer`; the server writes the body; the nonce lands a retry on the same row) and `acceptTap(_ key:, card: Int? = nil) -> ChatMessage?` (POST /api/taps/accept `{key, card?}`; with `card` the server checks that card's Accept is this tap's, then returns the card's "Accepted" answer row). Both speak for Hayden.
 
 ## Store (Store.swift, core): `@MainActor @Observable final class Store`, `Store.shared`
@@ -60,10 +63,11 @@ Files added for update cards (October 2026): `ChatCard.swift` (the card view, it
 - `Images.shared` (Store.swift): `cached(_ path:, maxPixel:) -> NSImage?`, `load(_ path:, maxPixel:) async -> NSImage?` (downsampled, deduped).
 - Cards, the lead and the focus: `fleet: [FleetEntry]`, `focus: String?`, `isQuiet(_ key:)` (the focus or the thread on screen: news there never badges), `newsTaps` (holding, or an unread reply, never quiet; `chatBadge` = `newsTaps` + `unreadAgents`, and the pill lists the same taps), `insertRow(_ row:)` (a row the server just stored for Hayden, in its thread before the next poll), `answer(_ a:, to agent:) async -> Bool` and `accept(tap:card:) async -> Bool` (CoreCard.swift: through `CardAnswers.shared`, shown at once, rolled back on a refusal).
 - Masters: `links: [AgentLink]` ([] on older servers), `notesCut` (the local read cut per NAME), `progress(for key:)`, `notes(for key:)` and `notes(for agent:)` (visible notes, newest first; [] for taps), `hasNotes(_:)`, `talking(_:)` (active links to another master on the rail), `agentTitle(_ name:)`, `readNotes(_ key:)` (reads that master's card notes: optimistic, then POST /api/agents/read, refused under --snapshot/--demo and never rolled back). Notes are read only by `open(_:)` (an explicit open: rail row, note row, progress card) and when one lands while that thread is on screen with the window key, never by a tab switch or window focus alone; `markRead(_:)` is unchanged (replies only). Notes never count in `chatBadge`, `unreadAgents` or the pill.
+- Spin down and restart: `spinDown(_ key:) async -> Bool` (toast "Spun down <title>." or, offline, "Cleared <title>.") and `restart(_ key:) async -> Bool` (toast "Restarting <title>", or "Couldn’t restart it: <error>"); both read the agents again at once.
 
 ## CoreServer (CoreServer.swift, core)
 
-- `enum CoreServer`: `plan()` (nil, or what to start: the live rig via `tap.py up` for the default 127.0.0.1/localhost:4747 with no `TAPSPACE_DATA`; an app-owned `server.py` on `TAPSPACE_DATA` and the URL's port, stopped by a supervisor when the app exits; nothing for any other port), `canStart: Bool` (static, MainActor-free; the shell's ConnectingView says "STARTING TAPSPACE" only when true), `start()`. `Store.bootServerIfNeeded()` goes through it.
+- `enum CoreServer`: `plan()` (nil, or what to start: the live rig via `tap.py up` for the default 127.0.0.1/localhost:4747 with no `TAPSPACE_DATA`; an app-owned `server.py` on `TAPSPACE_DATA` and the URL's port, stopped by a supervisor when the app exits; nothing for any other port), `canStart: Bool` (static, MainActor-free; the shell's ConnectingView says "STARTING TAPSPACE" only when true), `start()`. `Store.bootServerIfNeeded()` goes through it. Every plan's env puts `/opt/homebrew/bin:/usr/local/bin:` before the inherited PATH, so `/usr/bin/env python3` finds Homebrew's after a login launch (launchd's bare PATH).
 
 ## Motion (Motion.swift, core)
 

@@ -23,6 +23,8 @@ enum CoreServer {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         let roots = ["\(home)/orchestration/tapspace", "\(home)/Developer/tapspace"]
         var e = env
+        // Launched at login, launchd's bare PATH finds /usr/bin/python3 (3.9) first; Homebrew's comes first.
+        e["PATH"] = "/opt/homebrew/bin:/usr/local/bin:" + (env["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin")
         e["TAPSPACE_URL"] = base.absoluteString
         e["TAPSPACE_PORT"] = String(port)
         if let data = env["TAPSPACE_DATA"], !data.isEmpty {

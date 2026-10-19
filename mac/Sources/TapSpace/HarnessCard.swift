@@ -154,6 +154,9 @@ enum HarnessCard {
         expect(LeadActivityStrip.face("working") == "thinking" && LeadActivityStrip.face("waiting") == "here"
                && LeadActivityStrip.face("gone") == "away" && LeadActivityStrip.face("later") == "idle",
                "the lead's face wears its activity: working focused, waiting happy, gone grey, anything else sleepy")
+        expect(agentLabel["offline"] == "Offline" && ChatProgressBoard.stateWord("offline") == "Offline"
+               && FaceExpression.of("offline") == .sleepy,
+               "a master whose sessions all ended reads Offline, with a sleepy face")
         expect(CardItemShown.steps(0, of: 4) == "1 of 4" && CardItemShown.steps(2, of: 4) == "3 of 4"
                && CardItemShown.steps(3, of: 4) == "4 of 4" && CardItemShown.steps(4, of: 4) == "4 of 4",
                "a master's count is the step it is on: 3 of 4 at current 2, 4 of 4 at its last step and when done")

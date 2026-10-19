@@ -2,7 +2,9 @@ import AppKit
 import Observation
 import SwiftUI
 
-private let agentLabel = ["thinking": "Thinking", "here": "Here", "away": "Away", "switching": "Switching car", "starting": "Starting"]
+/// A master's state as shown (HarnessCard checks "offline").
+let agentLabel = ["thinking": "Thinking", "here": "Here", "away": "Away", "switching": "Switching car", "starting": "Starting",
+                  "offline": "Offline"]
 
 struct ChatView: View {
     let store: Store
@@ -79,7 +81,7 @@ struct RailView: View {
                             OrbView(state: a.state, look: a.look).frame(width: 38, height: 38)
                             RowText(title: a.title, sub: agentSub(a))
                         }
-                        .modifier(SpinDownRow(key: a.key, title: a.title, store: store))
+                        .modifier(SpinDownRow(key: a.key, title: a.title, offline: a.state == "offline", store: store))
                         RailAgentDetail(detail: details[a.key] ?? RailDetail()) { store.open(a.key) }
                         if a.key == lead?.key {
                             ChatFleetStrip(fleet: store.fleet, lead: a.title, open: fleetOpen,

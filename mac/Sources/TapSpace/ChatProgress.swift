@@ -116,7 +116,7 @@ enum ChatProgressBoard {
 
     static func stateWord(_ state: String) -> String {
         ["thinking": "Thinking", "here": "Here", "away": "Away", "switching": "Switching car",
-         "starting": "Starting"][state] ?? state
+         "starting": "Starting", "offline": "Offline"][state] ?? state
     }
 
     /// VoiceOver for a card: "Glint app, Thinking, goal: Two tabs, step 3 of 5, Build, unread".
