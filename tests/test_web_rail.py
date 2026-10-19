@@ -275,6 +275,8 @@ class OfflineTests(unittest.TestCase):
         # Restart sits on its own line, always visible, never inside the hover-only stop control's rule
         self.assertIn(".agrp .restart{", CSS)
         self.assertNotIn("restart", block(".agrp:hover .stopbtn", "}"))
+        # the narrow strip (.agrp is display:contents) hides it with the stop control, so no nameless Restart trails
+        self.assertIn(".agrp .restart{display:none}", block(".agrp{display:contents}", "#leadpin"))
 
 if __name__ == "__main__":
     unittest.main()

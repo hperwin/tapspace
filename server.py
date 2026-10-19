@@ -1701,8 +1701,8 @@ def _stop_record(name, sessions):
 
 def _stop_master(name):
     """POST /api/agents/stop -> (http code, answer). An unknown NAME, or one with no live Claude session
-    to end, is refused and nothing is signalled, except an Offline one (_offline: it claimed sessions and
-    all of them ended), which is cleared off the list. Each stop is logged to server.log (stdout)."""
+    to end, is refused and nothing is signalled, except a row served Offline (_row_state: it claimed sessions,
+    all of them ended, and it is not starting), which is cleared off the list. Each stop is logged to server.log (stdout)."""
     info = _agents().get(name) if _NAME.match(name) else None
     if not info or info.get("stopped"):
         return 404, {"ok": False, "error": "no agent by that name is in the list"}
@@ -1720,7 +1720,7 @@ def _stop_master(name):
                 failed.append(t["pid"])
                 continue
         stopped.append(t["pid"])
-    cleared = not (targets or refused) and _offline(name)
+    cleared = not (targets or refused) and _row_state(name, info, _chat_rows(name)) == "offline"
     print(time.strftime("%Y-%m-%d %H:%M:%S"), "stop", json.dumps(name, ensure_ascii=False),
           json.dumps({"stopped": stopped, "tmux": tmux, "failed": failed,
                       "refused": [{k: r[k] for k in ("pid", "why")} for r in refused],
@@ -1786,7 +1786,7 @@ def _spawn_master(folder, name, parent="", order="", restart=False):
     The server picks the session id and the tmux name, so the answer names them before the child exists.
     parent (a joined NAME) is stored on the row first, so the child is born under its lead; order is
     kept under data/orders/ and appended to its first prompt. restart: _restart_master already found
-    the row of that NAME offline or stopped."""
+    the row of that NAME offline, and new-master.sh runs through its login shell (LOGIN)."""
     home = pathlib.Path.home().resolve()
     f = pathlib.Path(folder).expanduser().resolve()
     if not f.is_dir() or not (str(f) + "/").startswith(str(home) + "/"):
@@ -1820,7 +1820,7 @@ def _spawn_master(folder, name, parent="", order="", restart=False):
         extra = [parent, str(path)]
     log = DATA / "spawn.log"
     with log.open("a") as fh:
-        subprocess.Popen(["bash", str(ROOT / "new-master.sh"), str(f), name] + extra,
+        subprocess.Popen([*(LOGIN if restart else ("bash",)), str(ROOT / "new-master.sh"), str(f), name] + extra,
                          stdout=fh, stderr=subprocess.STDOUT, start_new_session=True,
                          env={**os.environ, "TAPSPACE_URL": f"http://127.0.0.1:{PORT}",
                               "TAPSPACE_MASTER_UUID": sid, "TAPSPACE_MASTER_TMUX": ts})
@@ -1833,39 +1833,63 @@ def _spawn_master(folder, name, parent="", order="", restart=False):
 MUDDI_SH = pathlib.Path(os.environ.get("MUDDI_SH") or pathlib.Path.home() / "orchestration/muddi/muddi.sh")
 SPAWN_SCRUB = ("CLAUDE_CODE_SESSION_ID", "CLAUDE_PID", "CLAUDE_CODE_MESSAGING_SOCKET",
                "CLAUDE_CODE_MESSAGING_TOKEN", "CODEX_COMPANION_SESSION_ID", "CODEX_COMPANION_TRANSCRIPT_PATH")
+LOGIN = ("/bin/zsh", "-l", "-c", 'exec bash "$0" "$@"')     # + a script and its args: runs it with the login PATH
 
 
 def _restart_master(name):
-    """POST /api/agents/restart -> (http code, answer). Refused unless NAME's row is offline or stopped.
-    The row is shown starting first; muddi.sh runs through a login shell, so a server launched at login
-    with launchd's bare PATH still hands it Homebrew and ~/.local/bin. Each restart is logged to stdout."""
+    """POST /api/agents/restart -> (http code, answer). Refused unless no claimed session of NAME still runs
+    (_offline) and its row is not already starting or switching; that check and the row's edit share one
+    _lock hold, so two restarts never both launch. A launch that fails puts the row back as it was.
+    Both scripts run through a login shell (LOGIN), so a server launched at login with launchd's bare
+    PATH still hands them Homebrew and ~/.local/bin. Each restart is logged to stdout."""
     info = _agents().get(name) if _NAME.match(name) else None
     if not info:
         return 404, {"ok": False, "error": "no agent by that name is in the list"}
-    if not info.get("stopped") and _row_state(name, info, _chat_rows(name)) != "offline":
-        return 409, {"ok": False, "error": "it is still running"}
+    muddi = info.get("role") == "lead" and name == "Muddi"
+    if muddi and not MUDDI_SH.is_file():
+        return 500, {"ok": False, "error": f"muddi.sh not found at {MUDDI_SH}"}
+    offline = _offline(name)                 # never under _lock
+    keys = ("stopped", "stopped_sessions", "spawned")
+    was = {}
 
     def change(row):
+        if not offline:
+            raise ValueError("it is still running")
+        if _agent_state(row, []) in ("starting", "switching"):
+            raise ValueError("it is already starting")
+        was.update((k, row[k]) for k in keys if k in row)
         row.pop("stopped", None)
         row.pop("stopped_sessions", None)
         row["spawned"] = time.time()
-    _agent_edit(name, change)
-    if info.get("role") == "lead" and name == "Muddi" and MUDDI_SH.is_file():
-        env = {k: v for k, v in os.environ.items() if k not in SPAWN_SCRUB}
-        env["TAPSPACE_URL"] = f"http://127.0.0.1:{PORT}"
-        with (DATA / "spawn.log").open("a") as fh:
-            subprocess.Popen(["/bin/zsh", "-l", "-c", 'exec bash "$0"', str(MUDDI_SH)],
-                             stdout=fh, stderr=subprocess.STDOUT, start_new_session=True, env=env)
-        out = {"ok": True, "agent": name, "how": "muddi"}
-    else:
-        home = pathlib.Path.home().resolve()
-        f = pathlib.Path(info.get("where") or "~").expanduser().resolve()
-        if not f.is_dir() or not (str(f) + "/").startswith(str(home) + "/"):
-            f = home
-        parent = info.get("parent")
-        parent = parent if isinstance(parent, str) and parent != name and parent in _agents() else ""
-        got = _spawn_master(str(f), name, parent=parent, restart=True)
-        out = {"ok": True, "agent": name, "how": "master", "session": got["session"], "tmux": got["tmux"]}
+
+    def undo(row):
+        for k in keys:
+            row.pop(k, None)
+        row.update(was)
+    try:
+        _agent_edit(name, change)
+    except ValueError as e:
+        return 409, {"ok": False, "error": str(e)}
+    try:
+        if muddi:
+            env = {k: v for k, v in os.environ.items() if k not in SPAWN_SCRUB}
+            env["TAPSPACE_URL"] = f"http://127.0.0.1:{PORT}"
+            with (DATA / "spawn.log").open("a") as fh:
+                subprocess.Popen([*LOGIN, str(MUDDI_SH)],
+                                 stdout=fh, stderr=subprocess.STDOUT, start_new_session=True, env=env)
+            out = {"ok": True, "agent": name, "how": "muddi"}
+        else:
+            home = pathlib.Path.home().resolve()
+            f = pathlib.Path(info.get("where") or "~").expanduser().resolve()
+            if not f.is_dir() or not (str(f) + "/").startswith(str(home) + "/"):
+                f = home
+            parent = info.get("parent")
+            parent = parent if isinstance(parent, str) and parent != name and parent in _agents() else ""
+            got = _spawn_master(str(f), name, parent=parent, restart=True)
+            out = {"ok": True, "agent": name, "how": "master", "session": got["session"], "tmux": got["tmux"]}
+    except Exception as e:
+        _agent_edit(name, undo, seen=False)
+        return 500, {"ok": False, "error": f"could not start it: {e}"}
     print(time.strftime("%Y-%m-%d %H:%M:%S"), "restart", json.dumps(name, ensure_ascii=False),
           json.dumps({k: out[k] for k in out if k != "ok"}, ensure_ascii=False), flush=True)
     _bump("agents")

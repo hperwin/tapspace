@@ -32,16 +32,19 @@ extension Store {
 }
 
 /// The offline row's Restart: always visible (not on hover), at the row's
-/// trailing edge left of its unread dot.
+/// trailing edge left of its unread dot. SpinDownRow owns the busy flag and the
+/// call, so this button and the row's menu item never both post.
 struct RestartButton: View {
-    let key: String
-    let store: Store
+    let working: Bool
+    let action: () -> Void
     @State private var hover = false
-    @State private var working = false
+
+    /// Trailing room an offline row's text keeps clear of this capsule.
+    static let room: CGFloat = 66
 
     var body: some View {
         let shape = Capsule(style: .continuous)
-        Button(action: restart) {
+        Button(action: action) {
             Text("Restart")
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(Color.white)
@@ -56,13 +59,5 @@ struct RestartButton: View {
         .help("Restart")
         .accessibilityLabel("Restart")
         .onHover { h in withAnimation(.easeOut(duration: 0.2)) { hover = h } }
-    }
-
-    private func restart() {
-        working = true
-        Task {
-            await store.restart(key)
-            working = false
-        }
     }
 }

@@ -80,6 +80,7 @@ struct RailView: View {
                         RailRow(key: a.key, index: i, store: store, onFrame: { frames[a.key] = $0 }) {
                             OrbView(state: a.state, look: a.look).frame(width: 38, height: 38)
                             RowText(title: a.title, sub: agentSub(a))
+                                .padding(.trailing, a.state == "offline" ? RestartButton.room : 0)   // clear of Restart
                         }
                         .modifier(SpinDownRow(key: a.key, title: a.title, offline: a.state == "offline", store: store))
                         RailAgentDetail(detail: details[a.key] ?? RailDetail()) { store.open(a.key) }

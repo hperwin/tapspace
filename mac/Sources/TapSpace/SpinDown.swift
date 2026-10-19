@@ -44,6 +44,7 @@ struct SpinDownRow: ViewModifier {
     @State private var hover = false
     @State private var asking = false
     @State private var working = false
+    @State private var restarting = false
 
     func body(content: Content) -> some View {
         let shown = hover || asking || working
@@ -57,7 +58,7 @@ struct SpinDownRow: ViewModifier {
                         .allowsHitTesting(shown && !working)
                         .animation(.easeOut(duration: 0.2), value: shown)
                     if offline {
-                        RestartButton(key: key, store: store)
+                        RestartButton(working: restarting, action: restart)
                             .transition(.opacity.combined(with: .scale(scale: 0.8)))
                     }
                 }
@@ -68,8 +69,8 @@ struct SpinDownRow: ViewModifier {
             .onHover { hover = $0 }
             .contextMenu {
                 if offline {
-                    Button("Restart") { Task { await store.restart(key) } }
-                        .disabled(working)
+                    Button("Restart", action: restart)
+                        .disabled(working || restarting)
                 }
                 Button(verb + "…") { asking = true }
                     .disabled(working)
@@ -87,6 +88,15 @@ struct SpinDownRow: ViewModifier {
         Task {
             _ = await store.spinDown(key)
             working = false
+        }
+    }
+
+    private func restart() {
+        guard !restarting else { return }
+        restarting = true
+        Task {
+            await store.restart(key)
+            restarting = false
         }
     }
 }

@@ -731,7 +731,7 @@ class StopTests(unittest.TestCase):
         self.assertEqual((code, r), (200, {"ok": True, "agent": "Muddi", "how": "muddi"}))
         self.assertEqual(len(launched), 1)
         args, kw = launched[0]
-        self.assertEqual(args, ["/bin/zsh", "-l", "-c", 'exec bash "$0"', str(sh)])
+        self.assertEqual(args, ["/bin/zsh", "-l", "-c", 'exec bash "$0" "$@"', str(sh)])
         self.assertTrue(kw["start_new_session"])
         self.assertEqual(pathlib.Path(kw["stdout"].name), S.DATA / "spawn.log")
         self.assertEqual(kw["env"]["TAPSPACE_URL"], f"http://127.0.0.1:{S.PORT}")
@@ -754,13 +754,14 @@ class StopTests(unittest.TestCase):
         self.assertEqual((code, r["ok"], r["agent"], r["how"]), (200, True, a, "master"), r)
         self.assertTrue(r["session"] and r["tmux"].startswith("master-"))
         args, kw = launched[0]
-        self.assertEqual(args, ["bash", str(S.ROOT / "new-master.sh"), str(ROOT if inside else home), a, lead])
+        self.assertEqual(args, ["/bin/zsh", "-l", "-c", 'exec bash "$0" "$@"', str(S.ROOT / "new-master.sh"),
+                                str(ROOT if inside else home), a, lead])          # the login PATH, like muddi.sh
         self.assertEqual(kw["env"]["TAPSPACE_MASTER_UUID"], r["session"])
         served_row = row(a)
         self.assertEqual((served_row["state"], served_row["parent"]), ("starting", lead))
         self.edit(a, spawned=0, where="~/no-such-folder-" + uuid.uuid4().hex[:6])
         self.assertEqual(self.restart(a)[0], 200)               # a folder that is gone starts in ~
-        self.assertEqual(launched[1][0][2], str(home))
+        self.assertEqual(launched[1][0][5], str(home))
         self.assertEqual(self.calls, [])
 
     def test_restart_brings_a_spun_down_master_back(self):
@@ -772,6 +773,69 @@ class StopTests(unittest.TestCase):
         self.assertEqual(len(launched), 1)
         self.assertNotIn("stopped", S._agents()[a])
         self.assertEqual(row(a)["state"], "starting")
+
+    def test_restart_refuses_a_stopped_row_whose_session_still_runs(self):
+        a, sids = self.master("stopped-live", 990028)
+        self.live(990028, sids)
+        self.edit(a, stopped=time.time(), stopped_sessions=[])    # a stop that refused this session
+        launched = self.popen()
+        self.assertEqual(self.restart(a), (409, {"ok": False, "error": "it is still running"}))
+        self.assertEqual(launched, [])
+        self.assertIn("stopped", S._agents()[a])
+
+    def test_two_restarts_at_once_launch_one(self):
+        a, _ = self.dead("race", 990029)
+        launched = self.popen()
+        gate, got = threading.Barrier(4), []
+
+        def go():
+            gate.wait()
+            got.append(S._restart_master(a)[0])
+        ts = [threading.Thread(target=go) for _ in range(4)]
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join()
+        self.assertEqual(sorted(got), [200, 409, 409, 409])
+        self.assertEqual(len(launched), 1)
+
+    def test_stop_on_a_row_starting_after_a_restart_is_not_a_clear(self):
+        a, _ = self.dead("restarting", 990030)
+        self.popen()
+        self.assertEqual(self.restart(a)[0], 200)
+        self.assertEqual(row(a)["state"], "starting")
+        code, r = self.stop(a)
+        self.assertEqual(code, 409, r)
+        self.assertNotIn("cleared", r)
+        self.assertIn(a, self.names())
+        self.assertNotIn("stopped", S._agents()[a])
+
+    def test_a_launch_that_fails_puts_the_row_back(self):
+        a, _ = self.master("fails", 990031)
+        self.assertEqual(self.stop(a)[0], 200)
+        before = {k: S._agents()[a].get(k) for k in ("stopped", "stopped_sessions", "spawned")}
+        real = S.subprocess.Popen
+
+        def boom(args, *x, **kw):
+            if args[0] in ("/bin/zsh", "bash"):
+                raise OSError("no shell")
+            return real(args, *x, **kw)
+        S.subprocess.Popen = boom
+        self.addCleanup(setattr, S.subprocess, "Popen", real)
+        code, r = self.restart(a)
+        self.assertEqual((code, r), (500, {"ok": False, "error": "could not start it: no shell"}))
+        self.assertEqual({k: S._agents()[a].get(k) for k in before}, before)
+        self.assertNotIn(a, self.names())
+
+    def test_restart_of_muddi_without_muddi_sh_says_so(self):
+        S.MUDDI_SH = pathlib.Path(TMP.name) / "no-such-muddi.sh"
+        self.dead("lead-gone", 990032, who="Muddi")
+        S._set_lead("Muddi")
+        self.addCleanup(self.edit, "Muddi", stopped=time.time(), role=None)
+        launched, before = self.popen(), S._agents()["Muddi"]
+        self.assertEqual(self.restart("Muddi"),
+                         (500, {"ok": False, "error": f"muddi.sh not found at {S.MUDDI_SH}"}))
+        self.assertEqual((launched, S._agents()["Muddi"]), ([], before))     # never a plain master instead
 
     def test_stop_clears_an_offline_row_off_the_list(self):
         a, _ = self.dead("clear", 990027)
