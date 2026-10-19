@@ -20,7 +20,8 @@ A master can publish its run (tap.py goal / step: a north star, the steps, the c
 Cards know the master that owns them from the Claude session tap.py runs in; a change note
 shows under that master until it posts a new version or its thread is opened. Agent-to-agent
 messages show as links (links.py). Spin down (POST /api/agents/stop) ends a master's Claude
-session and takes it off the list.
+session and takes it off the list. A master whose sessions all ended (a crash or a reboot) is served
+Offline; Restart (POST /api/agents/restart) starts it again under the same NAME.
 
 A master can send an update card (tap.py card): one row with its line, its faces, one visual,
 what moved, images to approve and a question; Hayden's answers come back as rows listen hands over.
@@ -506,6 +507,27 @@ def _agent_state(info, rows):
     return "here" if time.time() - info.get("listen", 0) < 30 else "away"
 
 
+def _offline(name):
+    """NAME claimed Claude sessions and none of them still runs (a crash, a reboot): activity.py's own "gone"
+    test, asked of its one Reader, so the rail and the lead's activity never disagree. False for a NAME that
+    never claimed a session. Never under _lock."""
+    with activity._ONE_LOCK:
+        if activity._ONE is None:
+            activity._ONE = activity.Reader()
+        r = activity._ONE
+    with r._lock:
+        rows = [(sid, c) for sid, c in r._claims(CLAIMS).items()
+                if isinstance(c, dict) and c.get("name") == name and links._SID.match(sid)]
+        return bool(rows) and not any(r._live(sid, c, _proc_start) for sid, c in rows)
+
+
+def _row_state(name, info, rows):
+    """The state a master row is served with: _agent_state, except that a NAME whose claimed sessions all
+    ended is offline, whatever it last stored. Switching and starting still win."""
+    st = _agent_state(info, rows)
+    return "offline" if st not in ("switching", "starting") and _offline(name) else st
+
+
 def _title(info):
     """What the person sees: the plain name the agent gave itself for the work
     (tap.py title), else the project it was started in, else just Claude."""
@@ -554,7 +576,7 @@ def _agent_rows(allrows=None):
                                 # any other after a quiet day); history is kept
         said = [r["ts"] for r in rows if r["role"] == "master"]
         read = info.get("notes_read")
-        out.append({"name": name, "state": _agent_state(info, rows),
+        out.append({"name": name, "state": _row_state(name, info, rows),
                     "seen": info.get("seen", 0), "first": info.get("first", 0),
                     "where": info.get("where", ""), "last": last, "count": len(rows),
                     "last_master": said[-1] if said else 0,
@@ -562,7 +584,7 @@ def _agent_rows(allrows=None):
                     "progress": info.get("progress"),
                     "notes": [n for n in notes.get(name, []) if n["ts"] > (read or 0)][:NOTES_MAX],
                     "notes_read": read, "look": _look(info)})
-    rank = {"thinking": 0, "switching": 0, "starting": 0, "here": 1, "away": 2}
+    rank = {"thinking": 0, "switching": 0, "starting": 0, "here": 1, "away": 2, "offline": 3}
     out.sort(key=lambda r: -r["last"])
     out.sort(key=lambda r: rank[r["state"]])
     # the lead (Muddi, the master over masters): live only while its row is served. Every other row's
@@ -632,7 +654,7 @@ def _fleet(rows, taps, chat):
         pg = r.get("progress") or {}
         steps = pg.get("steps") or []
         done = min(pg.get("current") or 0, len(steps))
-        if r is lead or (r["state"] == "away" and done >= len(steps)):
+        if r is lead or (r["state"] in ("away", "offline") and done >= len(steps)):
             continue
         out.append({"key": "agent:" + r["name"], "kind": "master", "title": r["title"], "look": r["look"],
                     "state": r["state"], "done": done, "total": len(steps),
@@ -1679,7 +1701,8 @@ def _stop_record(name, sessions):
 
 def _stop_master(name):
     """POST /api/agents/stop -> (http code, answer). An unknown NAME, or one with no live Claude session
-    to end, is refused and nothing is signalled. Each stop is logged to server.log (stdout)."""
+    to end, is refused and nothing is signalled, except an Offline one (_offline: it claimed sessions and
+    all of them ended), which is cleared off the list. Each stop is logged to server.log (stdout)."""
     info = _agents().get(name) if _NAME.match(name) else None
     if not info or info.get("stopped"):
         return 404, {"ok": False, "error": "no agent by that name is in the list"}
@@ -1697,9 +1720,17 @@ def _stop_master(name):
                 failed.append(t["pid"])
                 continue
         stopped.append(t["pid"])
+    cleared = not (targets or refused) and _offline(name)
     print(time.strftime("%Y-%m-%d %H:%M:%S"), "stop", json.dumps(name, ensure_ascii=False),
           json.dumps({"stopped": stopped, "tmux": tmux, "failed": failed,
-                      "refused": [{k: r[k] for k in ("pid", "why")} for r in refused]}), flush=True)
+                      "refused": [{k: r[k] for k in ("pid", "why")} for r in refused],
+                      **({"cleared": True} if cleared else {})}), flush=True)
+    if cleared:
+        # Offline: its sessions already ended, so there is nothing to signal; it leaves the list as a spin-down does
+        _chat_add(name, "system", STOP_LINE)
+        _stop_record(name, [])
+        _bump("chat", "agents")
+        return 200, {"ok": True, "ended": [], "cleared": True}
     if not stopped:
         return 409, {"ok": False, "error": "could not end its session" if failed else
                      "no live Claude session to end for this agent",
@@ -1750,11 +1781,12 @@ def _projects():
 ORDER_MAX = 65536                    # bytes of a first order appended to a new master's prompt
 
 
-def _spawn_master(folder, name, parent="", order=""):
+def _spawn_master(folder, name, parent="", order="", restart=False):
     """Starts a master in folder under name (new-master.sh, detached) -> {agent, session, tmux, parent}.
     The server picks the session id and the tmux name, so the answer names them before the child exists.
     parent (a joined NAME) is stored on the row first, so the child is born under its lead; order is
-    kept under data/orders/ and appended to its first prompt."""
+    kept under data/orders/ and appended to its first prompt. restart: _restart_master already found
+    the row of that NAME offline or stopped."""
     home = pathlib.Path.home().resolve()
     f = pathlib.Path(folder).expanduser().resolve()
     if not f.is_dir() or not (str(f) + "/").startswith(str(home) + "/"):
@@ -1762,7 +1794,7 @@ def _spawn_master(folder, name, parent="", order=""):
     name = name or f"Claude · {f.name} · {uuid.uuid4().hex[:4]}"
     if not _NAME.match(name):
         raise ValueError("bad name")
-    if name in _agents() and _agent_state(_agents()[name], []) in ("here", "starting"):
+    if not restart and name in _agents() and _agent_state(_agents()[name], []) in ("here", "starting"):
         raise ValueError("an agent with that name is already running")
     if parent:
         if not _NAME.match(parent):
@@ -1793,6 +1825,51 @@ def _spawn_master(folder, name, parent="", order=""):
                          env={**os.environ, "TAPSPACE_URL": f"http://127.0.0.1:{PORT}",
                               "TAPSPACE_MASTER_UUID": sid, "TAPSPACE_MASTER_TMUX": ts})
     return {"agent": name, "session": sid, "tmux": ts, "parent": parent or None}
+
+
+# ---- restart a master after a crash or a reboot (POST /api/agents/restart) ----
+# An Offline row (or a spun-down one) starts again under the same NAME, so its thread, look and lead stay.
+# Muddi, the lead, comes back through its own muddi.sh; any other master through new-master.sh in its folder.
+MUDDI_SH = pathlib.Path(os.environ.get("MUDDI_SH") or pathlib.Path.home() / "orchestration/muddi/muddi.sh")
+SPAWN_SCRUB = ("CLAUDE_CODE_SESSION_ID", "CLAUDE_PID", "CLAUDE_CODE_MESSAGING_SOCKET",
+               "CLAUDE_CODE_MESSAGING_TOKEN", "CODEX_COMPANION_SESSION_ID", "CODEX_COMPANION_TRANSCRIPT_PATH")
+
+
+def _restart_master(name):
+    """POST /api/agents/restart -> (http code, answer). Refused unless NAME's row is offline or stopped.
+    The row is shown starting first; muddi.sh runs through a login shell, so a server launched at login
+    with launchd's bare PATH still hands it Homebrew and ~/.local/bin. Each restart is logged to stdout."""
+    info = _agents().get(name) if _NAME.match(name) else None
+    if not info:
+        return 404, {"ok": False, "error": "no agent by that name is in the list"}
+    if not info.get("stopped") and _row_state(name, info, _chat_rows(name)) != "offline":
+        return 409, {"ok": False, "error": "it is still running"}
+
+    def change(row):
+        row.pop("stopped", None)
+        row.pop("stopped_sessions", None)
+        row["spawned"] = time.time()
+    _agent_edit(name, change)
+    if info.get("role") == "lead" and name == "Muddi" and MUDDI_SH.is_file():
+        env = {k: v for k, v in os.environ.items() if k not in SPAWN_SCRUB}
+        env["TAPSPACE_URL"] = f"http://127.0.0.1:{PORT}"
+        with (DATA / "spawn.log").open("a") as fh:
+            subprocess.Popen(["/bin/zsh", "-l", "-c", 'exec bash "$0"', str(MUDDI_SH)],
+                             stdout=fh, stderr=subprocess.STDOUT, start_new_session=True, env=env)
+        out = {"ok": True, "agent": name, "how": "muddi"}
+    else:
+        home = pathlib.Path.home().resolve()
+        f = pathlib.Path(info.get("where") or "~").expanduser().resolve()
+        if not f.is_dir() or not (str(f) + "/").startswith(str(home) + "/"):
+            f = home
+        parent = info.get("parent")
+        parent = parent if isinstance(parent, str) and parent != name and parent in _agents() else ""
+        got = _spawn_master(str(f), name, parent=parent, restart=True)
+        out = {"ok": True, "agent": name, "how": "master", "session": got["session"], "tmux": got["tmux"]}
+    print(time.strftime("%Y-%m-%d %H:%M:%S"), "restart", json.dumps(name, ensure_ascii=False),
+          json.dumps({k: out[k] for k in out if k != "ok"}, ensure_ascii=False), flush=True)
+    _bump("agents")
+    return 200, out
 
 
 # ---- taps (the reviewer's own pilot issues, read through gh) ----
@@ -2641,7 +2718,7 @@ class H(BaseHTTPRequestHandler):
 
         if self.path in ("/api/chat", "/api/chat/reply", "/api/taps/say", "/api/chat/import",
                          "/api/agents/new", "/api/chat/clear", "/api/devices",
-                         "/api/agents/progress", "/api/agents/read", "/api/agents/stop",
+                         "/api/agents/progress", "/api/agents/read", "/api/agents/stop", "/api/agents/restart",
                          "/api/taps/fly", "/api/taps/accept", "/api/agents/lead", "/api/agents/adopt"):
             # these speak for the reviewer or write agent state: same-origin JSON only, so no
             # other page can drive them through the browser
@@ -2732,6 +2809,14 @@ class H(BaseHTTPRequestHandler):
             if self.path == "/api/agents/stop":
                 # the reviewer spins a master down: its Claude session ends and it leaves the list
                 code, out = _stop_master(str(p.get("name") or p.get("agent") or "").strip())
+                self._json(out, code)
+                return
+            if self.path == "/api/agents/restart":
+                # the reviewer starts an Offline master again (after a crash or a reboot) under the same NAME
+                try:
+                    code, out = _restart_master(str(p.get("name") or p.get("agent") or "").strip())
+                except Exception as e:
+                    code, out = 400, {"ok": False, "error": str(e)}
                 self._json(out, code)
                 return
             if self.path in ("/api/taps/fly", "/api/taps/accept"):

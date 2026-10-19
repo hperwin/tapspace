@@ -223,6 +223,23 @@ class TapWire(unittest.TestCase):
         self.assertEqual(r.returncode, 2)
         self.assertEqual(Stub.seen, [])
 
+    # restart
+
+    def test_restart_posts_the_name_and_exits_on_the_answer(self):
+        Stub.answers["/api/agents/restart"] = (200, {"ok": True, "agent": "Muddi", "how": "muddi"})
+        r = self.tap("restart", "--as", "Muddi")
+        self.assertEqual((r.returncode, json.loads(r.stdout)["how"]), (0, "muddi"), r.stderr)
+        self.assertEqual(self.posts("/api/agents/restart"), [{"name": "Muddi"}])
+        Stub.answers["/api/agents/restart"] = (409, {"ok": False, "error": "it is still running"})
+        r = self.tap("restart", "--as", "Muddi")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("it is still running", r.stdout)
+
+    def test_restart_never_defaults_to_tapspace_agent(self):
+        r = self.tap("restart", TAPSPACE_AGENT="Muddi")
+        self.assertEqual(r.returncode, 2)
+        self.assertEqual(Stub.seen, [])
+
     # doctor
 
     def test_doctor_counts_owners_cards_notes_links_and_sessions(self):
