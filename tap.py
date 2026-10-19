@@ -29,7 +29,12 @@
   tap.py progress --as NAME              -> prints the goal card as stored (a relay car reads it here)
   tap.py stop --as NAME                  -> spins that master down, as the Chat rail's Spin down does: its
                                             Claude Code session ends and it leaves the list (--as is required)
-                                            exit 0 = stopped, 1 = refused (nothing was ended)
+                                            exit 0 = stopped, 1 = refused (nothing was ended); a master whose
+                                            session already ended (Offline) is cleared off the list
+  tap.py restart --as NAME               -> starts an Offline (or spun down) master again under the same NAME,
+                                            as the Chat rail's Restart does: Muddi through muddi.sh, any other in
+                                            its own folder under its own lead (--as is required)
+                                            exit 0 = starting, 1 = refused (it is still running, or no such row)
   tap.py lead --as NAME                  -> marks NAME the lead, the master over all masters: every client
                                             shows it first and the other masters under it (one lead at a time;
                                             the newest replaces the old one; --as is required)
@@ -475,6 +480,9 @@ def main():
     sp = sub.add_parser("stop")
     sp.add_argument("--as", dest="name", required=True, help="the master to spin down (never defaults to yourself)")
 
+    rs = sub.add_parser("restart")
+    rs.add_argument("--as", dest="name", required=True, help="the master to start again (never defaults to yourself)")
+
     ld = sub.add_parser("lead")
     ld.add_argument("--as", dest="name", required=True,
                     help="the master to mark as the lead over all masters (never defaults to yourself)")
@@ -690,6 +698,11 @@ def main():
 
     if a.cmd == "stop":
         r = _call("/api/agents/stop", {"name": a.name})
+        print(json.dumps(r))
+        return 0 if r.get("ok") else 1
+
+    if a.cmd == "restart":
+        r = _call("/api/agents/restart", {"name": a.name})
         print(json.dumps(r))
         return 0 if r.get("ok") else 1
 

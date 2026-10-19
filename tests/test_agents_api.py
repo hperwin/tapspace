@@ -490,7 +490,8 @@ class StopTests(unittest.TestCase):
     START = "Thu Oct 15 17:00:00 2026"
 
     def setUp(self):
-        self.saved = {k: getattr(S, k) for k in ("_procs", "_tmux_panes", "_kill_pid", "_kill_tmux", "STOP_GRACE")}
+        self.saved = {k: getattr(S, k) for k in ("_procs", "_tmux_panes", "_kill_pid", "_kill_tmux", "STOP_GRACE",
+                                                 "_proc_start", "MUDDI_SH")}
         me = os.getpid()
         self.table = {me: (1, self.START, "python3", "S")}     # this server, at the top of its own tree
         self.panes, self.calls, self.stubborn = [], [], set()
@@ -498,7 +499,13 @@ class StopTests(unittest.TestCase):
         S._tmux_panes = lambda: list(self.panes)
         S._kill_pid = self.kill_pid
         S._kill_tmux = self.kill_tmux
+        S._proc_start = lambda pid: self.table[pid][1] if pid in self.table else ""
         S.STOP_GRACE = 0.3
+        # activity.py's Reader decides Offline: its session registry and its pid check read this fake table too
+        self.claude = pathlib.Path(tempfile.mkdtemp(prefix="claude-", dir=TMP.name))
+        (self.claude / "sessions").mkdir()
+        self.reader = S.activity._ONE
+        S.activity._ONE = S.activity.Reader(claude_dir=self.claude, alive=lambda pid: pid in self.table)
         self.log, self.stdout = io.StringIO(), sys.stdout       # the server logs each stop to stdout (server.log)
         sys.stdout = self.log
 
@@ -506,6 +513,7 @@ class StopTests(unittest.TestCase):
         sys.stdout = self.stdout
         for k, v in self.saved.items():
             setattr(S, k, v)
+        S.activity._ONE = self.reader
 
     def kill_pid(self, pid, sig):
         self.calls.append(("signal", pid, sig))
@@ -525,9 +533,9 @@ class StopTests(unittest.TestCase):
                 self.table.pop(pid, None)
         return bool(gone)
 
-    def master(self, tag, pid, comm="claude", ppid=1, sessions=1):
+    def master(self, tag, pid, comm="claude", ppid=1, sessions=1, who=None):
         """A joined agent whose sessions claim pid, and that pid in the process table."""
-        a = name(tag)
+        a = who or name(tag)
         join(a)
         call("/api/chat", {"agent": a, "body": "hello"})
         call("/api/chat/reply", {"agent": a, "body": "hi"})
@@ -543,6 +551,35 @@ class StopTests(unittest.TestCase):
 
     def names(self):
         return {r["name"] for r in call("/api/agents")[1]["agents"]}
+
+    def live(self, pid, sids):
+        """Claude Code's own registry names the newest of sids as pid's session: activity.py's live test."""
+        (self.claude / "sessions" / f"{pid}.json").write_text(json.dumps({"pid": pid, "sessionId": sids[-1]}))
+
+    def dead(self, tag, pid, **kw):
+        """A master whose claimed session ended with the Mac (a crash, a reboot): its pid is in no table."""
+        a, sids = self.master(tag, pid, **kw)
+        self.table.pop(pid)
+        return a, sids
+
+    def popen(self):
+        """Records every launch of muddi.sh or new-master.sh instead of running it; any other Popen runs."""
+        launched, real = [], S.subprocess.Popen
+
+        def fake(args, *a, **kw):
+            if args[0] in ("/bin/zsh", "bash"):
+                launched.append((args, kw))
+                return None
+            return real(args, *a, **kw)
+        S.subprocess.Popen = fake
+        self.addCleanup(setattr, S.subprocess, "Popen", real)
+        return launched
+
+    def edit(self, who, **fields):
+        S._agent_edit(who, lambda r: r.update(fields), seen=False)
+
+    def restart(self, who, **kw):
+        return call("/api/agents/restart", {"name": who}, **kw)
 
     def stop(self, who, **kw):
         return call("/api/agents/stop", {"name": who}, **kw)
@@ -622,15 +659,198 @@ class StopTests(unittest.TestCase):
         self.assertEqual(self.stop("Claude · nobody here"), (404, {"ok": False, "error": "no agent by that name is in the list"}))
         a = name("nosession")
         join(a)
-        self.assertEqual(self.stop(a)[0], 409)
-        b, _ = self.master("gone", 990011)
-        self.table.pop(990011)
-        self.assertEqual(self.stop(b)[0], 409)
+        self.assertEqual(self.stop(a)[0], 409)                  # never claimed a session: not Offline, nothing to end
+        b, _ = self.dead("gone", 990011)
+        self.assertEqual(self.stop(b), (200, {"ok": True, "ended": [], "cleared": True}))
         c, _ = self.master("reused", 990012)
         self.table[990012] = (1, "Fri Oct 16 09:00:00 2026", "claude", "S")    # another claude holds the pid now
-        self.assertEqual(self.stop(c)[0], 409)
+        self.assertEqual(self.stop(c), (200, {"ok": True, "ended": [], "cleared": True}))
         self.assertEqual(self.calls, [])
-        self.assertTrue({a, b, c} <= self.names())
+        self.assertIn(a, self.names())
+        self.assertFalse({b, c} & self.names())
+
+    # Offline and Restart (a crash or a reboot ended every session)
+
+    def test_a_row_whose_sessions_all_ended_is_served_offline(self):
+        a, _ = self.dead("offline", 990020)
+        self.assertEqual(row(a)["state"], "offline")
+        call("/api/chat", {"agent": a, "body": "are you there"})
+        self.assertEqual(row(a)["state"], "offline")            # never Thinking for a dead session
+        b, sids = self.master("alive", 990021)
+        self.live(990021, sids)
+        self.assertEqual(row(b)["state"], "here")
+        c = name("noclaims")
+        join(c)
+        self.assertEqual(row(c)["state"], "here")              # no claims at all: today's rule
+        quiet(c, 120)
+        self.assertEqual(row(c)["state"], "away")
+        self.assertEqual(self.calls, [])
+
+    def test_starting_and_switching_still_win_over_offline(self):
+        a, _ = self.dead("wins", 990022)
+        self.edit(a, spawned=time.time())
+        self.assertEqual(row(a)["state"], "starting")
+        self.edit(a, spawned=0, switching=time.time())
+        self.assertEqual(row(a)["state"], "switching")
+        self.edit(a, switching=0)
+        self.assertEqual(row(a)["state"], "offline")
+
+    def test_restart_refuses_a_live_row_and_an_unknown_name(self):
+        a, sids = self.master("running", 990023)
+        self.live(990023, sids)
+        launched = self.popen()
+        self.assertEqual(self.restart(a), (409, {"ok": False, "error": "it is still running"}))
+        self.assertEqual(self.restart("Claude · nobody here")[0], 404)
+        b = name("noclaims")
+        join(b)
+        self.assertEqual(self.restart(b)[0], 409)               # never claimed a session: not Offline
+        self.assertEqual(self.restart(a, ctype="text/plain")[0], 403)
+        self.assertEqual(self.restart(a, headers={"Origin": "https://example.com"})[0], 403)
+        self.assertEqual(self.restart(a, headers={"X-Forwarded-For": "203.0.113.7"})[0], 401)
+        self.assertEqual((launched, self.calls), ([], []))
+
+    def test_restart_brings_an_offline_muddi_back_through_muddi_sh_in_a_login_shell(self):
+        sh = pathlib.Path(TMP.name) / "muddi.sh"
+        sh.write_text("#!/bin/bash\nexit 0\n")
+        S.MUDDI_SH = sh
+        self.dead("lead", 990024, who="Muddi")
+        S._set_lead("Muddi")
+        self.addCleanup(self.edit, "Muddi", stopped=time.time(), role=None)
+        self.assertEqual(row("Muddi")["state"], "offline")
+        launched = self.popen()
+        planted = {"CLAUDE_CODE_SESSION_ID": "x", "CLAUDE_PID": "1", "CLAUDE_CODE_MESSAGING_SOCKET": "x",
+                   "CLAUDE_CODE_MESSAGING_TOKEN": "x", "CODEX_COMPANION_SESSION_ID": "x",
+                   "CODEX_COMPANION_TRANSCRIPT_PATH": "x"}
+        saved = {k: os.environ.get(k) for k in planted}
+        os.environ.update(planted)
+        try:
+            code, r = self.restart("Muddi")
+        finally:
+            for k, v in saved.items():
+                os.environ.pop(k) if v is None else os.environ.__setitem__(k, v)
+        self.assertEqual((code, r), (200, {"ok": True, "agent": "Muddi", "how": "muddi"}))
+        self.assertEqual(len(launched), 1)
+        args, kw = launched[0]
+        self.assertEqual(args, ["/bin/zsh", "-l", "-c", 'exec bash "$0" "$@"', str(sh)])
+        self.assertTrue(kw["start_new_session"])
+        self.assertEqual(pathlib.Path(kw["stdout"].name), S.DATA / "spawn.log")
+        self.assertEqual(kw["env"]["TAPSPACE_URL"], f"http://127.0.0.1:{S.PORT}")
+        self.assertFalse(set(planted) & set(kw["env"]))
+        self.assertEqual(kw["env"].get("PATH"), os.environ.get("PATH"))
+        served_row = row("Muddi")
+        self.assertEqual((served_row["state"], served_row["role"]), ("starting", "lead"))
+        self.assertEqual(self.restart("Muddi")[0], 409)         # starting is not offline
+        self.assertEqual(self.calls, [])
+
+    def test_restart_starts_an_offline_master_under_the_same_name_lead_and_folder(self):
+        lead = name("its-lead")
+        join(lead)
+        a, _ = self.dead("child", 990025)
+        home = pathlib.Path.home().resolve()
+        inside = (str(ROOT) + "/").startswith(str(home) + "/")
+        self.edit(a, parent=lead, where=("~/" + str(ROOT.relative_to(home))) if inside else "~")
+        launched = self.popen()
+        code, r = self.restart(a)
+        self.assertEqual((code, r["ok"], r["agent"], r["how"]), (200, True, a, "master"), r)
+        self.assertTrue(r["session"] and r["tmux"].startswith("master-"))
+        args, kw = launched[0]
+        self.assertEqual(args, ["/bin/zsh", "-l", "-c", 'exec bash "$0" "$@"', str(S.ROOT / "new-master.sh"),
+                                str(ROOT if inside else home), a, lead])          # the login PATH, like muddi.sh
+        self.assertEqual(kw["env"]["TAPSPACE_MASTER_UUID"], r["session"])
+        served_row = row(a)
+        self.assertEqual((served_row["state"], served_row["parent"]), ("starting", lead))
+        self.edit(a, spawned=0, where="~/no-such-folder-" + uuid.uuid4().hex[:6])
+        self.assertEqual(self.restart(a)[0], 200)               # a folder that is gone starts in ~
+        self.assertEqual(launched[1][0][5], str(home))
+        self.assertEqual(self.calls, [])
+
+    def test_restart_brings_a_spun_down_master_back(self):
+        a, _ = self.master("respin", 990026)
+        self.assertEqual(self.stop(a)[0], 200)
+        self.assertNotIn(a, self.names())
+        launched = self.popen()
+        self.assertEqual(self.restart(a)[0], 200)
+        self.assertEqual(len(launched), 1)
+        self.assertNotIn("stopped", S._agents()[a])
+        self.assertEqual(row(a)["state"], "starting")
+
+    def test_restart_refuses_a_stopped_row_whose_session_still_runs(self):
+        a, sids = self.master("stopped-live", 990028)
+        self.live(990028, sids)
+        self.edit(a, stopped=time.time(), stopped_sessions=[])    # a stop that refused this session
+        launched = self.popen()
+        self.assertEqual(self.restart(a), (409, {"ok": False, "error": "it is still running"}))
+        self.assertEqual(launched, [])
+        self.assertIn("stopped", S._agents()[a])
+
+    def test_two_restarts_at_once_launch_one(self):
+        a, _ = self.dead("race", 990029)
+        launched = self.popen()
+        gate, got = threading.Barrier(4), []
+
+        def go():
+            gate.wait()
+            got.append(S._restart_master(a)[0])
+        ts = [threading.Thread(target=go) for _ in range(4)]
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join()
+        self.assertEqual(sorted(got), [200, 409, 409, 409])
+        self.assertEqual(len(launched), 1)
+
+    def test_stop_on_a_row_starting_after_a_restart_is_not_a_clear(self):
+        a, _ = self.dead("restarting", 990030)
+        self.popen()
+        self.assertEqual(self.restart(a)[0], 200)
+        self.assertEqual(row(a)["state"], "starting")
+        code, r = self.stop(a)
+        self.assertEqual(code, 409, r)
+        self.assertNotIn("cleared", r)
+        self.assertIn(a, self.names())
+        self.assertNotIn("stopped", S._agents()[a])
+
+    def test_a_launch_that_fails_puts_the_row_back(self):
+        a, _ = self.master("fails", 990031)
+        self.assertEqual(self.stop(a)[0], 200)
+        before = {k: S._agents()[a].get(k) for k in ("stopped", "stopped_sessions", "spawned")}
+        real = S.subprocess.Popen
+
+        def boom(args, *x, **kw):
+            if args[0] in ("/bin/zsh", "bash"):
+                raise OSError("no shell")
+            return real(args, *x, **kw)
+        S.subprocess.Popen = boom
+        self.addCleanup(setattr, S.subprocess, "Popen", real)
+        code, r = self.restart(a)
+        self.assertEqual((code, r), (500, {"ok": False, "error": "could not start it: no shell"}))
+        self.assertEqual({k: S._agents()[a].get(k) for k in before}, before)
+        self.assertNotIn(a, self.names())
+
+    def test_restart_of_muddi_without_muddi_sh_says_so(self):
+        S.MUDDI_SH = pathlib.Path(TMP.name) / "no-such-muddi.sh"
+        self.dead("lead-gone", 990032, who="Muddi")
+        S._set_lead("Muddi")
+        self.addCleanup(self.edit, "Muddi", stopped=time.time(), role=None)
+        launched, before = self.popen(), S._agents()["Muddi"]
+        self.assertEqual(self.restart("Muddi"),
+                         (500, {"ok": False, "error": f"muddi.sh not found at {S.MUDDI_SH}"}))
+        self.assertEqual((launched, S._agents()["Muddi"]), ([], before))     # never a plain master instead
+
+    def test_stop_clears_an_offline_row_off_the_list(self):
+        a, _ = self.dead("clear", 990027)
+        code, r = self.stop(a)
+        self.assertEqual((code, r), (200, {"ok": True, "ended": [], "cleared": True}))
+        self.assertEqual(self.calls, [])
+        self.assertNotIn(a, self.names())
+        stored_row = json.loads(S.AGENTS.read_text())[a]
+        self.assertIsInstance(stored_row["stopped"], float)
+        self.assertEqual(stored_row["stopped_sessions"], [])
+        slug = re.sub(r"[^A-Za-z0-9]+", "-", a).strip("-")
+        chat_arch = [f for f in (S.DATA / "archive").glob("chat-*.jsonl") if slug in f.name]
+        self.assertEqual([json.loads(x)["body"] for x in chat_arch[0].read_text().splitlines()],
+                         ["hello", "hi", S.STOP_LINE])
+        self.assertIn('"cleared": true', self.log.getvalue())
 
     def test_a_stopped_agent_is_not_stopped_twice_and_takes_no_messages(self):
         a, _ = self.master("twice", 990013)

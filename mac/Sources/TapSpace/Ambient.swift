@@ -343,7 +343,7 @@ struct OrbView: NSViewRepresentable {
         c.sig = sig
         let was = c.expression
         let (tone, mark) = ShellFace.look(look ?? 0)
-        let colors = ShellFace.colors(tone: tone, away: state == "away")
+        let colors = ShellFace.colors(tone: tone, away: state == "away" || state == "offline")
         // flat, like Glint: one solid fill per tone, no gradient, shine or glow; the face's ink changes with it
         CATransaction.begin()
         CATransaction.setDisableActions(true)

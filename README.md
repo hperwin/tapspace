@@ -193,7 +193,8 @@ workspace where any number of agents can be connected at once:
   tap.py progress --as "NAME"                                   # prints the card as stored
   ```
   A script spins a master down with `tap.py stop --as "NAME"` (the same
-  route as the rail's Spin down; exit 0 when it stopped, 1 when refused).
+  route as the rail's Spin down; exit 0 when it stopped, 1 when refused),
+  and starts an Offline one again with `tap.py restart --as "NAME"`.
 - **Update cards.** A master sends an update as one card in its thread
   instead of a wall of text: one plain line, the face of what it is about,
   one visual (a progress bar, steps, a small graph or one big word), the
@@ -233,6 +234,11 @@ workspace where any number of agents can be connected at once:
   SIGKILL on the claude process) and it leaves the list; its thread moves
   to `data/archive/`. Only processes named `claude` are ever signalled.
   A new session that listens under the same NAME brings it back.
+- **Offline and Restart.** A master whose Claude sessions all ended (a
+  crash, a reboot) shows Offline, with a Restart button that starts it
+  again under the same NAME: Muddi through `muddi.sh`, any other master in
+  its own folder under its own lead. On an Offline row the spin down
+  control reads Clear and only takes the row off the list.
 - **Taps.** GitHub issues you authored with a Flightdeck journey label, read
   through your `gh` login. Both label families are read: Flightdeck's
   (`flightdeck`, `flightdeck:fly`, `flightdeck:needs-reply`) and the legacy
@@ -280,7 +286,10 @@ while the taps load),
 (this Mac only; `clear: true` removes the card),
 `POST /api/agents/read {name}`,
 `POST /api/agents/stop {name}` (`{ok, stopped: [pids], tmux: [sessions]}`; an unknown NAME or one with no
-live Claude session answers `{ok: false, error}` and ends nothing), `GET /api/taps`,
+live Claude session answers `{ok: false, error}` and ends nothing; an Offline row is cleared,
+`{ok, ended: [], cleared: true}`),
+`POST /api/agents/restart {name}` (`{ok, agent, how: "muddi" | "master"}`; 409 while a session of it still
+runs or it is already starting), `GET /api/taps`,
 `POST /api/taps/say {key: "owner/repo#n", body}`, `POST /api/taps/refresh`,
 `POST /api/taps/accept {key, card?}` (your sign-off on a landed tap, never an
 agent's; with `card`, the card whose Accept you pressed, it also writes that

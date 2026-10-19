@@ -258,6 +258,9 @@
   .stopask .row{display:flex;gap:6px;justify-content:flex-end;margin-top:8px}
   .stopask .rbtn{padding:7px 11px;font-size:12px}
   .rbtn.danger{background:#ff3b30;color:#fff}
+  /* an offline master (its session ended with the Mac): Restart always shows, on its own line under the row */
+  .agrp .restart{order:1;display:flex;padding:0 12px 6px 62px}
+  .agrp .restart .rbtn{padding:6px 11px;font-size:11.5px}
   .rbtn:disabled{opacity:.6;cursor:default}
 
   .orb{width:var(--s,38px);height:var(--s,38px);border-radius:50%;flex:none;position:relative;
@@ -349,7 +352,7 @@
   .chip.p-landed,.chip.p-done{background:rgba(48,161,78,.1);color:var(--green)}
   .chip.p-closed{color:var(--faint)}
   .chip.thinking{background:rgba(var(--hl),.1);color:rgb(var(--hl))} .chip.thinking i{animation:breathe 1s ease-in-out infinite}
-  .chip.here{color:var(--green)} .chip.away{color:var(--faint)}
+  .chip.here{color:var(--green)} .chip.away,.chip.offline{color:var(--faint)}
   .chip.switching{background:rgba(var(--hl),.1);color:rgb(var(--hl))} .chip.switching i{animation:breathe .9s ease-in-out infinite}
   .orb.switching{animation:orbswap 1.4s ease-in-out infinite}
   @keyframes orbswap{0%,100%{transform:scale(1);filter:none}50%{transform:scale(.86);filter:blur(1.5px) brightness(1.15)}}
@@ -673,7 +676,7 @@
     #pane{border-radius:18px}
     .msg{max-width:90%}
     .agrp{display:contents}
-    .agrp .talk,.notes,.agrp .stopbtn,.agrp .stopask{display:none}
+    .agrp .talk,.notes,.agrp .stopbtn,.agrp .stopask,.agrp .restart{display:none}
     #leadpin{display:flex;align-items:center;gap:6px;flex:none}   /* the lead's row, its strip and the fold, inline */
     .fleet{padding:0;flex:none}
     .fold{margin-left:0}
@@ -1263,7 +1266,7 @@ function when(ts){
   return new Date(t).toLocaleDateString([], {month:'short', day:'numeric'});
 }
 const STATUS = {'needs-you':'Needs you', flying:'Flying', boarding:'Boarding', landed:'Landed'};
-const MASTER = {thinking:'Thinking', here:'Here', away:'Away', switching:'Switching car', starting:'Starting'};
+const MASTER = {thinking:'Thinking', here:'Here', away:'Away', switching:'Switching car', starting:'Starting', offline:'Offline'};
 // a tap's phase (proposed, en route, holding, landed, done, closed); a tap without one renders by its status, as before
 const PHASES = new Set(['proposed', 'enroute', 'holding', 'landed', 'done', 'closed']);
 const PHASE_WORD = {proposed:'Proposed', enroute:'Flying', holding:'Needs you', landed:'Landed', done:'Done', closed:'Closed'};
@@ -1444,6 +1447,12 @@ const newsCount = (threads, focus, onScreen) =>
 // tone, gone asleep and greyed).
 const ACT_STATE = {working: 'thinking', switching: 'switching', waiting: 'here', idle: 'idle', gone: 'away'};
 const actKind = s => typeof s === 'string' && Object.hasOwn(ACT_STATE, s) ? s : '';   // a state this page does not know: none
+// Contract item 5: an offline row (its sessions all ended, say after a reboot) restarts, and its Spin down only clears it.
+const isOffline = a => !!a && a.state === 'offline';
+const stopWords = a => isOffline(a)
+  ? {verb: 'Clear', tail: 'Its session already ended; the row leaves the list.', busy: 'Clearing…', done: 'Cleared '}
+  : {verb: 'Spin down', tail: 'Its session ends and it leaves the list.', busy: 'Spinning down…', done: 'Spun down '};
+const restartToast = (title, r) => r && r.ok ? 'Restarting ' + title : "Couldn't restart it: " + ((r && r.error) || 'TapSpace said no');
 // ---- end pure: rail ----
 
 /* unread = the other side said something after you last looked at that thread */
@@ -1558,6 +1567,15 @@ function syncAgents(){
       b.innerHTML = `${masterFace(a)}<span class="tx"><div class="nm">${esc(a.title || 'Claude')}</div>
         <div class="sub">${MASTER[a.state] || ''}</div></span><span class="unread"></span>`; }
     b.classList.toggle('on', current === key);
+    const words = stopWords(a), stop = g.querySelector('.stopbtn');
+    if (stop.title !== words.verb){ stop.title = words.verb; stop.setAttribute('aria-label', words.verb); }
+    let rst = g.querySelector('.restart');
+    if (isOffline(a) && !rst){
+      rst = document.createElement('div'); rst.className = 'restart';
+      rst.innerHTML = '<button type="button" class="rbtn go">Restart</button>';
+      rst.firstChild.addEventListener('click', () => restartAgent(g, rst.firstChild));
+      g.appendChild(rst);
+    } else if (!isOffline(a) && rst) rst.remove();
     const shown = visibleNotes(a);
     b.querySelector('.unread').classList.toggle('show', isUnread(key) || shown.length > 0);
     const tk = talkText(a.name);
@@ -2387,21 +2405,33 @@ function askStop(g){
   let ask = g.querySelector('.stopask');
   if (ask || !a){ if (ask) ask.remove(); g.classList.remove('asking'); return; }     // the control toggles it
   ask = document.createElement('div'); ask.className = 'stopask';
-  ask.innerHTML = `<div>Spin down <b>${esc(a.title || 'Claude')}</b>? Its session ends and it leaves the list.</div>
-    <div class="row"><button type="button" class="rbtn clear">Cancel</button><button type="button" class="rbtn danger">Spin down</button></div>`;
+  const w = stopWords(a);
+  ask.innerHTML = `<div>${w.verb} <b>${esc(a.title || 'Claude')}</b>? ${w.tail}</div>
+    <div class="row"><button type="button" class="rbtn clear">Cancel</button><button type="button" class="rbtn danger">${w.verb}</button></div>`;
   const [no, yes] = ask.querySelectorAll('button');
   const close = () => { ask.remove(); g.classList.remove('asking'); };
   no.addEventListener('click', close);
   ask.addEventListener('keydown', e => { if (e.key === 'Escape') close(); });
   yes.addEventListener('click', async () => {
-    no.disabled = yes.disabled = true; yes.textContent = 'Spinning down…';
+    no.disabled = yes.disabled = true; yes.textContent = w.busy;
     const r = await postJ('/api/agents/stop', {name: a.name});
     close();
     if (!r.ok){ toast('Couldn’t spin it down: ' + (r.error || 'TapSpace said no')); return; }
-    toast('Spun down ' + (a.title || 'Claude') + '.');
+    toast(w.done + (a.title || 'Claude') + '.');
     pollAgents();
   });
   g.classList.add('asking'); g.appendChild(ask); no.focus();
+}
+
+// ---- Restart: an offline master starts again under its name (POST /api/agents/restart), no confirm ----
+async function restartAgent(g, btn){
+  const a = agents.find(x => agentKey(x.name) === g.dataset.key);
+  if (!a || btn.disabled) return;
+  btn.disabled = true;
+  const r = await postJ('/api/agents/restart', {name: a.name});
+  btn.disabled = false;
+  toast(restartToast(a.title || 'Claude', r));
+  if (r.ok) pollAgents();
 }
 
 // ---- Clear all (Visual): two taps archive every card on the space ----

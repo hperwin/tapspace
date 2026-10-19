@@ -2,7 +2,9 @@ import SwiftUI
 
 // Spin down from the rail: a master's Claude Code session ends and it leaves the
 // list (POST /api/agents/stop). The row's right-click menu and a small trailing
-// control on hover both ask first, by the master's title (never its NAME).
+// control on hover both ask first, by the master's title (never its NAME). On an
+// offline row (its sessions already ended) the same control reads Clear and only
+// takes the row off the list; Restart (Restart.swift) sits beside it.
 
 extension API {
     /// POST /api/agents/stop {name}: ends the Claude sessions registered to that
@@ -20,7 +22,7 @@ extension Store {
         guard let a = agent(key) else { return false }
         do {
             try await API.stopAgent(a.name)
-            show("Spun down \(a.title).")
+            show(a.state == "offline" ? "Cleared \(a.title)." : "Spun down \(a.title).")
             await agentsPoller.now()
             return true
         } catch {
@@ -32,37 +34,52 @@ extension Store {
 
 /// A master's rail row gets Spin down: a right-click menu item and a small
 /// control at its trailing edge on hover, both behind one confirm. Takes the
-/// key and title only, so a heartbeat poll does not re-render it.
+/// key, title and offline flag only, so a heartbeat poll does not re-render it.
+/// Offline: Clear wording, and a Restart button that is always shown.
 struct SpinDownRow: ViewModifier {
     let key: String
     let title: String
+    var offline = false
     let store: Store
     @State private var hover = false
     @State private var asking = false
     @State private var working = false
+    @State private var restarting = false
 
     func body(content: Content) -> some View {
         let shown = hover || asking || working
+        let verb = offline ? "Clear" : "Spin down"
         content
             .overlay(alignment: .topTrailing) {
-                SpinDownButton(active: asking || working) { asking = true }
-                    // centred on the 62 pt row, left of its unread dot
-                    .padding(.top, 19)
-                    .padding(.trailing, 30)
-                    .opacity(shown ? 1 : 0)
-                    .allowsHitTesting(shown && !working)
-                    .animation(.easeOut(duration: 0.2), value: shown)
+                // centred on the 62 pt row, left of its unread dot
+                HStack(spacing: 6) {
+                    SpinDownButton(active: asking || working, label: verb) { asking = true }
+                        .opacity(shown ? 1 : 0)
+                        .allowsHitTesting(shown && !working)
+                        .animation(.easeOut(duration: 0.2), value: shown)
+                    if offline {
+                        RestartButton(working: restarting, action: restart)
+                            .transition(.opacity.combined(with: .scale(scale: 0.8)))
+                    }
+                }
+                .padding(.top, 19)
+                .padding(.trailing, 30)
+                .animation(.spring(response: 0.35, dampingFraction: 0.8), value: offline)
             }
             .onHover { hover = $0 }
             .contextMenu {
-                Button("Spin down…") { asking = true }
+                if offline {
+                    Button("Restart", action: restart)
+                        .disabled(working || restarting)
+                }
+                Button(verb + "…") { asking = true }
                     .disabled(working)
             }
-            .alert("Spin down \(title)?", isPresented: $asking) {
-                Button("Spin down", role: .destructive, action: stop)
+            .alert("\(verb) \(title)?", isPresented: $asking) {
+                Button(verb, role: .destructive, action: stop)
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("Its session ends and it leaves the list.")
+                Text(offline ? "Its session already ended; the row leaves the list." : "Its session ends and it leaves the list.")
             }
     }
 
@@ -73,12 +90,23 @@ struct SpinDownRow: ViewModifier {
             working = false
         }
     }
+
+    private func restart() {
+        guard !restarting else { return }
+        restarting = true
+        Task {
+            await store.restart(key)
+            restarting = false
+        }
+    }
 }
 
 /// The small power control on a master's row: grey, red under the pointer or
 /// while its confirm is up.
 struct SpinDownButton: View {
     let active: Bool
+    /// "Spin down", or "Clear" on an offline row.
+    var label = "Spin down"
     let action: () -> Void
     @State private var hover = false
 
@@ -101,8 +129,8 @@ struct SpinDownButton: View {
                 .contentShape(shape)
         }
         .buttonStyle(ChatPress(scale: 0.9))
-        .help("Spin down")
-        .accessibilityLabel("Spin down")
+        .help(label)
+        .accessibilityLabel(label)
         .onHover { h in withAnimation(.easeOut(duration: 0.2)) { hover = h } }
     }
 }
