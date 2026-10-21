@@ -44,14 +44,16 @@ CANT_REACH = "Flightdeck's board can't be reached right now. This list may be ou
 
 
 def keychain_cred():
-    """{"token", "base", "exp"} from Claude Code's flightdeck sign-in, or None. Never raises, never logs."""
+    """{"token", "base", "exp"} from Claude Code's flightdeck sign-in, or None. Never raises, never logs. Only an
+    https serverUrl counts (A2.9): the key never travels in plain http."""
     try:
         r = subprocess.run([SECURITY, "find-generic-password", "-s", ITEM, "-w"], capture_output=True,
                            text=True, timeout=10, stdin=subprocess.DEVNULL)
         if r.returncode:
             return None
         ents = [v for k, v in json.loads(r.stdout).get("mcpOAuth", {}).items()
-                if k.startswith("flightdeck|") and v.get("accessToken") and v.get("serverUrl")]
+                if k.startswith("flightdeck|") and v.get("accessToken")
+                and urlsplit(str(v.get("serverUrl") or "")).scheme == "https"]
         e = max(ents, key=lambda v: v.get("expiresAt") or 0)
         return {"token": e["accessToken"], "base": e["serverUrl"].rstrip("/").removesuffix("/mcp"),
                 "exp": (e.get("expiresAt") or 0) / 1000}

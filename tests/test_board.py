@@ -197,11 +197,14 @@ class Pure(unittest.TestCase):
             "flightdeck|new": {"accessToken": "fdk_new", "serverUrl": "https://fd.example:10000/mcp",
                                "expiresAt": 1794773212945, "refreshToken": "fdr_never"},
             "other|x": {"accessToken": "zzz", "serverUrl": "https://x/mcp", "expiresAt": 9e15}}}
+        plain = {"mcpOAuth": {"flightdeck|plain": {"accessToken": "fdk_plain", "serverUrl": "http://fd.example:10000/mcp",
+                                                   "expiresAt": 9e15}}}                # A2.9: never a key over plain http
         with tempfile.TemporaryDirectory() as d:
             shim = pathlib.Path(d) / "security"
             for out, rc, want in [(json.dumps(blob), 0, {"token": "fdk_new", "base": "https://fd.example:10000",
                                                           "exp": 1794773212.945}),
-                                  ("", 44, None), ("not json", 0, None), (json.dumps({"mcpOAuth": {}}), 0, None)]:
+                                  ("", 44, None), ("not json", 0, None), (json.dumps({"mcpOAuth": {}}), 0, None),
+                                  (json.dumps(plain), 0, None)]:
                 with self.subTest(rc=rc, out=out[:20]):
                     shim.write_text(f"#!/bin/sh\ncat <<'EOF'\n{out}\nEOF\nexit {rc}\n")
                     shim.chmod(0o755)
