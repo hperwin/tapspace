@@ -22,6 +22,7 @@ import time
 import unittest
 import urllib.error
 import urllib.request
+from unittest import mock
 
 sys.dont_write_bytecode = True
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -177,7 +178,7 @@ class FakeBoard:
 
 
 class TapsBoardTests(unittest.TestCase):
-    STATE = ("HOT", "_ISSUES", "_CANON", "_TRIED", "_DONE", "_LEAVING", "_SETTLE", "_ON_BOARD", "_PROOF_SRC")
+    STATE = ("HOT", "_ISSUES", "_CANON", "_TRIED", "_DONE", "_LEAVING", "_SETTLE", "_ON_BOARD", "_PROOF_SRC", "_HELD")
 
     def setUp(self):
         self.saved = {k: getattr(S, k) for k in ("BOARD", "GH", "_push")}
@@ -358,6 +359,24 @@ class TapsBoardTests(unittest.TestCase):
         self.settle()
         self.assertEqual((self.items(), S._CANON), ({}, {}))
 
+    def test_a_tile_rows_repo_keys_the_tap_when_github_cannot_say_its_case(self):
+        tile, plain = "SnappStats/snappy#3313", "snappstats/snappy#3314"
+        b = self.board(row(tile), row(plain), row("hperwin/fixture-app#7", repo="Other/Repo"))
+        self.settle()                                  # gh cannot read any of them (signed out at boot)
+        self.assertEqual(set(self.items()), {tile})    # a tile row's repo carries GitHub's case (A2.3)
+        self.assertGreater(S.TAPS["fetched"], 0)
+        self.assertEqual(len(self.views(tile)), 2)     # its read was tried first, then once more under its key
+        self.issue(tile, [("tseller", "landed")])      # gh is back: the same key gets its thread, and the repo's
+        S._TRIED[tile] = 0                             # case it teaches keys the plain row too
+        self.settle()
+        self.assertEqual(set(self.items()), {tile, "SnappStats/snappy#3314"})
+        self.assertEqual(len(self.items()[tile]["messages"]), 1)
+        self.reset()                                   # a read GitHub answers always wins over the tile
+        self.issue("SnappStats/snappy#3313")
+        self.board(row(tile, repo="Snappstats/Snappy"))
+        self.settle()
+        self.assertEqual(set(self.items()), {tile})
+
     def test_a_landed_row_reads_landed_whatever_its_comments_say(self):
         # snappy#3288 as it was live: every goal checked on GitHub, the pilot's last comment older than a body edit,
         # which the GitHub guess read as en route
@@ -385,6 +404,26 @@ class TapsBoardTests(unittest.TestCase):
         self.assertEqual((after["phase"], after["phase_word"], after["goals"], after["ask"]),
                          (before["phase"], before["phase_word"], before["goals"], before["ask"]))   # same at too
         self.assertNotIn("hperwin/fixture-app#9", self.items())
+
+    def test_a_row_that_cannot_be_read_is_fog_and_the_others_keep_moving(self):
+        a, c, n = "hperwin/fixture-app#7", "hperwin/fixture-app#8", "hperwin/fixture-app#9"
+        for k in (a, c, n):
+            self.issue(k)
+        b = self.board(row(a, "holding", ask={"kind": "question", "question": "Which league first?", "options": []}),
+                       row(c, "en route"))
+        self.settle()
+        before = self.items()[a]
+        b.put(row(a, "landed", ask="Which league first?"),                     # shapes Flightdeck might change
+              row(c, "landed"),
+              row(n, "en route", goalList=["The lineup card shows"]))
+        self.settle()
+        it = self.items()
+        self.assertEqual(it[a], before)                # fog: as last served (A2.2)
+        self.assertEqual(it[c]["phase"], "landed")     # every other row keeps moving
+        self.assertNotIn(n, it)                        # a new row that cannot be read stays out
+        b.put(row(a, "landed"))
+        self.settle()
+        self.assertEqual(self.items()[a]["phase"], "landed")
 
     # ---- leaving the board ----
     def test_a_tap_that_leaves_lingers_done_with_its_outcome(self):
@@ -437,34 +476,89 @@ class TapsBoardTests(unittest.TestCase):
         self.assertEqual(self.items()[key], d)
         self.assertEqual(b.reads, [])
 
-    def test_a_tap_whose_end_the_board_cannot_say_just_leaves(self):
+    def leave_ago(self, key, since=0, asked=0):
+        """Moves a leaving tap's clock back: since it left, and since the board was last asked how it ended."""
+        s, it, at = S._LEAVING[key]
+        S._LEAVING[key] = (s - since, it, at if at is None else at - asked)
+
+    def test_a_leaving_tap_is_asked_again_until_the_board_says_how_it_ended(self):
         key, url = "SnappStats/snappy#3313", "https://github.com/snappstats/snappy/issues/3313"
-        for answer in (None, {"phase": "landed", "status": "ready", "board": {"label": "✔ ready for sign-off"}}):
-            with self.subTest(answer=answer):
-                self.reset()
-                self.issue(key)
-                b = self.board(row(key))
-                self.settle()
-                was = self.items()[key]
-                b.answers[url] = answer
-                b.drop(key)
-                self.once()
-                self.assertEqual(self.items()[key], was)                 # served as it was while it is asked
-                self.settle()
-                self.assertNotIn(key, self.items())                      # no done item, no ending invented
-                self.assertEqual((S.TAPS["outcomes"], self.kept()), ({}, {}))
-                self.assertEqual(b.reads, [url])
-        with self.subTest("the board never answered within a minute"):
-            self.reset()
-            self.issue(key)
-            b = self.board(row(key))
+        self.assertEqual(S.LEAVE_WAIT, 120)
+        self.issue(key, [("tseller", "landed")])
+        b = self.board(row(key))
+        self.settle()
+        was = self.items()[key]
+        b.drop(key)
+        self.settle()                                  # the read was refused, paced or failed (None)
+        self.assertEqual((self.items()[key], b.reads), (was, [url]))     # served as it was (A2.1)
+        self.settle()
+        self.assertEqual(b.reads, [url])               # asked again on a later pass, not at once
+        self.leave_ago(key, asked=S.TAP_HOT_EVERY)
+        b.answers[url] = {"phase": "done", "status": "shipped", "event": "accepted", "board": {"label": "✓ shipped"}}
+        self.settle()
+        self.assertEqual(b.reads, [url, url])
+        d = self.items()[key]
+        self.assertEqual((d["phase"], d["phase_word"], d["outcome"]), ("done", "shipped", "shipped"))
+        self.assertEqual(S.TAPS["outcomes"], {key: "shipped"})
+
+    def test_a_leaving_tap_the_board_says_is_open_waits_unasked_until_it_is_back(self):
+        key, url = "SnappStats/snappy#3313", "https://github.com/snappstats/snappy/issues/3313"
+        self.issue(key, [("tseller", "landed")])
+        b = self.board(row(key))
+        self.settle()
+        was, n_views = self.items()[key], len(self.views(key))
+        b.answers[url] = {"phase": "landed", "status": "ready", "board": {"label": "✔ ready for sign-off"}}
+        b.drop(key)
+        self.settle()
+        with mock.patch.object(S, "TAP_HOT_EVERY", 0):              # a retry would be due on every pass
             self.settle()
-            b.drop(key)
-            S._ON_BOARD.discard(key)
-            S._LEAVING[key] = (time.time() - S.LEAVE_WAIT, self.items()[key])
             self.settle()
-            self.assertNotIn(key, self.items())
-            self.assertEqual((b.reads, S.TAPS["outcomes"]), ([], {}))
+        self.assertEqual((self.items()[key], b.reads), (was, [url]))     # still served; the board said, so not asked
+        b.put(row(key))                                # (a) the board lists it again
+        self.settle()
+        self.assertEqual(self.items()[key], was)
+        self.assertEqual((S._LEAVING, S.TAPS["outcomes"]), ({}, {}))
+        self.assertEqual(len(self.views(key)), n_views)
+
+    def test_a_tap_never_told_ended_leaves_after_leave_wait_and_comes_back_with_its_thread(self):
+        key = "SnappStats/snappy#3313"
+        self.issue(key, [("tseller", "landed")])
+        b = self.board(row(key))
+        self.settle()
+        was, n_views = self.items()[key], len(self.views(key))
+        b.drop(key)
+        self.settle()
+        self.leave_ago(key, since=S.LEAVE_WAIT)
+        self.settle()
+        self.assertNotIn(key, self.items())            # (c) it just leaves, with no ending invented
+        self.assertEqual((S.TAPS["outcomes"], self.kept()), ({}, {}))
+        b.put(row(key))                                # back: its thread and its place, not an unread newest tap
+        self.once()
+        self.assertEqual(self.items()[key], was)
+        self.settle()
+        self.assertEqual(len(self.views(key)), n_views)
+        b.drop(key)                                    # its residue is kept DONE_LINGER past its last listing, no longer
+        self.settle()
+        self.leave_ago(key, since=S.LEAVE_WAIT)
+        self.settle()
+        self.assertIn(key, S._ISSUES)
+        S._HELD[key] -= S.DONE_LINGER
+        self.once()
+        self.assertNotIn(key, S._ISSUES)
+
+    def test_the_loop_wakes_every_few_seconds_while_a_tap_is_leaving(self):
+        class Stop(Exception):
+            pass
+        waits = []
+
+        def wait(timeout):
+            waits.append(timeout)
+            raise Stop
+        with mock.patch.object(S, "_compose", lambda: None), mock.patch.object(S._taps_kick, "wait", wait):
+            self.assertRaises(Stop, S._taps_loop)
+            S._LEAVING["o/r#1"] = (time.time(), {}, 0)
+            self.assertRaises(Stop, S._taps_loop)
+        self.assertEqual(waits, [S.TAP_RETRY, S.TAP_HOT_EVERY])
 
     # ---- cards ----
     def test_an_accept_card_settles_with_its_tap_and_stays_settled(self):
@@ -537,6 +631,24 @@ class TapsBoardTests(unittest.TestCase):
         self.assertEqual((t["status"], t["ask"]), ("flying", None))
         self.assertFalse(self.fleet()[key]["needs_you"])
 
+    def test_the_open_tap_read_longest_ago_is_read_again_past_five_minutes(self):
+        a, c, d = "hperwin/fixture-app#7", "hperwin/fixture-app#8", "SnappStats/snappy#3290"
+        for k in (a, c, d):
+            self.issue(k)
+        self.board(row(a), row(c, "en route"), row(d, "done", label="✓ shipped", status="shipped", event="accepted"))
+        self.settle()
+        self.settle()
+        self.assertEqual([len(self.views(k)) for k in (a, c, d)], [1, 1, 1])     # fresh reads: no safety read
+        now = time.time()
+        S._TRIED.update({a: now - S.TAP_REREAD, c: now - S.TAP_REREAD - 1, d: now - 2 * S.TAP_REREAD})
+        self.issue(c, [("tseller", "a comment _watch_loop never saw")])
+        self.once()
+        self.assertEqual([len(self.views(k)) for k in (a, c, d)], [1, 2, 1])     # the oldest open read first (A2.4)
+        self.settle()
+        self.assertEqual([len(self.views(k)) for k in (a, c, d)], [2, 2, 1])     # then the next; a done tap never
+        self.assertEqual(len(self.items()[c]["messages"]), 1)
+        self.assertEqual(S.TAP_REREAD, 300)
+
     def test_only_what_is_served_wakes_clients(self):
         key = "SnappStats/snappy#3288"
         self.issue(key)
@@ -600,6 +712,22 @@ class TapsBoardTests(unittest.TestCase):
         self.assertEqual(list(self.items()), ["hperwin/fixture-app#7"])
         self.assertEqual(S.TAPS["error"], RAN_OUT)                     # a publish keeps the sentence
         self.assertEqual(get("/api/taps")["error"], RAN_OUT)
+
+    def test_no_child_the_server_starts_gets_the_board_key_or_url(self):
+        board_env = {"TAPSPACE_BOARD_KEY": "a-fake-board-key", "TAPSPACE_BOARD_URL": "http://127.0.0.1:9"}
+        self.assertLessEqual(set(board_env), set(S.SPAWN_SCRUB))      # muddi.sh's restart env (test_agents_api)
+        envs = []
+
+        def record(args, *a, **kw):
+            envs.append(kw["env"])
+        with mock.patch.dict(os.environ, board_env), mock.patch.object(S.subprocess, "Popen", record), \
+                mock.patch.object(S.subprocess, "run", record):
+            S._spawn_master(str(pathlib.Path.home()), "Claude · scrub · 0001")     # every new master (new-master.sh)
+            self.assertEqual(call("/pair")[0], 200)                                # tap.py pair
+        self.assertEqual(len(envs), 2)
+        for env in envs:
+            self.assertFalse(set(board_env) & set(env))
+            self.assertEqual(env["TAPSPACE_URL"], f"http://127.0.0.1:{S.PORT}")
 
     def test_refresh_heats_a_key_and_kicks_the_compose(self):
         code, _ = call("/api/taps/refresh", {})
