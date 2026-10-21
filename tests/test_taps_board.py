@@ -713,6 +713,22 @@ class TapsBoardTests(unittest.TestCase):
         self.assertEqual(S.TAPS["error"], RAN_OUT)                     # a publish keeps the sentence
         self.assertEqual(get("/api/taps")["error"], RAN_OUT)
 
+    def test_no_child_the_server_starts_gets_the_board_key_or_url(self):
+        board_env = {"TAPSPACE_BOARD_KEY": "a-fake-board-key", "TAPSPACE_BOARD_URL": "http://127.0.0.1:9"}
+        self.assertLessEqual(set(board_env), set(S.SPAWN_SCRUB))      # muddi.sh's restart env (test_agents_api)
+        envs = []
+
+        def record(args, *a, **kw):
+            envs.append(kw["env"])
+        with mock.patch.dict(os.environ, board_env), mock.patch.object(S.subprocess, "Popen", record), \
+                mock.patch.object(S.subprocess, "run", record):
+            S._spawn_master(str(pathlib.Path.home()), "Claude · scrub · 0001")     # every new master (new-master.sh)
+            self.assertEqual(call("/pair")[0], 200)                                # tap.py pair
+        self.assertEqual(len(envs), 2)
+        for env in envs:
+            self.assertFalse(set(board_env) & set(env))
+            self.assertEqual(env["TAPSPACE_URL"], f"http://127.0.0.1:{S.PORT}")
+
     def test_refresh_heats_a_key_and_kicks_the_compose(self):
         code, _ = call("/api/taps/refresh", {})
         self.assertEqual(code, 200)

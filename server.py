@@ -17,8 +17,8 @@ goals, title and question. GitHub, through gh as you, adds only what the board
 does not carry: the issue's thread (comments, their seen mark, who sent them),
 its fly and needs-reply labels (a colleague pilot's question in a comment shows
 as needs you), and the proof images in its body, through a token-guarded proxy.
-Fly, Accept and replies stay GitHub writes. A tap that leaves the board shows as
-done for ten minutes, and how it ended (shipped, aborted, closed) is kept.
+Fly, Accept and replies stay GitHub writes. A tap the board says has ended shows
+as done for ten minutes, and how it ended (shipped, aborted, closed) is kept.
 
 A master can publish its run (tap.py goal / step: a north star, the steps, the current one).
 Cards know the master that owns them from the Claude session tap.py runs in; a change note
@@ -1834,7 +1834,8 @@ def _spawn_master(folder, name, parent="", order="", restart=False):
     with log.open("a") as fh:
         subprocess.Popen([*LOGIN, str(ROOT / "new-master.sh"), str(f), name] + extra,
                          stdout=fh, stderr=subprocess.STDOUT, start_new_session=True,
-                         env={**os.environ, "TAPSPACE_URL": f"http://127.0.0.1:{PORT}",
+                         env={**{k: v for k, v in os.environ.items() if k not in SPAWN_SCRUB},
+                              "TAPSPACE_URL": f"http://127.0.0.1:{PORT}",
                               "TAPSPACE_MASTER_UUID": sid, "TAPSPACE_MASTER_TMUX": ts})
     return {"agent": name, "session": sid, "tmux": ts, "parent": parent or None}
 
@@ -1843,8 +1844,9 @@ def _spawn_master(folder, name, parent="", order="", restart=False):
 # An Offline row (or a spun-down one) starts again under the same NAME, so its thread, look and lead stay.
 # Muddi, the lead, comes back through its own muddi.sh; any other master through new-master.sh in its folder.
 MUDDI_SH = pathlib.Path(os.environ.get("MUDDI_SH") or pathlib.Path.home() / "orchestration/muddi/muddi.sh")
-SPAWN_SCRUB = ("CLAUDE_CODE_SESSION_ID", "CLAUDE_PID", "CLAUDE_CODE_MESSAGING_SOCKET",
-               "CLAUDE_CODE_MESSAGING_TOKEN", "CODEX_COMPANION_SESSION_ID", "CODEX_COMPANION_TRANSCRIPT_PATH")
+SPAWN_SCRUB = ("CLAUDE_CODE_SESSION_ID", "CLAUDE_PID", "CLAUDE_CODE_MESSAGING_SOCKET",     # never in a child's env
+               "CLAUDE_CODE_MESSAGING_TOKEN", "CODEX_COMPANION_SESSION_ID", "CODEX_COMPANION_TRANSCRIPT_PATH",
+               "TAPSPACE_BOARD_KEY", "TAPSPACE_BOARD_URL")
 LOGIN = ("/bin/zsh", "-l", "-c", 'exec bash "$0" "$@"')     # + a script and its args: runs it with the login PATH
 
 
@@ -2656,7 +2658,8 @@ class H(BaseHTTPRequestHandler):
                 return
             # open (or reuse) the phone route first, so this page is all Hayden needs
             subprocess.run(["python3", str(ROOT / "tap.py"), "pair"], capture_output=True, timeout=45,
-                           env={**os.environ, "TAPSPACE_URL": f"http://127.0.0.1:{PORT}"})
+                           env={**{k: v for k, v in os.environ.items() if k not in SPAWN_SCRUB},
+                                "TAPSPACE_URL": f"http://127.0.0.1:{PORT}"})
             link = _pair_link()
             body = (f"<p>In Glint, tap Scan code and point it here.</p>{qr.svg(link)}"
                     f"<p><code>{html.escape(link)}</code></p>" if link else
