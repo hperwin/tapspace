@@ -28,6 +28,7 @@ BACKOFF_BASE, BACKOFF_MAX, JITTER = 2.0, 60.0, 1.0   # reconnect: 2 s doubling t
 SILENCE = 60.0                      # no bytes this long on the open stream: reconnect
 COALESCE = 1.5                      # removals gathered this long, then one fleet read decides
 CRED_EVERY = 60.0                   # Keychain re-read while there is no live key
+DEAD_RETRY = 300.0                  # a key the board refused is tried again this often: some refusals reverse
 UNREACHABLE_AFTER = 60.0            # no answer from the board this long while the stream is down
 HOLD = 60.0                         # after a 429, no call of any kind this long (the key is shared)
 READ_MAX, READ_WINDOW = 20, 60.0    # read(): at most 20 a minute
@@ -113,7 +114,7 @@ class Board:
         self._q = queue.Queue()
         self._rows, self._at, self._loaded, self._state, self._error = {}, 0.0, False, "off", ""
         self._token = self._base = self._dead = None
-        self._exp = 0
+        self._exp = self._dead_at = 0
         self._hold_until = 0.0
         self._reads = deque()
         self._heard = time.monotonic()
@@ -172,13 +173,16 @@ class Board:
                 if self._idle(CRED_EVERY):
                     return
                 self._reread()
+                if self._dead and time.monotonic() - self._dead_at >= DEAD_RETRY:
+                    with self._lock:
+                        self._dead = None                      # the same key once more (A2.6)
                 continue
             held = self._hold_until - time.monotonic()
             if held > 0:
                 if self._idle(held):
                     return
                 continue
-            if self._state not in ("live", "polling", "connecting"):
+            if self._state not in ("live", "polling", "connecting", "expired"):   # a retried key still reads ran out
                 self._put(state="connecting")
             how = self._stream()
             if how == "stop":
@@ -299,7 +303,7 @@ class Board:
         if v == "cred":
             if token == self._token:
                 with self._lock:
-                    self._dead = token
+                    self._dead, self._dead_at = token, time.monotonic()
                 self._reread()                                 # R3: at once
             return "rotated" if self._live() else "refused"
         if v == "slow":

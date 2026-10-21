@@ -25,7 +25,8 @@ KEY = "fdk_test_0123456789_key"
 REASON = "the key 0123456789 was revoked"
 HANG = object()
 FAST = dict(SILENCE=0.4, COALESCE=0.15, BACKOFF_BASE=0.05, BACKOFF_MAX=0.4, JITTER=0.0, CRED_EVERY=0.15,
-            UNREACHABLE_AFTER=0.4, HOLD=0.4, READ_MAX=3, READ_WINDOW=0.5, GET_TIMEOUT=2.0, READ_TIMEOUT=0.5)
+            UNREACHABLE_AFTER=0.4, HOLD=0.4, READ_MAX=3, READ_WINDOW=0.5, GET_TIMEOUT=2.0, READ_TIMEOUT=0.5,
+            DEAD_RETRY=1.0)
 
 
 def row(n, phase="landed", label="✔ ready for sign-off", repo="hperwin/fixture-app"):
@@ -376,6 +377,20 @@ class Wire(unittest.TestCase):
         self.make().start()
         self.live()
         self.assertEqual(len(self.calls("stream")), 2)
+
+    def test_a_refused_key_is_tried_again_every_five_minutes_and_still_reads_ran_out(self):
+        """A2.6: a refusal can reverse (the sign-in list put back, a check the board could not make), so the same
+        key is tried again every DEAD_RETRY; until it answers, the sentence stays the sign-in one."""
+        cut = (403, {"ok": False, "kind": "signin-unchecked", "reason": REASON})
+        Fake.opens = [cut, cut]                                        # refused twice, then the same key works
+        self.make().start()
+        self.live()
+        opens = self.calls("stream")
+        self.assertEqual([s[3] for s in opens], [KEY] * 3)
+        for a, b in zip(opens, opens[1:]):
+            self.assertGreaterEqual(b[0] - a[0], board.DEAD_RETRY * 0.9)
+            self.assertLess(b[0] - a[0], board.DEAD_RETRY + board.CRED_EVERY + 0.3)
+        self.assertEqual([s["state"] for s in self.snaps], ["connecting", "expired", "live"])
 
     def test_without_a_live_key_it_never_dials_and_says_why(self):
         for cred, state, words in [(lambda: None, "signed-out", board.NO_KEY),
