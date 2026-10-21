@@ -242,9 +242,9 @@ workspace where any number of agents can be connected at once:
 - **Taps.** Your Flightdeck journeys, read live from Flightdeck's own board
   with the Flightdeck sign-in Claude Code already has on this Mac (see
   Security): one stream, and a read every 10 seconds while the stream is
-  down, so the list matches the board phase for phase. A
-  tap's `phase` is one of the board's five: `proposed`, `enroute` (the
-  board's "en route"), `holding`, `landed` or `done`. Its word is the
+  down, so the list matches the board phase for phase. A tap's `phase` is
+  one of the board's five: `proposed`, `enroute` (the board's "en route"),
+  `holding`, `landed` or `done`. Its word is the
   board's own ("en route", "needs you", "ready for sign-off"). A journey
   the board reports as ended (signed off or cancelled) turns `done` under
   the board's final word for it ("shipped", "aborted", or "closed" when
@@ -257,10 +257,13 @@ workspace where any number of agents can be connected at once:
   needs-reply label (`flightdeck:needs-reply`, legacy `needs-reply`) with
   the question the pilot asked in a comment, and the proof pictures in the
   issue body. A pilot waiting on your reply reads en route on the board, so
-  TapSpace still counts it as needing you. Writing to a tap posts an issue
-  comment as you; Fly adds the fly label and Accept closes the issue as
-  completed. Fly, Accept and replies act only on issues with a journey
-  label (`flightdeck` or `nava`; `TAPSPACE_TAP_LABEL` adds one). The board
+  TapSpace still counts it as needing you. Fly, Accept and replies stay
+  GitHub writes: Fly adds the fly label, which is what Flightdeck reads to
+  launch a pilot; Accept closes the issue as completed, your sign-off,
+  because Flightdeck's own accept also merges the pilot's PR and needs your
+  own quoted words; a reply is an issue comment as you. All three act only
+  on issues with a journey label (`flightdeck` or `nava`;
+  `TAPSPACE_TAP_LABEL` adds one). The board
   lists only journeys you authored, so other people's taps never appear.
   When the sign-in is missing or ran out, or the board can't be reached
   for a minute, the list keeps its last rows, and `/api/taps` `error` says

@@ -52,6 +52,17 @@ class TapDocs(unittest.TestCase):
                 self.assertIn("the board reports", lines[0])
                 self.assertIn("simply leaves", lines[0])
 
+    def test_says_why_fly_accept_and_replies_stay_github_writes(self):
+        # R9: Flightdeck's accept verb also merges the PR and needs the owner's own quoted words; Fly is the label
+        # Flightdeck reads; a reply is an issue comment.
+        for name, text in _passages().items():
+            with self.subTest(name):
+                lines = [s for s in re.split(r"(?<=\.)\s+(?=[A-Z`])", text) if "stay GitHub writes" in s]
+                self.assertEqual(len(lines), 1, f"{name}: one sentence says Fly, Accept and replies stay GitHub writes")
+                for why in ("label, which is what Flightdeck reads", "Flightdeck's own accept also merges",
+                            "quoted words", "a reply is an issue comment"):
+                    self.assertIn(why, lines[0])
+
 
 if __name__ == "__main__":
     unittest.main()
