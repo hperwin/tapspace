@@ -387,6 +387,26 @@ class TapsBoardTests(unittest.TestCase):
                          (before["phase"], before["phase_word"], before["goals"], before["ask"]))   # same at too
         self.assertNotIn("hperwin/fixture-app#9", self.items())
 
+    def test_a_row_that_cannot_be_read_is_fog_and_the_others_keep_moving(self):
+        a, c, n = "hperwin/fixture-app#7", "hperwin/fixture-app#8", "hperwin/fixture-app#9"
+        for k in (a, c, n):
+            self.issue(k)
+        b = self.board(row(a, "holding", ask={"kind": "question", "question": "Which league first?", "options": []}),
+                       row(c, "en route"))
+        self.settle()
+        before = self.items()[a]
+        b.put(row(a, "landed", ask="Which league first?"),                     # shapes Flightdeck might change
+              row(c, "landed"),
+              row(n, "en route", goalList=["The lineup card shows"]))
+        self.settle()
+        it = self.items()
+        self.assertEqual(it[a], before)                # fog: as last served (A2.2)
+        self.assertEqual(it[c]["phase"], "landed")     # every other row keeps moving
+        self.assertNotIn(n, it)                        # a new row that cannot be read stays out
+        b.put(row(a, "landed"))
+        self.settle()
+        self.assertEqual(self.items()[a]["phase"], "landed")
+
     # ---- leaving the board ----
     def test_a_tap_that_leaves_lingers_done_with_its_outcome(self):
         key, url = "SnappStats/snappy#3313", "https://github.com/snappstats/snappy/issues/3313"

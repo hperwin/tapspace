@@ -2368,7 +2368,10 @@ def _compose():
         if key not in _ISSUES:
             _ISSUES[key] = _unread(key)
         was = prev.get(key)
-        it = _item(key, row, _ISSUES[key], was)
+        try:
+            it = _item(key, row, _ISSUES[key], was)
+        except Exception:                                       # a row it cannot read is fog: as last served (A2.2)
+            it = was
         if not it:
             continue
         if was and (it["phase"], it["phase_word"], it["goals"]) != (was["phase"], was["phase_word"], was["goals"]):
