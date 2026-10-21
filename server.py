@@ -2339,8 +2339,11 @@ def _compose():
     live, unkeyed = {}, []
     for journey, row in snap["rows"].items():
         m = _JOURNEY.match(journey.lower())
+        tile = row.get("repo")
         if m and m[1] in _CANON:
             live[f"{_CANON[m[1]]}#{m[2]}"] = row
+        elif m and f"{m[1]}#{m[2]}" in _TRIED and isinstance(tile, str) and tile.lower() == m[1] != tile:
+            live[f"{tile}#{m[2]}"] = row                        # gh could not say; a tile row's repo has it (A2.3)
         elif m:
             unkeyed.append(f"{m[1]}#{m[2]}")                    # never served under the board's lower case (R5)
     prev = {t["key"]: t for t in TAPS["items"]}

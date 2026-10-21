@@ -359,6 +359,24 @@ class TapsBoardTests(unittest.TestCase):
         self.settle()
         self.assertEqual((self.items(), S._CANON), ({}, {}))
 
+    def test_a_tile_rows_repo_keys_the_tap_when_github_cannot_say_its_case(self):
+        tile, plain = "SnappStats/snappy#3313", "snappstats/snappy#3314"
+        b = self.board(row(tile), row(plain), row("hperwin/fixture-app#7", repo="Other/Repo"))
+        self.settle()                                  # gh cannot read any of them (signed out at boot)
+        self.assertEqual(set(self.items()), {tile})    # a tile row's repo carries GitHub's case (A2.3)
+        self.assertGreater(S.TAPS["fetched"], 0)
+        self.assertEqual(len(self.views(tile)), 2)     # its read was tried first, then once more under its key
+        self.issue(tile, [("tseller", "landed")])      # gh is back: the same key gets its thread, and the repo's
+        S._TRIED[tile] = 0                             # case it teaches keys the plain row too
+        self.settle()
+        self.assertEqual(set(self.items()), {tile, "SnappStats/snappy#3314"})
+        self.assertEqual(len(self.items()[tile]["messages"]), 1)
+        self.reset()                                   # a read GitHub answers always wins over the tile
+        self.issue("SnappStats/snappy#3313")
+        self.board(row(tile, repo="Snappstats/Snappy"))
+        self.settle()
+        self.assertEqual(set(self.items()), {tile})
+
     def test_a_landed_row_reads_landed_whatever_its_comments_say(self):
         # snappy#3288 as it was live: every goal checked on GitHub, the pilot's last comment older than a body edit,
         # which the GitHub guess read as en route
