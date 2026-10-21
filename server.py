@@ -236,7 +236,7 @@ def _wait(since, timeout):
             _cv.wait_for(lambda: CURSOR["n"] > since, timeout)
         return {"cursor": CURSOR["n"], "changed": [k for k in KINDS if not fresh or CURSOR[k] > since]}
 
-# the labels a tap's issue still carries on GitHub: the journey family (_is_mine, for Fly, Accept and say), fly, needs-reply
+# the labels a tap's issue still carries on GitHub: the journey family (_is_mine: Fly, Accept, say), fly, needs-reply
 # Flightdeck label families (renamed in place October 15, #2734): read either spelling, write the first.
 TAP_JOURNEY = tuple(dict.fromkeys(("flightdeck", "nava") + tuple(
     x for x in [os.environ.get("TAPSPACE_TAP_LABEL", "").strip()] if x)))
@@ -648,10 +648,11 @@ def _waits_on_you(thread, taps=(), outcomes=None):
 
 def _fleet(rows, taps, chat):
     """GET /api/agents fleet: everything running under the lead. Needs you first (taps holding or landed, or with a
-    pilot's question on their issue, masters whose newest card waits on you), then working (masters thinking, starting or switching cars, taps flying),
-    then the rest, newest first within each. A master is in it unless it is away with its run done (or no run);
-    a tap while it is proposed, flying, holding or landed. [] when no lead is served. Clients render it as is
-    and never work membership out themselves. rows: _agent_rows(chat); taps: TAPS items; chat: every row."""
+    pilot's question on their issue, masters whose newest card waits on you), then working (masters thinking,
+    starting or switching cars, taps flying), then the rest, newest first within each. A master is in it unless it
+    is away with its run done (or no run); a tap while it is proposed, flying, holding or landed. [] when no lead is
+    served. Clients render it as is and never work membership out themselves. rows: _agent_rows(chat); taps: TAPS
+    items; chat: every row."""
     lead = next((r for r in rows if r.get("role") == "lead"), None)
     if not lead:
         return []
@@ -1907,7 +1908,7 @@ def _restart_master(name):
     return 200, out
 
 
-# ---- taps: the reviewer's Flightdeck journeys as the board lists them (board.py), each with its issue's GitHub residue ----
+# ---- taps: the reviewer's Flightdeck journeys as the board lists them (board.py), over their GitHub residue ----
 TAPS = {"me": "", "items": [], "fetched": 0.0, "error": "", "outcomes": {}}
 _taps_kick = threading.Event()
 HOT = {}                    # tap key -> refresh it every few seconds until this time
@@ -2022,7 +2023,8 @@ def _readable(md, me, cap=600):
 
 
 def _ask(iss, me):
-    """The question a colleague pilot put to me in a comment (read only while needs-reply is on): the newest comment not by me that mentions @me."""
+    """The question a colleague pilot put to me in a comment (read only while needs-reply is on): the newest comment
+    not by me that mentions @me."""
     hit = re.compile(rf"(?<![\w/-])@{re.escape(me)}(?![\w-])", re.I)
     for c in reversed(iss["comments"]):
         if c["author"]["login"].casefold() != me.casefold() and hit.search(c["body"] or ""):
