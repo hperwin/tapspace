@@ -26,7 +26,7 @@ REASON = "the key 0123456789 was revoked"
 HANG = object()
 FAST = dict(SILENCE=0.4, COALESCE=0.15, BACKOFF_BASE=0.05, BACKOFF_MAX=0.4, JITTER=0.0, CRED_EVERY=0.15,
             UNREACHABLE_AFTER=0.4, HOLD=0.4, READ_MAX=3, READ_WINDOW=0.5, GET_TIMEOUT=2.0, READ_TIMEOUT=0.5,
-            DEAD_RETRY=1.0)
+            DEAD_RETRY=1.0, CONFIRM_GAP=0.6)
 
 
 def row(n, phase="landed", label="✔ ready for sign-off", repo="hperwin/fixture-app"):
@@ -304,6 +304,30 @@ class Wire(unittest.TestCase):
         self.assertGreaterEqual(got[0][0] - t, board.COALESCE * 0.9)
         self.assertEqual(set(self.b.snapshot()["rows"]), {row(1)["journey"], row(3)["journey"]})
         self.assertTrue(all(row(3)["journey"] in s["rows"] for s in self.snaps if s["loaded"]))
+
+    def test_removal_checks_are_spaced_and_removals_inside_the_gap_join_the_next(self):
+        """A2.7: a trickle of removals costs one fleet read per CONFIRM_GAP, not one per window."""
+        Fake.rows = [row(n) for n in range(1, 6)]
+        self.make().start()
+        self.live(5)
+        Fake.rows = [row(1), row(3), row(4), row(5)]
+        Fake.push(change("removed", row(2)))
+        until(lambda: len(self.b.snapshot()["rows"]) == 4, what="the first check")
+        Fake.rows = [row(3), row(4), row(5)]
+        Fake.push(change("removed", row(1)))                           # inside the gap
+        time.sleep(0.25)
+        Fake.rows = [row(3), row(5)]
+        Fake.push(change("removed", row(4)))                           # still inside it: joins the same check
+
+        def checked():
+            Fake.push(b": ping\n\n")                                   # feed the 0.4 s watchdog meanwhile
+            return len(self.b.snapshot()["rows"]) == 2
+        until(checked, what="the second check")
+        fleet = self.calls("fleet")
+        self.assertEqual(len(fleet), 2)
+        self.assertGreaterEqual(fleet[1][0] - fleet[0][0], board.CONFIRM_GAP * 0.9)
+        self.assertEqual([len(s["rows"]) for s in self.snaps if s["loaded"]], [5, 4, 2])
+        self.assertEqual(len(self.calls("stream")), 1)
 
     def test_a_failed_removal_check_keeps_the_rows_and_reconnects(self):
         self.make().start()

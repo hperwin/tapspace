@@ -27,6 +27,7 @@ API = "/api/v1/journeys/"
 BACKOFF_BASE, BACKOFF_MAX, JITTER = 2.0, 60.0, 1.0   # reconnect: 2 s doubling to 60 s, plus 0-1 s
 SILENCE = 60.0                      # no bytes this long on the open stream: reconnect
 COALESCE = 1.5                      # removals gathered this long, then one fleet read decides
+CONFIRM_GAP = 5.0                   # removal checks at least this far apart; removals inside the gap join the next
 CRED_EVERY = 60.0                   # Keychain re-read while there is no live key
 DEAD_RETRY = 300.0                  # a key the board refused is tried again this often: some refusals reverse
 UNREACHABLE_AFTER = 60.0            # no answer from the board this long while the stream is down
@@ -115,7 +116,7 @@ class Board:
         self._rows, self._at, self._loaded, self._state, self._error = {}, 0.0, False, "off", ""
         self._token = self._base = self._dead = None
         self._exp = self._dead_at = 0
-        self._hold_until = 0.0
+        self._hold_until = self._fleet_at = 0.0
         self._reads = deque()
         self._heard = time.monotonic()
         self._poll_at = None
@@ -225,8 +226,8 @@ class Board:
     def _listen(self, n, token):
         live, due = False, None
         while True:
-            if due is not None:
-                due = max(due, self._hold_until)                   # the confirm is a call: a hold delays it
+            if due is not None:                                    # the confirm is a call: a hold delays it,
+                due = max(due, self._hold_until, self._fleet_at + CONFIRM_GAP)   # and it keeps its gap (A2.7)
                 if time.monotonic() >= due:                        # the removal window closed (R2)
                     due = None
                     v = self._confirm()
@@ -314,6 +315,7 @@ class Board:
     def _confirm(self, state=None):
         """One fleet read with the current key; a 200 replaces the rows (the board's truth)."""
         v, obj = self._get(self._base, self._token, "fleet")
+        self._fleet_at = time.monotonic()
         rows = _keyed(obj.get("rows")) if v == "ok" and isinstance(obj, dict) else None
         if v == "ok" and rows is None:
             return "fail"
