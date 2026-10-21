@@ -279,8 +279,8 @@ class Board:
             if now >= retry_at:
                 return False
             if self._poll_at is not None and now >= self._poll_at and now >= self._hold_until:
-                self._poll_at = now + self.poll_every
                 v = self._confirm("polling")
+                self._poll_at = time.monotonic() + self.poll_every   # from the answer: the door never sees two closer
                 if v != "ok" and self._refusal(v, self._token, None) in ("rotated", "refused"):
                     return False
                 if v != "ok":
