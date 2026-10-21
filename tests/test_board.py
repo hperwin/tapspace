@@ -26,7 +26,7 @@ REASON = "the key 0123456789 was revoked"
 HANG = object()
 FAST = dict(SILENCE=0.4, COALESCE=0.15, BACKOFF_BASE=0.05, BACKOFF_MAX=0.4, JITTER=0.0, CRED_EVERY=0.15,
             UNREACHABLE_AFTER=0.4, HOLD=0.4, READ_MAX=3, READ_WINDOW=0.5, GET_TIMEOUT=2.0, READ_TIMEOUT=0.5,
-            DEAD_RETRY=1.0, CONFIRM_GAP=0.6)
+            DEAD_RETRY=1.0, CONFIRM_GAP=0.6, STEADY=0.5)
 
 
 def row(n, phase="landed", label="✔ ready for sign-off", repo="hperwin/fixture-app"):
@@ -57,10 +57,10 @@ class Fake(http.server.BaseHTTPRequestHandler):
     push() gives the newest stream: None ends it, HANG goes silent with the socket open. Each stream reads its own
     queue, so a stream a test left behind never takes a frame. `reads` maps a journey to its read answer (200), a
     (code, body) pair, or HANG (accepted, never answered); else 404. A bearer in `dead` is refused 401 revoked;
-    `down` answers every call 503."""
+    `down` answers every call 503; the next `cut` streams end right after their snapshot."""
     protocol_version = "HTTP/1.1"
     rows, stream_rows, fleet, opens, dead, reads, seen, streams = [], None, [], [], set(), {}, [], []
-    down = False
+    down, cut = False, 0
     closing = threading.Event()
 
     @staticmethod
@@ -110,6 +110,9 @@ class Fake(http.server.BaseHTTPRequestHandler):
             return self.answer(code, obj)
         q = queue.Queue()
         Fake.streams.append(q)
+        if Fake.cut:
+            Fake.cut -= 1
+            q.put(None)
         newest = lambda: not Fake.closing.is_set() and Fake.streams and Fake.streams[-1] is q
         self.send_response(200)
         self.send_header("content-type", "text/event-stream")
@@ -233,7 +236,7 @@ class Wire(unittest.TestCase):
         p.start()
         self.addCleanup(p.stop)
         Fake.rows, Fake.stream_rows, Fake.fleet, Fake.opens, Fake.dead, Fake.reads = [row(1), row(2), row(3)], None, [], [], set(), {}
-        Fake.seen, Fake.down, Fake.streams = [], False, []
+        Fake.seen, Fake.down, Fake.streams, Fake.cut = [], False, [], 0
         self.snaps, self.b = [], None
 
     def tearDown(self):
@@ -452,6 +455,24 @@ class Wire(unittest.TestCase):
         self.assertTrue(all(b - a >= 0.1 * 0.9 for a, b in zip(polls, polls[1:])))
         time.sleep(0.4)
         self.assertEqual(self.calls("fleet", back + 0.05), [])
+
+    def test_a_stream_lost_soon_after_its_snapshot_keeps_backing_off(self):
+        """A2.8: the backoff starts over from BACKOFF_BASE only after a stream stayed open STEADY seconds."""
+        Fake.cut = 5                                                   # five streams end right after their snapshot
+        self.make().start()
+        until(lambda: len(self.calls("stream")) == 6 and self.b.snapshot()["state"] == "live", what="a sixth that holds")
+        opens = [s[0] for s in self.calls("stream")]
+        for g, w in zip([b - a for a, b in zip(opens, opens[1:])], [0.05, 0.1, 0.2, 0.4, 0.4]):
+            self.assertGreaterEqual(g, w * 0.9)
+            self.assertLess(g, w + 0.3)
+        for _ in range(7):                                             # the sixth stays open past STEADY
+            Fake.push(b": ping\n\n")
+            time.sleep(0.1)
+        t = time.monotonic()
+        Fake.push(None)
+        until(lambda: len(self.calls("stream")) == 7, what="the reconnect")
+        self.assertLess(self.calls("stream")[6][0] - t, 0.05 + 0.15)   # from BACKOFF_BASE again, not BACKOFF_MAX
+        self.live()
 
     def test_a_silent_stream_reconnects_and_keepalives_hold_it_open(self):
         self.make().start()

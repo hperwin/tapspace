@@ -26,6 +26,7 @@ ITEM = "Claude Code-credentials"
 API = "/api/v1/journeys/"
 BACKOFF_BASE, BACKOFF_MAX, JITTER = 2.0, 60.0, 1.0   # reconnect: 2 s doubling to 60 s, plus 0-1 s
 SILENCE = 60.0                      # no bytes this long on the open stream: reconnect
+STEADY = 60.0                       # a stream open this long was healthy: the next drop backs off from 2 s again
 COALESCE = 1.5                      # removals gathered this long, then one fleet read decides
 CONFIRM_GAP = 5.0                   # removal checks at least this far apart; removals inside the gap join the next
 CRED_EVERY = 60.0                   # Keychain re-read while there is no live key
@@ -198,7 +199,8 @@ class Board:
                 return
 
     def _stream(self):
-        """One stream, from open to end: stop | rotated | refused | lost (after its snapshot) | failed."""
+        """One stream, from open to end: stop | rotated | refused | lost (after its snapshot, open STEADY or longer)
+        | failed. A stream lost sooner counts as failed, so the backoff keeps doubling (A2.8)."""
         token, base = self._token, self._base
         try:
             sock, r = self._open(base, token, "stream", "text/event-stream", GET_TIMEOUT)
@@ -211,14 +213,15 @@ class Board:
                 body = b""
             r.close()
             return self._refusal(_verdict(r.status, body), token, "failed")
-        self._heard = time.monotonic()
+        self._heard = opened = time.monotonic()
         self._n += 1
         sock.settimeout(SILENCE)
         self._sock = sock
         self._pump_thread = threading.Thread(target=self._pump, args=(self._n, r), name="board-stream", daemon=True)
         self._pump_thread.start()
         try:
-            return self._listen(self._n, token)
+            how = self._listen(self._n, token)
+            return "failed" if how == "lost" and time.monotonic() - opened < STEADY else how
         finally:
             self._shut()
             self._heard = time.monotonic()
