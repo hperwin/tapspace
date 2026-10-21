@@ -1914,6 +1914,7 @@ _taps_kick = threading.Event()
 HOT = {}                    # tap key -> refresh it every few seconds until this time
 TAP_HOT_EVERY = 6
 TAP_RETRY = 60              # a failed read waits this long; so does an idle _taps_loop (a done item leaves within it)
+TAP_REREAD = 300            # the open tap read longest ago is read again past this: the net under _watch_loop (A2.4)
 BOARD = None                # the board feed (board.Board): __main__ starts one when board.enabled(); tests set a fake
 _JOURNEY = re.compile(r"^https://github\.com/([^/]+/[^/]+)/issues/(\d+)$")
 _PHASE_OF = {"proposed": "proposed", "en route": "enroute", "holding": "holding", "landed": "landed", "done": "done"}
@@ -2308,6 +2309,7 @@ def _read_issue(t):
         return
     _CANON[repo.lower()] = canon
     key = f"{canon}#{n}"
+    _TRIED[key] = time.time()                                   # read, under GitHub's key whatever t's case
     old = _ISSUES.get(key)
     _ISSUES[key] = new
     said = [m for m in new["messages"][len(old["messages"]):] if m["who"] == "tap"] \
@@ -2324,9 +2326,9 @@ def _compose():
     did not answer is asked again TAP_HOT_EVERY later; one that says the tap is open just waits. A tap's GitHub
     residue is kept DONE_LINGER past its last listing, so one that comes back is not unread (A2.1). Then at most one
     slow call: a board read of how a leaving tap ended, else an issue read (a repo whose spelling is not known yet, a
-    tap not read yet, a hot one), else a board read for an Accept card's tap nobody saw end (R13). After a slow call it
-    kicks itself, so a board change waits behind at most one call (a gh read, normally 1 to 2 s; a board read, at
-    most 8 s)."""
+    tap not read yet, a hot one), else a board read for an Accept card's tap nobody saw end (R13), else an issue read
+    of the open tap read longest ago, once that is TAP_REREAD old (A2.4). After a slow call it kicks itself, so a
+    board change waits behind at most one call (a gh read, normally 1 to 2 s; a board read, at most 8 s)."""
     snap = BOARD.snapshot()
     if not snap["loaded"]:
         if TAPS["error"] != snap["error"]:
@@ -2406,6 +2408,10 @@ def _compose():
         r = BOARD.read(_journey(key))
         if r and r.get("phase") == "done":
             _outcome(key, _outcome_of(r))
+    elif (t := min((it["key"] for it in items if it["phase"] != "done"), key=lambda k: _TRIED.get(k, 0),
+                   default="")) and due(t, TAP_REREAD):         # last: the open tap read longest ago (A2.4)
+        _TRIED[t] = now
+        _read_issue(t)
     else:
         return
     _taps_kick.set()

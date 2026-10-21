@@ -631,6 +631,24 @@ class TapsBoardTests(unittest.TestCase):
         self.assertEqual((t["status"], t["ask"]), ("flying", None))
         self.assertFalse(self.fleet()[key]["needs_you"])
 
+    def test_the_open_tap_read_longest_ago_is_read_again_past_five_minutes(self):
+        a, c, d = "hperwin/fixture-app#7", "hperwin/fixture-app#8", "SnappStats/snappy#3290"
+        for k in (a, c, d):
+            self.issue(k)
+        self.board(row(a), row(c, "en route"), row(d, "done", label="✓ shipped", status="shipped", event="accepted"))
+        self.settle()
+        self.settle()
+        self.assertEqual([len(self.views(k)) for k in (a, c, d)], [1, 1, 1])     # fresh reads: no safety read
+        now = time.time()
+        S._TRIED.update({a: now - S.TAP_REREAD, c: now - S.TAP_REREAD - 1, d: now - 2 * S.TAP_REREAD})
+        self.issue(c, [("tseller", "a comment _watch_loop never saw")])
+        self.once()
+        self.assertEqual([len(self.views(k)) for k in (a, c, d)], [1, 2, 1])     # the oldest open read first (A2.4)
+        self.settle()
+        self.assertEqual([len(self.views(k)) for k in (a, c, d)], [2, 2, 1])     # then the next; a done tap never
+        self.assertEqual(len(self.items()[c]["messages"]), 1)
+        self.assertEqual(S.TAP_REREAD, 300)
+
     def test_only_what_is_served_wakes_clients(self):
         key = "SnappStats/snappy#3288"
         self.issue(key)
