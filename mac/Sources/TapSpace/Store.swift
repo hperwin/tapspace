@@ -411,13 +411,11 @@ final class Store {
     var waitingCards: [Ticket] {
         tickets.filter { $0.status == "waiting" && !decided.contains($0.versionKey) }
     }
-    /// Taps waiting on Hayden (holding; an older server's needs-you), except the one he is talking in or looking at.
-    var needsYouTaps: [Tap] { taps.items.filter { holding($0) && !isQuiet($0.key) } }
+    /// Taps waiting on Hayden (`Tap.waits`), except the one he is talking in or looking at.
+    var needsYouTaps: [Tap] { taps.items.filter { $0.waits && !isQuiet($0.key) } }
     /// Taps with news for him: waiting on him, or a reply he has not read.
-    var newsTaps: [Tap] { taps.items.filter { !isQuiet($0.key) && (holding($0) || isUnread($0.key)) } }
+    var newsTaps: [Tap] { taps.items.filter { !isQuiet($0.key) && ($0.waits || isUnread($0.key)) } }
     var unreadAgents: [Agent] { agents.filter { isUnread($0.key) } }
-
-    private func holding(_ t: Tap) -> Bool { t.tapPhase.map { $0 == .holding } ?? (t.status == "needs-you") }
 
     var visualBadge: Int { waitingCards.count }
     /// How many threads have news (CONTRACT section 6): each once, never the focus or the one on screen.

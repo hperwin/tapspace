@@ -155,14 +155,17 @@ final class HarnessSnapshot {
             problems.append("11-chat-card: no lead on the server")
         }
 
-        // 6. Chat on a tap thread (real GitHub data through the server, read-only).
-        await Harness.wait(20) { store.taps.fetched > 0 }
+        // 6. Chat on a tap thread (real data through the server, read-only). A scratch server reads no board
+        // unless TAPSPACE_BOARD_URL names one, so it serves no taps: skipped, as 05 is.
+        await store.tapsPoller.now()
         if let tap = store.taps.items.max(by: { $0.messages.count < $1.messages.count }) {
             store.thread = tap.key
             await settle()
             shot("06-chat-tap", note: "\(tap.title) (\(tap.status))")
+        } else if store.taps.error.isEmpty {
+            Harness.log("SNAPSHOT skipped 06-chat-tap: the server serves no taps")
         } else {
-            problems.append("06-chat-tap: no taps (\(store.taps.error.isEmpty ? "none under this user" : store.taps.error))")
+            problems.append("06-chat-tap: no taps (\(store.taps.error))")
         }
 
         // 7-9. The menu-bar pill: collapsed, the droplet bulging toward a

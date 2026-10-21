@@ -196,8 +196,8 @@ struct FaceView: View {
                 ProjectFace(initial: letter(served: nil), size: size)
             case .tap:
                 let t = store.tap(key)
-                // A tap the store no longer holds draws its snapshot's phase, else done (Glint's resolver).
-                let p = phase ?? t?.tapPhase ?? info?.phase.flatMap(TapPhase.init(rawValue:)) ?? (t == nil ? .done : nil)
+                // A tap the store no longer lists draws its recorded ending, else its snapshot's phase, else done.
+                let p = phase ?? store.taps.tapPhase(key) ?? info?.phase.flatMap(TapPhase.init(rawValue:)) ?? (t == nil ? .done : nil)
                 // The repo's letter in the ring until the check takes its place (TapAvatar's one rule); an older
                 // server's look (no phase) keeps today's avatar.
                 TapAvatar(status: t?.status ?? "", working: animated && t?.replying == true, size: size, phase: p,
