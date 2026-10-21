@@ -194,6 +194,15 @@ class MarkupTests(unittest.TestCase):
         self.assertEqual(order, sorted(order))
         self.assertNotIn("sticky", block("#leadpin:empty", "@keyframes spin"))      # pinned by position (contract 10)
 
+    def test_the_taps_list_says_what_the_server_says(self):
+        rail = block("function renderRail(", "function threadData(")
+        self.assertIn("(taps.error ? esc(taps.error) : 'Looking for your taps…')", rail)    # R12: the sentence as served
+        self.assertNotIn("GitHub", rail)
+        self.assertIn("t.phase === 'closed' ? ' dim' : ''", rail)                          # R13: a tap that did not ship dims
+        act = block("function renderAct(", "tapactEl.addEventListener('click'")
+        self.assertIn('`<div class="actlabel">${esc(word)}</div>`', act)                   # R7: landed reads the board's word
+        self.assertNotIn(">Landed</div>", act)
+
     def test_o2_lines(self):
         self.assertIn("O2 (contract section 6)", block("function markRead", "function onScreenKey"))
         self.assertIn("!quietKey(key, focusKey, onScreenKey())", UNREAD)

@@ -333,13 +333,14 @@ process.stdout.write(JSON.stringify([1, 4].map(at => visualHtml({kind: 'timeline
         self.assertEqual(got, ['<span class="uvlabel"><b>2 of 4</b> · Review</span>', '<span class="uvlabel"><b>Done</b> · 4 of 4</span>'])
 
     def test_an_accept_card_reads_accepted_once_its_tap_is_done(self):
-        # contract 18 (Glint's rule): no answer and the live tap done reads "Accepted" in place of the buttons; an answer wins
+        # contract 18 (Glint's rule): no answer and the tap done reads "Accepted" in place of the buttons; an answer wins.
+        # R13: done is shipped, live or by its outcome once it has left the list; aborted or closed stays unanswered
         got = self.run_page(("agentKey", "isAgent", "agentOf", "esc", "tapName", "titleOf", "setPart", "faceTitle", "fresh",
-                             "CHECK", "SENT", "says", "tapDone", "paintAct"), """
+                             "CHECK", "SENT", "says", "endPhase", "tapsIn", "tapDone", "paintAct"), """
 let agents = [], taps = {items: []};
 const cardUi = new Map(), acceptAt = {}, cardSwap = () => {}, CK = CHECK;
-const paint = (phase, answer, pressedOnTapCard) => {
-  taps = {items: phase ? [{key: 'o/r#7', title: 'Lineup card', phase}] : []};
+const paint = (phase, answer, pressedOnTapCard, outcome, outcomes) => {
+  taps = tapsIn({items: phase ? [{key: 'o/r#7', title: 'Lineup card', phase, outcome}] : [], outcomes});
   for (const k in acceptAt) delete acceptAt[k];
   if (pressedOnTapCard) acceptAt['o/r#7'] = Date.now();
   const cls = new Set(), parts = {}, part = s => parts[s] = parts[s] || {dataset: {}, innerHTML: '', className: '',
@@ -351,9 +352,15 @@ const paint = (phase, answer, pressedOnTapCard) => {
   return [cls.has('answered'), parts[':scope > .usays'].innerHTML.replace(CK, '')];
 };
 process.stdout.write(JSON.stringify([paint('landed'), paint('done'), paint('done', null, true), paint('done', {verdict: 'deny', note: 'off'}),
-  paint('landed', {verdict: 'accept'}), paint('closed'), paint('')]));""")
+  paint('landed', {verdict: 'accept'}), paint('closed'), paint(''),
+  paint('done', null, false, 'shipped'), paint('done', null, false, 'aborted'), paint('done', null, false, 'closed'),
+  paint('', null, false, null, {'o/r#7': 'shipped'}), paint('', null, false, null, {'o/r#7': 'aborted'}),
+  paint('', null, false, null, {'o/r#7': 'closed'}), paint('landed', null, false, null, {'o/r#7': 'shipped'})]));""")
         self.assertEqual(got, [[False, ""], [True, "Accepted"], [True, "Accepted"], [True, "Not quite: off"],
-                               [True, "Accepted"], [False, ""], [False, ""]])
+                               [True, "Accepted"], [False, ""], [False, ""],
+                               [True, "Accepted"], [False, ""], [False, ""],       # a lingering done tap: only shipped
+                               [True, "Accepted"], [False, ""], [False, ""],       # gone from the list: its outcome
+                               [False, ""]])                                       # listed again: the live tap says
         # a tap turning done repaints the card: the render signature carries it
         self.assertIn("(m.cst.act && tapDone(cardAction(m.card).tap) ? '~' : '')", PAGE)
 
@@ -376,6 +383,62 @@ process.stdout.write(JSON.stringify([paint({}), paint({pending: true}), paint({t
         self.assertIn('placeholder="What should change?"', CARDS)          # Not quite, on a picture or an action
         self.assertIn('placeholder="Your answer…"', CARDS)                 # the ask
         self.assertNotIn("Tell the agent what to change", CARDS)
+
+
+@unittest.skipUnless(NODE, "node is not installed")
+class OutcomeTests(unittest.TestCase):
+    """R13 on the web: GET /api/taps normalised in one place (a done tap that did not ship draws as closed did), the
+    outcomes map for a tap that has left the list, and a tap item's was word as its earlier card showed it."""
+
+    def test_taps_in_turns_a_done_tap_that_did_not_ship_closed(self):
+        got = ReviewFixTests.run_page(("endPhase", "tapsIn"), """
+const d = tapsIn({items: [['done', 'shipped'], ['done', 'aborted'], ['done', 'closed'], ['done', undefined], ['landed', undefined]]
+  .map(([phase, outcome], i) => ({key: 'o/r#' + i, phase, phase_word: 'w' + i, outcome})), outcomes: {'o/r#9': 'aborted'}});
+let bare = 'kept'; try{ tapsIn({error: 'x'}); }catch(e){ bare = 'threw'; }
+process.stdout.write(JSON.stringify([d.items.map(t => [t.phase, t.phase_word]), d.outcomes,
+  [null, 'x', undefined].map(o => tapsIn({items: [], outcomes: o}).outcomes), bare]));""")
+        self.assertEqual(got[0], [["done", "w0"], ["closed", "w1"], ["closed", "w2"], ["done", "w3"], ["landed", "w4"]])
+        self.assertEqual(got[1], {"o/r#9": "aborted"})
+        self.assertEqual(got[2], [{}, {}, {}])                     # an older server serves no outcomes
+        self.assertEqual(got[3], "threw")                          # no items: pollTaps keeps the list it has
+        self.assertIn("taps = tapsIn(await (await fetch('/api/taps')).json());", PAGE)
+
+    def test_a_tap_that_did_not_ship_looks_closed(self):
+        got = ReviewFixTests.run_page(("esc", "STATUS", "PHASES", "PHASE_WORD", "hasPhase", "tapCls", "tapWord", "tapAvatar",
+                                       "endPhase", "tapsIn"), """
+const d = tapsIn({items: [{key: 'o/r#1', repo: 'o/r', phase: 'done', phase_word: 'shipped', outcome: 'shipped'},
+                          {key: 'o/r#2', repo: 'o/r', phase: 'done', phase_word: 'aborted', outcome: 'aborted'},
+                          {key: 'o/r#3', repo: 'o/r', phase: 'done', phase_word: '', outcome: 'closed'}]});
+process.stdout.write(JSON.stringify(d.items.map(t => [tapCls(t), tapWord(t), tapAvatar(t).includes('✓')])));""")
+        self.assertEqual(got, [["p-done", "shipped", True], ["p-closed", "aborted", False], ["p-closed", "Closed", False]])
+
+    def test_a_tap_that_left_the_list_draws_by_its_outcome(self):
+        got = ReviewFixTests.run_page(("agentKey", "isAgent", "esc", "PHASES", "hasPhase", "tapCls", "tapAvatar", "endPhase",
+                                       "face", "itemFace"), """
+let agents = [], taps = {items: [], outcomes: {'o/r#1': 'shipped', 'o/r#2': 'aborted', 'o/r#3': 'closed'}};
+const look = h => [h.match(/class="tapav ([^" ]+)/)[1], h.includes('✓')];
+process.stdout.write(JSON.stringify([
+  ['o/r#1', 'o/r#2', 'o/r#3', 'o/r#4'].map(k => look(face(k, 0, {phase: 'landed', initial: 'R'}))),
+  ['o/r#1', 'o/r#2', 'o/r#4'].map(k => look(itemFace({ref: k, phase: 'done'}, {}, 'tap', null, 38))),
+  ['o/r#1', 'o/r#2'].map(k => look(itemFace({ref: k, phase: 'landed'}, {}, 'tap', null, 38)))]));""")
+        self.assertEqual(got[0], [["p-done", True], ["p-closed", False], ["p-closed", False], ["p-landed", False]])
+        self.assertEqual(got[1], [["p-done", True], ["p-closed", False], ["p-done", True]])   # a done snapshot: which done
+        self.assertEqual(got[2], [["p-landed", False], ["p-landed", False]])                 # never live: its beat keeps it
+
+    def test_a_tap_items_was_word_is_the_one_its_earlier_card_showed(self):
+        got = ReviewFixTests.run_page(("agentKey", "isAgent", "MASTER", "PHASES", "PHASE_WORD", "itemState"), """
+const it = {phase: 'landed', word: 'ready for sign-off', goals: [5, 5]};
+process.stdout.write(JSON.stringify([null, {phase: 'enroute', word: 'en route'}, {phase: 'enroute'},
+  {phase: 'landed', word: 'Landed', goals: [4, 5]}].map(w => itemState(it, 'tap', 'o/r#1', w).word)));""")
+        self.assertEqual(got, ["ready for sign-off", "en route", "Flying", "Landed"])   # no was word (an older card): the table
+
+    def test_a_needs_reply_question_waits_on_you(self):
+        # R10: the board keeps a comment question en route; its served status and ask still make it wait on you
+        got = ReviewFixTests.run_page(("PHASES", "hasPhase", "isHolding"), """
+process.stdout.write(JSON.stringify([{phase: 'holding', status: 'needs-you'}, {phase: 'enroute', status: 'needs-you'},
+  {phase: 'enroute', status: 'flying'}, {status: 'needs-you'}, {phase: 'landed', status: 'flying'}].map(isHolding)));""")
+        self.assertEqual(got, [True, True, False, True, False])
+        self.assertIn("ph = t && hasPhase(t) ? (isHolding(t) ? 'holding' : t.phase) : ''", PAGE)   # its question card
 
 
 class MarkupTests(unittest.TestCase):
