@@ -5,9 +5,11 @@ Reads the two docs and server.py's source as text; imports nothing, starts nothi
     python3 -B -m unittest tests.test_tap_docs -v
 """
 import pathlib
+import re
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+WORDS = {5: "five", 10: "ten", 15: "fifteen", 20: "twenty", 30: "thirty"}
 
 
 def _flat(text):
@@ -37,6 +39,18 @@ class TapDocs(unittest.TestCase):
         for name, text in _passages().items():
             with self.subTest(name):
                 self.assertFalse("within seconds" in text.lower(), f"{name} promises 'within seconds'")
+
+    def test_only_an_ending_the_board_reports_lingers_as_done(self):
+        # server.py: a leaving tap becomes a done item for DONE_LINGER only when a board read says it is done;
+        # otherwise it drops with no done item (A1.4, A2.1). The docs must not promise the linger for every tap.
+        linger = int(re.search(r"^DONE_LINGER = (\d+)", (ROOT / "server.py").read_text(), re.M)[1]) // 60
+        said = re.compile(rf"\b({linger}|{WORDS[linger]}) minutes\b")
+        for name, text in _passages().items():
+            with self.subTest(name):
+                lines = [s for s in re.split(r"(?<=\.)\s+(?=[A-Z`])", text) if said.search(s)]
+                self.assertEqual(len(lines), 1, f"{name}: one sentence names the {linger} minute linger")
+                self.assertIn("the board reports", lines[0])
+                self.assertIn("simply leaves", lines[0])
 
 
 if __name__ == "__main__":

@@ -246,9 +246,11 @@ workspace where any number of agents can be connected at once:
   tap's `phase` is one of the board's five: `proposed`, `enroute` (the
   board's "en route"), `holding`, `landed` or `done`. Its word is the
   board's own ("en route", "needs you", "ready for sign-off"). A journey
-  that is signed off or cancelled turns `done` under the board's final word
-  for it ("shipped", "aborted", or "closed" when GitHub gave no reason),
-  stays 10 minutes, then leaves the list; the old Closed phase is gone.
+  the board reports as ended (signed off or cancelled) turns `done` under
+  the board's final word for it ("shipped", "aborted", or "closed" when
+  GitHub gave no reason) and lingers as done for ten minutes; one whose
+  ending the board cannot confirm simply leaves the list. The old Closed
+  phase is gone.
   What the board does not carry still comes from GitHub through your `gh`
   login: each tap's comments and whether your messages were seen (an 👀
   reaction), the fly label (`flightdeck:fly`, legacy `auto-launch`), the
