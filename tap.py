@@ -43,12 +43,15 @@
                                             session does), born under LEAD, FILE's text added to its first
                                             prompt; prints its NAME and tmux session
   tap.py adopt --as LEAD CHILD           -> puts CHILD, a master already running, under LEAD
-  Taps (the reviewer's GitHub agent issues; every agent can talk to all of them):
-  tap.py taps                            -> list them: key, phase (Proposed, Flying, Needs you, Landed, Done,
-                                            Closed), title, last message
+  Taps (the reviewer's Flightdeck journeys, listed live from Flightdeck's board; each thread stays on GitHub;
+  every agent can talk to all of them):
+  tap.py taps                            -> list them: key, its phase in the board's own word (en route, needs
+                                            you, ready for sign-off, shipped, aborted...), title, the question
+                                            it asks, last message; a tap that turns done stays 10 minutes
   tap.py tap-read KEY                    -> the whole thread of one tap (KEY = owner/repo#n), with its numbered proof images
   tap.py tap-say --as NAME KEY "text"    -> message a tap as the reviewer (signed "Sent by NAME")
-  tap.py tap-watch [--timeout 3600]      -> blocks until any tap posts something new or changes state
+  tap.py tap-watch [--timeout 3600]      -> blocks until any tap posts something new, changes state or asks
+                                            something new; prints its question
   tap.py relay --as NAME                 -> this session is handing off to its next car: the thread
                                             shows "Switching car" until the new car listens --as NAME
   tap.py reply --as NAME "text" [--image a.png ...]
@@ -611,14 +614,21 @@ def main():
             return {t["key"]: t for t in _call("/api/taps")["items"]}
         def word(t):                    # the one plain word every client shows; status on an older server
             return t.get("phase_word") or t["status"]
+        def asks(t):                    # the question the tap waits on (the board's, or a pilot's comment), else ""
+            return (t.get("ask") or {}).get("text") or ""
         def sig(t):
-            return (len(t["messages"]), t["status"], t.get("phase"))
+            return (len(t["messages"]), t["status"], t.get("phase"), asks(t))
         if a.cmd == "taps":
-            for t in snap().values():
+            got = _call("/api/taps")
+            if got.get("error"):            # the server's plain sentence: why the list may be out of date
+                print(got["error"])
+            for t in got["items"]:
                 last = [m for m in t["messages"] if m["who"] == "tap"]
                 tail = (last[-1]["body"].splitlines() or [""])[0][:90] if last else ""
                 fly = ", waiting to fly" if t.get("phase") == "proposed" and t.get("fly_requested") else ""
                 print(f"{t['key']}  [{word(t)}{fly}{', replying' if t.get('replying') else ''}]  {t['title']}")
+                if asks(t):
+                    print(f"    asks: {asks(t)}")
                 if tail:
                     print(f"    last: {tail}")
             return 0
@@ -636,25 +646,31 @@ def main():
                 who = "tap" if m["who"] == "tap" else ("you" + (f" (via {m['via']})" if m.get("via") else ""))
                 print(f"\n--- {who} · {m['ts']}{' · seen' if m.get('seen') else ''}\n{m['body']}")
             return 0
-        base = {k: sig(t) for k, t in snap().items()}
-        deadline = time.time() + a.timeout
-        while time.time() < deadline:
-            time.sleep(5)
+        def loaded():                   # {key: tap}, or None while the server is down or has not loaded its list
             try:
-                now = snap()
+                got = _call("/api/taps")
+                return {t["key"]: t for t in got["items"]} if got.get("fetched") else None
             except Exception:
-                continue
-            news = [t for k, t in now.items()
-                    if k not in base or sig(t) != base[k]]
-            news = [t for t in news if t["messages"] and t["messages"][-1]["who"] == "tap"
-                    or (t["key"] in base and sig(t)[1:] != base[t["key"]][1:])]
-            if news:
-                for t in news:
-                    print(f"== {t['key']} [{word(t)}] {t['title']}")
-                    if t["messages"]:
-                        print(t["messages"][-1]["body"])
-                return 0
-            base = {k: sig(t) for k, t in now.items()}
+                return None
+        base, deadline = None, time.time() + a.timeout
+        while time.time() < deadline:
+            now = loaded()
+            if now is not None:
+                if base is not None:
+                    news = [t for k, t in now.items()
+                            if k not in base or sig(t) != base[k]]
+                    news = [t for t in news if t["messages"] and t["messages"][-1]["who"] == "tap"
+                            or (t["key"] in base and sig(t)[1:] != base[t["key"]][1:])]
+                    if news:
+                        for t in news:
+                            print(f"== {t['key']} [{word(t)}] {t['title']}")
+                            if asks(t):
+                                print(f"    asks: {asks(t)}")
+                            if t["messages"]:
+                                print(t["messages"][-1]["body"])
+                        return 0
+                base = {k: sig(t) for k, t in now.items()}
+            time.sleep(5)
         print(json.dumps({"timeout": True}))
         return 4
 

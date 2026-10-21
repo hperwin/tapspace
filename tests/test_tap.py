@@ -1,12 +1,15 @@
-"""tap.py's side of the wire: identity headers, card owner, goal cards, doctor counters.
+"""tap.py's side of the wire: identity headers, card owner, goal cards, doctor counters, taps and tap-watch.
 
 Runs tap.py as a child process against a stub HTTP server on a free loopback port (never 4747)
-and checks exactly what tap.py sends and prints. Stdlib only:
+and checks exactly what tap.py sends and prints; tap-watch runs in process with its answers handed out in turn
+and its 5 s sleep stubbed. Stdlib only:
     python3 -m unittest discover -s tests -v
 TAP_PY overrides which tap.py runs (default: the one next to this tests/ folder).
 """
+import contextlib
 import http.server
 import importlib.util
+import io
 import json
 import os
 import pathlib
@@ -15,12 +18,19 @@ import sys
 import tempfile
 import threading
 import unittest
+from unittest import mock
 
 TAP = pathlib.Path(os.environ.get("TAP_PY") or pathlib.Path(__file__).resolve().parents[1] / "tap.py")
 SID = "aaaaaaaa-1111-2222-3333-444444444444"
 PNG = (b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00"
        b"\x1f\x15\xc4\x89\x00\x00\x00\rIDATx\x9cc\xf8\x0f\x00\x00\x01\x01\x00\x05\x18\xd8N\x00\x00"
        b"\x00\x00IEND\xaeB`\x82")
+
+
+def item(key, phase, word, status, last="tap", ask=None):
+    """One /api/taps item: the fields tap.py reads."""
+    return {"key": key, "title": "Lineup " + key[-1], "phase": phase, "phase_word": word, "status": status,
+            "messages": [{"who": last, "body": f"{last} wrote on {key}"}], "ask": ask}
 
 
 class Stub(http.server.BaseHTTPRequestHandler):
@@ -240,6 +250,28 @@ class TapWire(unittest.TestCase):
         self.assertEqual(r.returncode, 2)
         self.assertEqual(Stub.seen, [])
 
+    # taps
+
+    def test_taps_prints_each_question_under_its_tap(self):
+        ask = {"text": "Ship the beta look? (Yes, Not yet)", "url": "u", "at": "2026-10-21T21:00:00Z"}
+        Stub.answers["/api/taps"] = (200, {"fetched": 1.0, "error": "", "items": [
+            item("A/b#1", "enroute", "en route", "needs-you", ask=ask),
+            item("A/b#2", "landed", "ready for sign-off", "flying")]})
+        r = self.tap("taps")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout.splitlines(), [
+            "A/b#1  [en route]  Lineup 1", "    asks: Ship the beta look? (Yes, Not yet)",
+            "    last: tap wrote on A/b#1",
+            "A/b#2  [ready for sign-off]  Lineup 2", "    last: tap wrote on A/b#2"])
+
+    def test_taps_says_first_why_the_list_may_be_out_of_date(self):
+        why = "Flightdeck's board can't be reached right now. This list may be out of date."
+        Stub.answers["/api/taps"] = (200, {"fetched": 1.0, "error": why,
+                                           "items": [item("A/b#2", "landed", "ready for sign-off", "flying")]})
+        r = self.tap("taps")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout.splitlines()[:2], [why, "A/b#2  [ready for sign-off]  Lineup 2"])
+
     # doctor
 
     def test_doctor_counts_owners_cards_notes_links_and_sessions(self):
@@ -286,6 +318,56 @@ class TapWire(unittest.TestCase):
         d = json.loads(r.stdout)
         self.assertEqual((d["cards_with_owner"], d["goal_cards"], d["links"], d["claimed_sessions"],
                           d["link_scanner"]), (0, 0, 0, None, None))
+
+
+class TapWatch(unittest.TestCase):
+    """tap-watch in process: _call hands out /api/taps answers in turn (the last one repeats; an exception in
+    the list is raised) and the 5 s sleep returns at once, so a case takes milliseconds and a miss ends in 5 s."""
+
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location("tap_watch_under_test", TAP)
+        cls.tap = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.tap)
+
+    def watch(self, *answers):
+        left = list(answers)
+
+        def call(*a, **k):
+            x = left.pop(0) if len(left) > 1 else left[0]
+            if isinstance(x, Exception):
+                raise x
+            return x
+        out = io.StringIO()
+        with mock.patch.object(self.tap, "_call", side_effect=call), mock.patch("time.sleep"), \
+                mock.patch.object(sys, "argv", ["tap.py", "tap-watch", "--timeout", "5"]), \
+                contextlib.redirect_stdout(out):
+            code = self.tap.main()
+        return code, out.getvalue()
+
+    def test_a_new_question_wakes_it_and_is_printed(self):
+        q1 = {"text": "Ship the beta look? (Yes, Not yet)", "url": "u", "at": "2026-10-21T21:00:00Z"}
+        q2 = dict(q1, text="Which build goes first? (16, 17)")
+        code, out = self.watch(
+            {"fetched": 1.0, "items": [item("A/b#1", "holding", "needs you", "needs-you", last="you", ask=q1),
+                                       item("A/b#2", "landed", "ready for sign-off", "flying")]},
+            {"fetched": 1.0, "items": [item("A/b#1", "holding", "needs you", "needs-you", last="you", ask=q2),
+                                       item("A/b#2", "done", "shipped", "landed")]})
+        self.assertEqual(code, 0)
+        self.assertIn("== A/b#1 [needs you] Lineup 1\n    asks: Which build goes first? (16, 17)\n"
+                      "you wrote on A/b#1\n", out)
+        self.assertIn("== A/b#2 [shipped] Lineup 2\ntap wrote on A/b#2\n", out)
+        self.assertEqual(out.count("asks:"), 1)
+
+    def test_a_server_down_or_still_loading_is_not_news(self):
+        a = {"fetched": 1.0, "items": [item("A/b#1", "landed", "ready for sign-off", "flying"),
+                                       item("A/b#2", "landed", "ready for sign-off", "flying")]}
+        b = {"fetched": 1.0, "items": [item("A/b#1", "landed", "ready for sign-off", "flying"),
+                                       item("A/b#2", "done", "aborted", "landed")]}
+        code, out = self.watch(ConnectionRefusedError(), a, {"fetched": 0.0, "items": [], "error": ""}, b)
+        self.assertEqual(code, 0)
+        self.assertNotIn("A/b#1", out)
+        self.assertIn("== A/b#2 [aborted] Lineup 2\n", out)
 
 
 class DaemonEnv(unittest.TestCase):
