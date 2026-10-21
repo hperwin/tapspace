@@ -2291,11 +2291,14 @@ def _read_issue(t):
     """One gh read of the issue t names (owner/repo#n, any case): learns the repo's GitHub spelling from the issue's
     own url (R5) and keeps its residue under GitHub's key. A pilot comment that came since the last read pushes; a
     first read never does, so neither a boot, a new tap nor a reconnect pushes old comments (R14). A failed read
-    changes nothing: the tap keeps what it had, and _TRIED spaces the next try."""
+    changes nothing: the tap keeps what it had, and _TRIED spaces the next try. So does an issue GitHub answers
+    from another repo or number (moved or renamed): only the case of a name is learned, never a different tap."""
     repo, n = t.split("#")
     try:
         iss = _issue(repo, n)
-        canon = _JOURNEY.match(iss["url"])[1]
+        canon, num = _JOURNEY.match(iss["url"]).groups()
+        if canon.lower() != repo.lower() or num != n:
+            return
         new = _residue(f"{canon}#{n}", iss)
     except Exception:
         return

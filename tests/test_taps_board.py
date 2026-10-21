@@ -220,11 +220,11 @@ class TapsBoardTests(unittest.TestCase):
         return S.BOARD
 
     def issue(self, key, comments=(), labels=("flightdeck",), body="- [x] The lineup card shows\n- [ ] The box score links",
-              title=None, created="2026-10-20T10:00:00Z"):
-        """The gh issue view answer for key (GitHub's spelling in its url); comments are (login, body) pairs, an hour
-        apart from 11:00 on October 21."""
+              title=None, created="2026-10-20T10:00:00Z", url=None):
+        """The gh issue view answer for key (GitHub's spelling in its url, or the url given: a moved issue);
+        comments are (login, body) pairs, an hour apart from 11:00 on October 21."""
         repo, n = key.split("#")
-        url = f"https://github.com/{repo}/issues/{n}"
+        url = url or f"https://github.com/{repo}/issues/{n}"
         self.issues[key.lower()] = {
             "author": {"login": "hperwin"}, "title": title or f"Issue {n}", "body": body,
             "labels": [{"name": x} for x in labels], "state": "OPEN", "url": url, "createdAt": created,
@@ -346,6 +346,17 @@ class TapsBoardTests(unittest.TestCase):
         self.assertGreater(S.TAPS["fetched"], 0)
         self.assertEqual(set(self.items()), {"SnappStats/snappy#3313"})
         self.assertEqual(len(self.views("hperwin/gone-app#5")), 1)
+        # an issue GitHub answers from another repo (moved or renamed): only the case of a name is ever learned
+        self.reset()
+        self.issue("hperwin/old-name#4", url="https://github.com/hperwin/new-name/issues/4")
+        self.issue("hperwin/old-name#6", url="https://github.com/hperwin/old-name/issues/9")
+        self.board(row("hperwin/old-name#4"))
+        self.settle()
+        self.assertEqual((self.items(), S._CANON), ({}, {}))
+        self.assertGreater(S.TAPS["fetched"], 0)
+        self.board(row("hperwin/old-name#6"))
+        self.settle()
+        self.assertEqual((self.items(), S._CANON), ({}, {}))
 
     def test_a_landed_row_reads_landed_whatever_its_comments_say(self):
         # snappy#3288 as it was live: every goal checked on GitHub, the pilot's last comment older than a body edit,
