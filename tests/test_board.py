@@ -25,7 +25,8 @@ KEY = "fdk_test_0123456789_key"
 REASON = "the key 0123456789 was revoked"
 HANG = object()
 FAST = dict(SILENCE=0.4, COALESCE=0.15, BACKOFF_BASE=0.05, BACKOFF_MAX=0.4, JITTER=0.0, CRED_EVERY=0.15,
-            UNREACHABLE_AFTER=0.4, HOLD=0.4, READ_MAX=3, READ_WINDOW=0.5, GET_TIMEOUT=2.0, READ_TIMEOUT=0.5)
+            UNREACHABLE_AFTER=0.4, HOLD=0.4, READ_MAX=3, READ_WINDOW=0.5, GET_TIMEOUT=2.0, READ_TIMEOUT=0.5,
+            DEAD_RETRY=1.0, CONFIRM_GAP=0.6, STEADY=0.5)
 
 
 def row(n, phase="landed", label="✔ ready for sign-off", repo="hperwin/fixture-app"):
@@ -56,10 +57,10 @@ class Fake(http.server.BaseHTTPRequestHandler):
     push() gives the newest stream: None ends it, HANG goes silent with the socket open. Each stream reads its own
     queue, so a stream a test left behind never takes a frame. `reads` maps a journey to its read answer (200), a
     (code, body) pair, or HANG (accepted, never answered); else 404. A bearer in `dead` is refused 401 revoked;
-    `down` answers every call 503."""
+    `down` answers every call 503; the next `cut` streams end right after their snapshot."""
     protocol_version = "HTTP/1.1"
     rows, stream_rows, fleet, opens, dead, reads, seen, streams = [], None, [], [], set(), {}, [], []
-    down = False
+    down, cut = False, 0
     closing = threading.Event()
 
     @staticmethod
@@ -109,6 +110,9 @@ class Fake(http.server.BaseHTTPRequestHandler):
             return self.answer(code, obj)
         q = queue.Queue()
         Fake.streams.append(q)
+        if Fake.cut:
+            Fake.cut -= 1
+            q.put(None)
         newest = lambda: not Fake.closing.is_set() and Fake.streams and Fake.streams[-1] is q
         self.send_response(200)
         self.send_header("content-type", "text/event-stream")
@@ -193,11 +197,14 @@ class Pure(unittest.TestCase):
             "flightdeck|new": {"accessToken": "fdk_new", "serverUrl": "https://fd.example:10000/mcp",
                                "expiresAt": 1794773212945, "refreshToken": "fdr_never"},
             "other|x": {"accessToken": "zzz", "serverUrl": "https://x/mcp", "expiresAt": 9e15}}}
+        plain = {"mcpOAuth": {"flightdeck|plain": {"accessToken": "fdk_plain", "serverUrl": "http://fd.example:10000/mcp",
+                                                   "expiresAt": 9e15}}}                # A2.9: never a key over plain http
         with tempfile.TemporaryDirectory() as d:
             shim = pathlib.Path(d) / "security"
             for out, rc, want in [(json.dumps(blob), 0, {"token": "fdk_new", "base": "https://fd.example:10000",
                                                           "exp": 1794773212.945}),
-                                  ("", 44, None), ("not json", 0, None), (json.dumps({"mcpOAuth": {}}), 0, None)]:
+                                  ("", 44, None), ("not json", 0, None), (json.dumps({"mcpOAuth": {}}), 0, None),
+                                  (json.dumps(plain), 0, None)]:
                 with self.subTest(rc=rc, out=out[:20]):
                     shim.write_text(f"#!/bin/sh\ncat <<'EOF'\n{out}\nEOF\nexit {rc}\n")
                     shim.chmod(0o755)
@@ -232,7 +239,7 @@ class Wire(unittest.TestCase):
         p.start()
         self.addCleanup(p.stop)
         Fake.rows, Fake.stream_rows, Fake.fleet, Fake.opens, Fake.dead, Fake.reads = [row(1), row(2), row(3)], None, [], [], set(), {}
-        Fake.seen, Fake.down, Fake.streams = [], False, []
+        Fake.seen, Fake.down, Fake.streams, Fake.cut = [], False, [], 0
         self.snaps, self.b = [], None
 
     def tearDown(self):
@@ -303,6 +310,30 @@ class Wire(unittest.TestCase):
         self.assertGreaterEqual(got[0][0] - t, board.COALESCE * 0.9)
         self.assertEqual(set(self.b.snapshot()["rows"]), {row(1)["journey"], row(3)["journey"]})
         self.assertTrue(all(row(3)["journey"] in s["rows"] for s in self.snaps if s["loaded"]))
+
+    def test_removal_checks_are_spaced_and_removals_inside_the_gap_join_the_next(self):
+        """A2.7: a trickle of removals costs one fleet read per CONFIRM_GAP, not one per window."""
+        Fake.rows = [row(n) for n in range(1, 6)]
+        self.make().start()
+        self.live(5)
+        Fake.rows = [row(1), row(3), row(4), row(5)]
+        Fake.push(change("removed", row(2)))
+        until(lambda: len(self.b.snapshot()["rows"]) == 4, what="the first check")
+        Fake.rows = [row(3), row(4), row(5)]
+        Fake.push(change("removed", row(1)))                           # inside the gap
+        time.sleep(0.25)
+        Fake.rows = [row(3), row(5)]
+        Fake.push(change("removed", row(4)))                           # still inside it: joins the same check
+
+        def checked():
+            Fake.push(b": ping\n\n")                                   # feed the 0.4 s watchdog meanwhile
+            return len(self.b.snapshot()["rows"]) == 2
+        until(checked, what="the second check")
+        fleet = self.calls("fleet")
+        self.assertEqual(len(fleet), 2)
+        self.assertGreaterEqual(fleet[1][0] - fleet[0][0], board.CONFIRM_GAP * 0.9)
+        self.assertEqual([len(s["rows"]) for s in self.snaps if s["loaded"]], [5, 4, 2])
+        self.assertEqual(len(self.calls("stream")), 1)
 
     def test_a_failed_removal_check_keeps_the_rows_and_reconnects(self):
         self.make().start()
@@ -377,6 +408,20 @@ class Wire(unittest.TestCase):
         self.live()
         self.assertEqual(len(self.calls("stream")), 2)
 
+    def test_a_refused_key_is_tried_again_every_five_minutes_and_still_reads_ran_out(self):
+        """A2.6: a refusal can reverse (the sign-in list put back, a check the board could not make), so the same
+        key is tried again every DEAD_RETRY; until it answers, the sentence stays the sign-in one."""
+        cut = (403, {"ok": False, "kind": "signin-unchecked", "reason": REASON})
+        Fake.opens = [cut, cut]                                        # refused twice, then the same key works
+        self.make().start()
+        self.live()
+        opens = self.calls("stream")
+        self.assertEqual([s[3] for s in opens], [KEY] * 3)
+        for a, b in zip(opens, opens[1:]):
+            self.assertGreaterEqual(b[0] - a[0], board.DEAD_RETRY * 0.9)
+            self.assertLess(b[0] - a[0], board.DEAD_RETRY + board.CRED_EVERY + 0.3)
+        self.assertEqual([s["state"] for s in self.snaps], ["connecting", "expired", "live"])
+
     def test_without_a_live_key_it_never_dials_and_says_why(self):
         for cred, state, words in [(lambda: None, "signed-out", board.NO_KEY),
                                    (lambda: {"token": KEY, "base": "", "exp": 0}, "signed-out", board.NO_KEY),
@@ -413,6 +458,24 @@ class Wire(unittest.TestCase):
         self.assertTrue(all(b - a >= 0.1 * 0.9 for a, b in zip(polls, polls[1:])))
         time.sleep(0.4)
         self.assertEqual(self.calls("fleet", back + 0.05), [])
+
+    def test_a_stream_lost_soon_after_its_snapshot_keeps_backing_off(self):
+        """A2.8: the backoff starts over from BACKOFF_BASE only after a stream stayed open STEADY seconds."""
+        Fake.cut = 5                                                   # five streams end right after their snapshot
+        self.make().start()
+        until(lambda: len(self.calls("stream")) == 6 and self.b.snapshot()["state"] == "live", what="a sixth that holds")
+        opens = [s[0] for s in self.calls("stream")]
+        for g, w in zip([b - a for a, b in zip(opens, opens[1:])], [0.05, 0.1, 0.2, 0.4, 0.4]):
+            self.assertGreaterEqual(g, w * 0.9)
+            self.assertLess(g, w + 0.3)
+        for _ in range(7):                                             # the sixth stays open past STEADY
+            Fake.push(b": ping\n\n")
+            time.sleep(0.1)
+        t = time.monotonic()
+        Fake.push(None)
+        until(lambda: len(self.calls("stream")) == 7, what="the reconnect")
+        self.assertLess(self.calls("stream")[6][0] - t, 0.05 + 0.15)   # from BACKOFF_BASE again, not BACKOFF_MAX
+        self.live()
 
     def test_a_silent_stream_reconnects_and_keepalives_hold_it_open(self):
         self.make().start()

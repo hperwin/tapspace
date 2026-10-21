@@ -26,8 +26,11 @@ ITEM = "Claude Code-credentials"
 API = "/api/v1/journeys/"
 BACKOFF_BASE, BACKOFF_MAX, JITTER = 2.0, 60.0, 1.0   # reconnect: 2 s doubling to 60 s, plus 0-1 s
 SILENCE = 60.0                      # no bytes this long on the open stream: reconnect
+STEADY = 60.0                       # a stream open this long was healthy: the next drop backs off from 2 s again
 COALESCE = 1.5                      # removals gathered this long, then one fleet read decides
+CONFIRM_GAP = 5.0                   # removal checks at least this far apart; removals inside the gap join the next
 CRED_EVERY = 60.0                   # Keychain re-read while there is no live key
+DEAD_RETRY = 300.0                  # a key the board refused is tried again this often: some refusals reverse
 UNREACHABLE_AFTER = 60.0            # no answer from the board this long while the stream is down
 HOLD = 60.0                         # after a 429, no call of any kind this long (the key is shared)
 READ_MAX, READ_WINDOW = 20, 60.0    # read(): at most 20 a minute
@@ -41,14 +44,16 @@ CANT_REACH = "Flightdeck's board can't be reached right now. This list may be ou
 
 
 def keychain_cred():
-    """{"token", "base", "exp"} from Claude Code's flightdeck sign-in, or None. Never raises, never logs."""
+    """{"token", "base", "exp"} from Claude Code's flightdeck sign-in, or None. Never raises, never logs. Only an
+    https serverUrl counts (A2.9): the key never travels in plain http."""
     try:
         r = subprocess.run([SECURITY, "find-generic-password", "-s", ITEM, "-w"], capture_output=True,
                            text=True, timeout=10, stdin=subprocess.DEVNULL)
         if r.returncode:
             return None
         ents = [v for k, v in json.loads(r.stdout).get("mcpOAuth", {}).items()
-                if k.startswith("flightdeck|") and v.get("accessToken") and v.get("serverUrl")]
+                if k.startswith("flightdeck|") and v.get("accessToken")
+                and urlsplit(str(v.get("serverUrl") or "")).scheme == "https"]
         e = max(ents, key=lambda v: v.get("expiresAt") or 0)
         return {"token": e["accessToken"], "base": e["serverUrl"].rstrip("/").removesuffix("/mcp"),
                 "exp": (e.get("expiresAt") or 0) / 1000}
@@ -113,8 +118,8 @@ class Board:
         self._q = queue.Queue()
         self._rows, self._at, self._loaded, self._state, self._error = {}, 0.0, False, "off", ""
         self._token = self._base = self._dead = None
-        self._exp = 0
-        self._hold_until = 0.0
+        self._exp = self._dead_at = 0
+        self._hold_until = self._fleet_at = 0.0
         self._reads = deque()
         self._heard = time.monotonic()
         self._poll_at = None
@@ -172,13 +177,16 @@ class Board:
                 if self._idle(CRED_EVERY):
                     return
                 self._reread()
+                if self._dead and time.monotonic() - self._dead_at >= DEAD_RETRY:
+                    with self._lock:
+                        self._dead = None                      # the same key once more (A2.6)
                 continue
             held = self._hold_until - time.monotonic()
             if held > 0:
                 if self._idle(held):
                     return
                 continue
-            if self._state not in ("live", "polling", "connecting"):
+            if self._state not in ("live", "polling", "connecting", "expired"):   # a retried key still reads ran out
                 self._put(state="connecting")
             how = self._stream()
             if how == "stop":
@@ -193,7 +201,8 @@ class Board:
                 return
 
     def _stream(self):
-        """One stream, from open to end: stop | rotated | refused | lost (after its snapshot) | failed."""
+        """One stream, from open to end: stop | rotated | refused | lost (after its snapshot, open STEADY or longer)
+        | failed. A stream lost sooner counts as failed, so the backoff keeps doubling (A2.8)."""
         token, base = self._token, self._base
         try:
             sock, r = self._open(base, token, "stream", "text/event-stream", GET_TIMEOUT)
@@ -206,14 +215,15 @@ class Board:
                 body = b""
             r.close()
             return self._refusal(_verdict(r.status, body), token, "failed")
-        self._heard = time.monotonic()
+        self._heard = opened = time.monotonic()
         self._n += 1
         sock.settimeout(SILENCE)
         self._sock = sock
         self._pump_thread = threading.Thread(target=self._pump, args=(self._n, r), name="board-stream", daemon=True)
         self._pump_thread.start()
         try:
-            return self._listen(self._n, token)
+            how = self._listen(self._n, token)
+            return "failed" if how == "lost" and time.monotonic() - opened < STEADY else how
         finally:
             self._shut()
             self._heard = time.monotonic()
@@ -221,8 +231,8 @@ class Board:
     def _listen(self, n, token):
         live, due = False, None
         while True:
-            if due is not None:
-                due = max(due, self._hold_until)                   # the confirm is a call: a hold delays it
+            if due is not None:                                    # the confirm is a call: a hold delays it,
+                due = max(due, self._hold_until, self._fleet_at + CONFIRM_GAP)   # and it keeps its gap (A2.7)
                 if time.monotonic() >= due:                        # the removal window closed (R2)
                     due = None
                     v = self._confirm()
@@ -299,7 +309,7 @@ class Board:
         if v == "cred":
             if token == self._token:
                 with self._lock:
-                    self._dead = token
+                    self._dead, self._dead_at = token, time.monotonic()
                 self._reread()                                 # R3: at once
             return "rotated" if self._live() else "refused"
         if v == "slow":
@@ -310,6 +320,7 @@ class Board:
     def _confirm(self, state=None):
         """One fleet read with the current key; a 200 replaces the rows (the board's truth)."""
         v, obj = self._get(self._base, self._token, "fleet")
+        self._fleet_at = time.monotonic()
         rows = _keyed(obj.get("rows")) if v == "ok" and isinstance(obj, dict) else None
         if v == "ok" and rows is None:
             return "fail"
