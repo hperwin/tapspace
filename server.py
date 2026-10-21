@@ -1922,10 +1922,12 @@ _CANON = {}                 # lower-cased owner/repo -> GitHub's spelling, from 
 _TRIED = {}                 # owner/repo#n as read -> when its issue was last read or tried
 _ON_BOARD = set()           # the tap keys the board listed at the last compose (a key gone from it left the board)
 _DONE = {}                  # tap key -> (until, its done item): it left the board and is served until then (R11)
-_LEAVING = {}               # tap key -> (since, its last item): served unchanged until the board says how it ended
+_LEAVING = {}               # tap key -> (since, its last item, when the board was last asked how it ended: 0 not yet,
+                            # None once it said the tap is open): served unchanged until the board says how it ended
+_HELD = {}                  # tap key -> when it was last on the board or leaving: its residue outlives that DONE_LINGER
 _SETTLE = {}                # an Accept card's tap neither served nor in outcomes -> when the board was last asked (R13)
 DONE_LINGER = 600
-LEAVE_WAIT = 60             # a leaving tap whose ending the board has not told by then just leaves (A1.4)
+LEAVE_WAIT = 120            # a leaving tap whose ending the board has not told by then just leaves (A2.1)
 OUTCOMES_KEEP, OUTCOMES_DAYS = 500, 30
 VIA = DATA / "tap-via.json"  # comment url -> the agent that sent it for the reviewer
 SAID = DATA / "tap-said.json"  # comment url -> when the reviewer sent it himself through TapSpace (say with no via)
@@ -2317,10 +2319,12 @@ def _read_issue(t):
 def _compose():
     """One pass of _taps_loop, the only writer of TAPS (R14). BOARD's rows over each tap's GitHub residue become the
     served items (_item). A row the board itself lists as done is a done item at once, at boot too (A1.4). A tap
-    that left the board is served as it was until the board says how it ended, at most LEAVE_WAIT; done, it lingers
-    DONE_LINGER as a done item (R11); else it just leaves, with no ending invented (A1.4). Then at most one slow
-    call: a board read of how a leaving tap ended, else an issue read (a repo whose spelling is not known yet, a tap
-    not read yet, a hot one), else a board read for an Accept card's tap nobody saw end (R13). After a slow call it
+    that left the board is served as it was until the board lists it again, a read says it is done (it then lingers
+    DONE_LINGER as a done item, R11) or LEAVE_WAIT passes (it just leaves, with no ending invented). A read the board
+    did not answer is asked again TAP_HOT_EVERY later; one that says the tap is open just waits. A tap's GitHub
+    residue is kept DONE_LINGER past its last listing, so one that comes back is not unread (A2.1). Then at most one
+    slow call: a board read of how a leaving tap ended, else an issue read (a repo whose spelling is not known yet, a
+    tap not read yet, a hot one), else a board read for an Accept card's tap nobody saw end (R13). After a slow call it
     kicks itself, so a board change waits behind at most one call (a gh read, normally 1 to 2 s; a board read, at
     most 8 s)."""
     snap = BOARD.snapshot()
@@ -2345,17 +2349,20 @@ def _compose():
             if prev[key]["phase"] == "done":
                 _DONE[key] = (now + DONE_LINGER, prev[key])
             else:
-                _LEAVING[key] = (now, prev[key])
+                _LEAVING[key] = (now, prev[key], 0)
     _ON_BOARD.clear()
     _ON_BOARD.update(live)
     for key in [k for k, (until, _) in list(_DONE.items()) if until <= now or k in live]:
         del _DONE[key]
-    for key in [k for k, (since, _) in list(_LEAVING.items()) if now - since >= LEAVE_WAIT or k in live]:
+    for key in [k for k, (since, *_) in list(_LEAVING.items()) if now - since >= LEAVE_WAIT or k in live]:
         del _LEAVING[key]
     for key in [k for k in list(_SETTLE) if k in live or k in _DONE or k in TAPS["outcomes"]]:
         _SETTLE.pop(key, None)
-    for key in [k for k in _ISSUES if k not in live and k not in _LEAVING]:
+    for key in live.keys() | _LEAVING.keys():
+        _HELD[key] = now
+    for key in [k for k in _ISSUES if now - _HELD.get(k, 0) >= DONE_LINGER]:
         del _ISSUES[key]
+        _HELD.pop(key, None)
     items = []
     for key, row in live.items():
         if key not in _ISSUES:
@@ -2369,18 +2376,20 @@ def _compose():
         _outcome(key, it.get("outcome"))                        # kept when done; forgotten when open again (A1.3)
         items.append(it)
     if TAPS["fetched"] or all(t in _TRIED for t in unkeyed):    # the first list waits until each repo was tried once
-        _publish(items + [it for _, it in _LEAVING.values()] + [it for _, it in _DONE.values()], snap["error"])
+        _publish(items + [it for _, it, _ in _LEAVING.values()] + [it for _, it in _DONE.values()], snap["error"])
     due = lambda t, wait: now - _TRIED.get(t, 0) >= wait
-    if _LEAVING:                                                # first: it is served as it was until this answers
-        key = next(iter(_LEAVING))
-        _, last = _LEAVING.pop(key)
+    if (key := next((k for k, (*_, at) in _LEAVING.items() if at is not None and now - at >= TAP_HOT_EVERY), None)):
+        since, last, _ = _LEAVING[key]                          # first: it is served as it was until this answers
         r = BOARD.read(_journey(key))
-        if r and r.get("phase") == "done":                     # else it just leaves: no ending is invented (A1.4)
+        if r and r.get("phase") == "done":
+            del _LEAVING[key]
             o = _outcome_of(r)
             _outcome(key, o)
             _DONE[key] = (time.time() + DONE_LINGER, dict(
                 last, phase="done", phase_word=_word((r.get("board") or {}).get("label"), "done"), status="landed",
                 ask=None, replying=False, outcome=o))
+        else:                                                   # no answer: ask again later; open: it just waits
+            _LEAVING[key] = (since, last, None if r and r.get("phase") else time.time())
     elif (t := next((t for t in unkeyed if due(t, TAP_RETRY)), None) or
             next((k for k in live if _ISSUES[k].get("unread") and due(k, TAP_RETRY)), None) or
             next((k for k in live if k in HOT and due(k, TAP_HOT_EVERY)), None)):
@@ -2494,13 +2503,13 @@ def _watch_loop():
 
 def _taps_loop():
     """Composes the taps whenever the board changes (BOARD's on_change), a tap is talked to (_hot) or a refresh asks;
-    every TAP_HOT_EVERY while a tap is hot, else every TAP_RETRY."""
+    every TAP_HOT_EVERY while a tap is hot or leaving, else every TAP_RETRY."""
     while True:
         try:
             _compose()
         except Exception as e:          # a fault in this file: board.py and the gh reads fail quietly on their own
             print(time.strftime("%Y-%m-%d %H:%M:%S"), "taps", repr(e)[:240], flush=True)
-        _taps_kick.wait(TAP_HOT_EVERY if HOT else TAP_RETRY)
+        _taps_kick.wait(TAP_HOT_EVERY if HOT or _LEAVING else TAP_RETRY)
         _taps_kick.clear()
 
 

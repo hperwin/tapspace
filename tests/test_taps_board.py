@@ -22,6 +22,7 @@ import time
 import unittest
 import urllib.error
 import urllib.request
+from unittest import mock
 
 sys.dont_write_bytecode = True
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -177,7 +178,7 @@ class FakeBoard:
 
 
 class TapsBoardTests(unittest.TestCase):
-    STATE = ("HOT", "_ISSUES", "_CANON", "_TRIED", "_DONE", "_LEAVING", "_SETTLE", "_ON_BOARD", "_PROOF_SRC")
+    STATE = ("HOT", "_ISSUES", "_CANON", "_TRIED", "_DONE", "_LEAVING", "_SETTLE", "_ON_BOARD", "_PROOF_SRC", "_HELD")
 
     def setUp(self):
         self.saved = {k: getattr(S, k) for k in ("BOARD", "GH", "_push")}
@@ -437,34 +438,89 @@ class TapsBoardTests(unittest.TestCase):
         self.assertEqual(self.items()[key], d)
         self.assertEqual(b.reads, [])
 
-    def test_a_tap_whose_end_the_board_cannot_say_just_leaves(self):
+    def leave_ago(self, key, since=0, asked=0):
+        """Moves a leaving tap's clock back: since it left, and since the board was last asked how it ended."""
+        s, it, at = S._LEAVING[key]
+        S._LEAVING[key] = (s - since, it, at if at is None else at - asked)
+
+    def test_a_leaving_tap_is_asked_again_until_the_board_says_how_it_ended(self):
         key, url = "SnappStats/snappy#3313", "https://github.com/snappstats/snappy/issues/3313"
-        for answer in (None, {"phase": "landed", "status": "ready", "board": {"label": "✔ ready for sign-off"}}):
-            with self.subTest(answer=answer):
-                self.reset()
-                self.issue(key)
-                b = self.board(row(key))
-                self.settle()
-                was = self.items()[key]
-                b.answers[url] = answer
-                b.drop(key)
-                self.once()
-                self.assertEqual(self.items()[key], was)                 # served as it was while it is asked
-                self.settle()
-                self.assertNotIn(key, self.items())                      # no done item, no ending invented
-                self.assertEqual((S.TAPS["outcomes"], self.kept()), ({}, {}))
-                self.assertEqual(b.reads, [url])
-        with self.subTest("the board never answered within a minute"):
-            self.reset()
-            self.issue(key)
-            b = self.board(row(key))
+        self.assertEqual(S.LEAVE_WAIT, 120)
+        self.issue(key, [("tseller", "landed")])
+        b = self.board(row(key))
+        self.settle()
+        was = self.items()[key]
+        b.drop(key)
+        self.settle()                                  # the read was refused, paced or failed (None)
+        self.assertEqual((self.items()[key], b.reads), (was, [url]))     # served as it was (A2.1)
+        self.settle()
+        self.assertEqual(b.reads, [url])               # asked again on a later pass, not at once
+        self.leave_ago(key, asked=S.TAP_HOT_EVERY)
+        b.answers[url] = {"phase": "done", "status": "shipped", "event": "accepted", "board": {"label": "✓ shipped"}}
+        self.settle()
+        self.assertEqual(b.reads, [url, url])
+        d = self.items()[key]
+        self.assertEqual((d["phase"], d["phase_word"], d["outcome"]), ("done", "shipped", "shipped"))
+        self.assertEqual(S.TAPS["outcomes"], {key: "shipped"})
+
+    def test_a_leaving_tap_the_board_says_is_open_waits_unasked_until_it_is_back(self):
+        key, url = "SnappStats/snappy#3313", "https://github.com/snappstats/snappy/issues/3313"
+        self.issue(key, [("tseller", "landed")])
+        b = self.board(row(key))
+        self.settle()
+        was, n_views = self.items()[key], len(self.views(key))
+        b.answers[url] = {"phase": "landed", "status": "ready", "board": {"label": "✔ ready for sign-off"}}
+        b.drop(key)
+        self.settle()
+        with mock.patch.object(S, "TAP_HOT_EVERY", 0):              # a retry would be due on every pass
             self.settle()
-            b.drop(key)
-            S._ON_BOARD.discard(key)
-            S._LEAVING[key] = (time.time() - S.LEAVE_WAIT, self.items()[key])
             self.settle()
-            self.assertNotIn(key, self.items())
-            self.assertEqual((b.reads, S.TAPS["outcomes"]), ([], {}))
+        self.assertEqual((self.items()[key], b.reads), (was, [url]))     # still served; the board said, so not asked
+        b.put(row(key))                                # (a) the board lists it again
+        self.settle()
+        self.assertEqual(self.items()[key], was)
+        self.assertEqual((S._LEAVING, S.TAPS["outcomes"]), ({}, {}))
+        self.assertEqual(len(self.views(key)), n_views)
+
+    def test_a_tap_never_told_ended_leaves_after_leave_wait_and_comes_back_with_its_thread(self):
+        key = "SnappStats/snappy#3313"
+        self.issue(key, [("tseller", "landed")])
+        b = self.board(row(key))
+        self.settle()
+        was, n_views = self.items()[key], len(self.views(key))
+        b.drop(key)
+        self.settle()
+        self.leave_ago(key, since=S.LEAVE_WAIT)
+        self.settle()
+        self.assertNotIn(key, self.items())            # (c) it just leaves, with no ending invented
+        self.assertEqual((S.TAPS["outcomes"], self.kept()), ({}, {}))
+        b.put(row(key))                                # back: its thread and its place, not an unread newest tap
+        self.once()
+        self.assertEqual(self.items()[key], was)
+        self.settle()
+        self.assertEqual(len(self.views(key)), n_views)
+        b.drop(key)                                    # its residue is kept DONE_LINGER past its last listing, no longer
+        self.settle()
+        self.leave_ago(key, since=S.LEAVE_WAIT)
+        self.settle()
+        self.assertIn(key, S._ISSUES)
+        S._HELD[key] -= S.DONE_LINGER
+        self.once()
+        self.assertNotIn(key, S._ISSUES)
+
+    def test_the_loop_wakes_every_few_seconds_while_a_tap_is_leaving(self):
+        class Stop(Exception):
+            pass
+        waits = []
+
+        def wait(timeout):
+            waits.append(timeout)
+            raise Stop
+        with mock.patch.object(S, "_compose", lambda: None), mock.patch.object(S._taps_kick, "wait", wait):
+            self.assertRaises(Stop, S._taps_loop)
+            S._LEAVING["o/r#1"] = (time.time(), {}, 0)
+            self.assertRaises(Stop, S._taps_loop)
+        self.assertEqual(waits, [S.TAP_RETRY, S.TAP_HOT_EVERY])
 
     # ---- cards ----
     def test_an_accept_card_settles_with_its_tap_and_stays_settled(self):
