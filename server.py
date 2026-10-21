@@ -9,12 +9,16 @@ AGENTS.md for the full protocol.
 
 Chat tab: talk to any number of agents, each in its own thread
 (data/chat.jsonl; an agent joins with `tap.py listen --as NAME` and answers
-with `tap.py reply --as NAME`), and see your taps: GitHub issues you
-authored with a Flightdeck journey label (flightdeck, or the legacy nava), read and
-messaged through gh as you. Taps are scoped by issue AUTHOR, never comment
-author, so nobody else's taps ever show up here. Each tap carries a phase read
-from GitHub alone (proposed, en route, holding, landed, done, closed), the
-question it holds on, and its proof images through a token-guarded proxy.
+with `tap.py reply --as NAME`), and see your taps: the Flightdeck journeys you
+authored, exactly as Flightdeck's board lists them (board.py holds the board's
+stream with the Flightdeck sign-in Claude Code keeps on this Mac). The board
+gives each tap its phase (proposed, en route, holding, landed, done), its word,
+goals, title and question. GitHub, through gh as you, adds only what the board
+does not carry: the issue's thread (comments, their seen mark, who sent them),
+its fly and needs-reply labels (a colleague pilot's question in a comment shows
+as needs you), and the proof images in its body, through a token-guarded proxy.
+Fly, Accept and replies stay GitHub writes. A tap that leaves the board shows as
+done for ten minutes, and how it ended (shipped, aborted, closed) is kept.
 
 A master can publish its run (tap.py goal / step: a north star, the steps, the current one).
 Cards know the master that owns them from the Claude session tap.py runs in; a change note
@@ -232,14 +236,12 @@ def _wait(since, timeout):
             _cv.wait_for(lambda: CURSOR["n"] > since, timeout)
         return {"cursor": CURSOR["n"], "changed": [k for k in KINDS if not fresh or CURSOR[k] > since]}
 
-# taps = the reviewer's own agent issues on GitHub (authored by them, a journey label)
+# the labels a tap's issue still carries on GitHub: the journey family (_is_mine: Fly, Accept, say), fly, needs-reply
 # Flightdeck label families (renamed in place October 15, #2734): read either spelling, write the first.
 TAP_JOURNEY = tuple(dict.fromkeys(("flightdeck", "nava") + tuple(
     x for x in [os.environ.get("TAPSPACE_TAP_LABEL", "").strip()] if x)))
 TAP_FLY = ("flightdeck:fly", "auto-launch")
 TAP_NEEDS_REPLY = ("flightdeck:needs-reply", "needs-reply")
-TAP_KEEP_CLOSED = 7 * 86400          # a closed tap stays visible this long, then drops
-TAP_REFRESH = 45            # seconds between background refreshes
 GH = shutil.which("gh") or "/opt/homebrew/bin/gh"
 
 _lock = threading.Lock()
@@ -620,10 +622,12 @@ def _ask_open(thread):
         for r in thread)
 
 
-def _waits_on_you(thread, taps=()):
+def _waits_on_you(thread, taps=(), outcomes=None):
     """True when a master's thread waits on the reviewer: its newest card's question is unanswered (_ask_open),
     or it still has an image without a verdict, or an Accept / Not quite nobody pressed while its tap is open
-    (taps: TAPS items; a tap accepted elsewhere, done or closed, settles it)."""
+    (taps: TAPS items; outcomes: how taps ended, TAPS outcomes when None). A served tap is open until it is done;
+    a tap no longer served is settled once its key is in outcomes (R13). One neither served nor in outcomes still
+    waits, and _compose asks the board once how it ended (_SETTLE)."""
     if _ask_open(thread):
         return True
     row = _newest_card(thread)
@@ -631,18 +635,24 @@ def _waits_on_you(thread, taps=()):
         return False
     said = [r["answer"] for r in thread if r.get("role") == "you" and (r.get("answer") or {}).get("card") == row["id"]]
     if row["card"].get("action"):
-        tap = next((t for t in taps if t.get("key") == row["card"]["action"].get("tap")), {})
-        return tap.get("phase") not in ("done", "closed") and \
+        key = row["card"]["action"].get("tap")
+        ended = TAPS["outcomes"] if outcomes is None else outcomes
+        tap = next((t for t in taps if t.get("key") == key), None)
+        if tap is None and key not in ended and key not in _SETTLE:
+            _SETTLE[key] = 0.0                               # never asked yet
+            _taps_kick.set()
+        return (tap["phase"] != "done" if tap else key not in ended) and \
             not any("action" in a for a in said)             # the images are the action's picture
     return any(not any(a.get("image") == i for a in said) for i in range(len(row["card"].get("images") or [])))
 
 
 def _fleet(rows, taps, chat):
-    """GET /api/agents fleet: everything running under the lead. Needs you first (taps holding or landed, masters
-    whose newest card waits on you), then working (masters thinking, starting or switching cars, taps flying),
-    then the rest, newest first within each. A master is in it unless it is away with its run done (or no run);
-    a tap while it is proposed, flying, holding or landed. [] when no lead is served. Clients render it as is
-    and never work membership out themselves. rows: _agent_rows(chat); taps: TAPS items; chat: every row."""
+    """GET /api/agents fleet: everything running under the lead. Needs you first (taps holding or landed, or with a
+    pilot's question on their issue, masters whose newest card waits on you), then working (masters thinking,
+    starting or switching cars, taps flying), then the rest, newest first within each. A master is in it unless it
+    is away with its run done (or no run); a tap while it is proposed, flying, holding or landed. [] when no lead is
+    served. Clients render it as is and never work membership out themselves. rows: _agent_rows(chat); taps: TAPS
+    items; chat: every row."""
     lead = next((r for r in rows if r.get("role") == "lead"), None)
     if not lead:
         return []
@@ -668,7 +678,8 @@ def _fleet(rows, taps, chat):
         out.append({"key": t["key"], "kind": "tap", "title": _note_words(_undash(t["title"]), 80),
                     "initial": _initial(t["repo"].split("/")[-1]), "phase": t["phase"], "word": t["phase_word"],
                     "done": sum(1 for x in g if x.get("done")), "total": len(g),
-                    "needs_you": t["phase"] in ("holding", "landed"), "working": t["phase"] == "enroute",
+                    "needs_you": t["phase"] in ("holding", "landed") or t["status"] == "needs-you",
+                    "working": t["phase"] == "enroute",
                     "at": _epoch(t["last"])})
     out.sort(key=lambda f: -f["at"])
     out.sort(key=lambda f: 0 if f["needs_you"] else 1 if f["working"] else 2)
@@ -1022,9 +1033,10 @@ def _refusal(e):
 
 
 def _loading():
-    """The 503 a send gets while the taps have not loaded since this server started."""
-    why = f" (GitHub said: {TAPS['error'][:120]})" if TAPS["error"] else ""
-    return _Refused("taps are still loading; send it again in a minute" + why, 503)
+    """The 503 a send gets while the taps have not loaded since this server started, with the board's plain sentence
+    when it has one (R12)."""
+    return _Refused("taps are still loading; send it again in a minute" +
+                    (f". {TAPS['error']}" if TAPS["error"] else ""), 503)
 
 
 def _one_line(s):
@@ -1196,14 +1208,14 @@ def _now(ref, rows, agents, taps):
 
 
 def _was(old, now):
-    """Where an item's change beat starts, from that item's snapshot in an earlier card: a tap's phase and goals,
-    a master's state and current step (the step only when its steps are the same list); None when there is
+    """Where an item's change beat starts, from that item's snapshot in an earlier card: a tap's phase, word and
+    goals, a master's state and current step (the step only when its steps are the same list); None when there is
     nothing to move from."""
     if not old:
         return None
     if now["kind"] == "tap":
-        return {"phase": old["phase"], **({"goals": old["goals"]} if old.get("goals") else {})} \
-            if old.get("phase") else None
+        return {"phase": old["phase"], **({"word": old["word"]} if old.get("word") else {}),
+                **({"goals": old["goals"]} if old.get("goals") else {})} if old.get("phase") else None
     out = {"state": old["state"]} if old.get("state") else {}
     if now.get("progress") and (old.get("progress") or {}).get("steps") == now["progress"]["steps"]:
         out["current"] = old["progress"]["current"]
@@ -1896,13 +1908,25 @@ def _restart_master(name):
     return 200, out
 
 
-# ---- taps (the reviewer's own pilot issues, read through gh) ----
-TAPS = {"me": "", "items": [], "fetched": 0.0, "error": ""}
+# ---- taps: the reviewer's Flightdeck journeys as the board lists them (board.py), over their GitHub residue ----
+TAPS = {"me": "", "items": [], "fetched": 0.0, "error": "", "outcomes": {}}
 _taps_kick = threading.Event()
 HOT = {}                    # tap key -> refresh it every few seconds until this time
 TAP_HOT_EVERY = 6
-_UNLISTED = {}              # tap key -> when it was first kept although GitHub search did not list it yet
-TAP_SEARCH_LAG = 15 * 60    # how long such a tap is kept without the search listing it
+TAP_RETRY = 60              # a failed read waits this long; so does an idle _taps_loop (a done item leaves within it)
+BOARD = None                # the board feed (board.Board): __main__ starts one when board.enabled(); tests set a fake
+_JOURNEY = re.compile(r"^https://github\.com/([^/]+/[^/]+)/issues/(\d+)$")
+_PHASE_OF = {"proposed": "proposed", "en route": "enroute", "holding": "holding", "landed": "landed", "done": "done"}
+_ISSUES = {}                # tap key -> its issue's residue (_residue; _unread until the first read)
+_CANON = {}                 # lower-cased owner/repo -> GitHub's spelling, from an issue's own url (R5)
+_TRIED = {}                 # owner/repo#n as read -> when its issue was last read or tried
+_ON_BOARD = set()           # the tap keys the board listed at the last compose (a key gone from it left the board)
+_DONE = {}                  # tap key -> (until, its done item): it left the board and is served until then (R11)
+_LEAVING = {}               # tap key -> (since, its last item): served unchanged until the board says how it ended
+_SETTLE = {}                # an Accept card's tap neither served nor in outcomes -> when the board was last asked (R13)
+DONE_LINGER = 600
+LEAVE_WAIT = 60             # a leaving tap whose ending the board has not told by then just leaves (A1.4)
+OUTCOMES_KEEP, OUTCOMES_DAYS = 500, 30
 VIA = DATA / "tap-via.json"  # comment url -> the agent that sent it for the reviewer
 SAID = DATA / "tap-said.json"  # comment url -> when the reviewer sent it himself through TapSpace (say with no via)
 
@@ -1940,19 +1964,6 @@ def _me():
     return TAPS["me"]
 
 
-_GOAL = re.compile(r"^\s*-\s*\[([ xX])\]\s*(.+?)\s*$")
-
-
-def _goals(body):
-    out = []
-    for line in (body or "").splitlines():
-        m = _GOAL.match(line)
-        if m:
-            text = re.sub(r"\*\*(.+?)\*\*", r"\1", m.group(2)).strip()
-            out.append({"text": text, "done": m.group(1) != " "})
-    return out
-
-
 def _has(names, family):
     """Any label name in this family (exact, any case): flightdeck:fly:csat is attribution, not fly."""
     fam = {f.casefold() for f in family}
@@ -1962,10 +1973,6 @@ def _has(names, family):
 def _epoch(iso):
     """GitHub's UTC stamp (2026-10-15T19:04:05Z) as epoch seconds."""
     return calendar.timegm(time.strptime(iso[:19], "%Y-%m-%dT%H:%M:%S"))
-
-
-def _too_old(iso):
-    return bool(iso) and time.time() - _epoch(iso) > TAP_KEEP_CLOSED
 
 
 _FENCE = re.compile(r"^\s*(?:```|~~~)")
@@ -1983,104 +1990,7 @@ def _unfenced(body):
     return out
 
 
-def _live_goals(body):
-    """[(text, checked)] the way Flightdeck counts goals (goalsFrom): every - [ ] / - [x] line outside
-    a fence; a goal whose whole text is struck through is cancelled and left out."""
-    out = []
-    for line in _unfenced(body):
-        m = _GOAL.match(line)
-        if not m:
-            continue
-        text = re.sub(r"\s*_\([^)]*\)_\s*$", "", m.group(2).replace("**", "")).strip()
-        if re.fullmatch(r"~~[\s\S]+~~", text):
-            continue
-        out.append((" ".join(text.split()), m.group(1) != " "))
-    return out
-
-
-def _gql(q, repo, n):
-    """One read-only GraphQL call about issue n of repo; the issue node."""
-    owner, name = repo.split("/", 1)
-    return json.loads(_gh("api", "graphql", "-f", "query=" + q, "-f", "o=" + owner, "-f", "r=" + name,
-                          "-F", f"n={int(n)}"))["data"]["repository"]["issue"]
-
-
-_CLOSER = {}                 # (repo, n, closedAt) -> "none" | "pr" | "commit", once GitHub says
-_Q_CLOSER = ("query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issue(number:$n){"
-             "timelineItems(itemTypes:[CLOSED_EVENT],last:1){nodes{... on ClosedEvent{closer{__typename}}}}}}}")
-
-
-def _closer_of(repo, n, closed_at):
-    """What closed the issue: "none" (a person or the board), "pr" or "commit" (a merge that said
-    closes #n), or None while GitHub cannot say (its timeline lags a fresh close)."""
-    k = (repo, int(n), closed_at)
-    if k in _CLOSER:
-        return _CLOSER[k]
-    try:
-        nodes = _gql(_Q_CLOSER, repo, n)["timelineItems"]["nodes"]
-    except Exception:
-        return None
-    if not nodes:
-        return None
-    kind = ((nodes[-1] or {}).get("closer") or {}).get("__typename")
-    _CLOSER[k] = {"PullRequest": "pr", "Commit": "commit"}.get(kind, "none")
-    return _CLOSER[k]
-
-
-_TICK = {}                   # (repo, n, sha1 of the body) -> epoch of the last goal change, or None
-_Q_EDITS = ("query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issue(number:$n){"
-            "createdAt userContentEdits(last:20){totalCount nodes{editedAt diff}}}}}")
-
-
-def _tick_at(repo, n, body):
-    """When the body's goals last changed (epoch), from GitHub's saved revisions of it; None when that
-    cannot be told. lastEditedAt is no stand-in: the board rewrites the body after landing."""
-    k = (repo, int(n), hashlib.sha1((body or "").encode()).hexdigest())
-    if k in _TICK:
-        return _TICK[k]
-    try:
-        iss = _gql(_Q_EDITS, repo, n)
-        edits = iss["userContentEdits"]
-        revs = sorted((e for e in edits["nodes"] or [] if e and e.get("editedAt")), key=lambda e: e["editedAt"])
-        cur = _live_goals(body)
-        same = lambda e: e.get("diff") is not None and _live_goals(e["diff"]) == cur
-        if not revs:
-            out = _epoch(iss["createdAt"])              # never edited: the goals are as filed
-        elif not same(revs[-1]):
-            out = None                                  # the newest saved revision is not this body
-        else:
-            j = len(revs) - 1
-            while j > 0 and same(revs[j - 1]):
-                j -= 1
-            out = _epoch(revs[j]["editedAt"]) if j > 0 or edits["totalCount"] <= len(revs) else None
-    except Exception:
-        return None
-    _TICK[k] = out
-    return out
-
-
-PHASE_WORD = {"proposed": "Proposed", "enroute": "Flying", "holding": "Needs you", "landed": "Landed",
-              "done": "Done", "closed": "Closed"}
-
-
-def _phase(repo, n, iss, msgs, prev):
-    """Hayden's five states plus closed, from GitHub alone (CONTRACT section 2), first match wins."""
-    if iss["state"] != "OPEN":
-        if str(iss.get("stateReason") or "").upper() != "COMPLETED":
-            return "closed"
-        by = _closer_of(repo, n, iss.get("closedAt"))
-        if by is None:                                  # unknown yet: never claim done unproven
-            return prev if prev in ("done", "closed") else "closed"
-        return "done" if by == "none" else "closed"
-    if _has([l["name"] for l in iss["labels"]], TAP_NEEDS_REPLY):
-        return "holding"
-    said = [_epoch(m["ts"]) for m in msgs if m["who"] == "tap"]
-    goals = _live_goals(iss["body"])
-    if goals and all(done for _, done in goals):
-        tick = _tick_at(repo, n, iss["body"])
-        if tick is None or (said and max(said) > tick):
-            return "landed"
-    return "enroute" if said else "proposed"
+PHASE_WORD = {"proposed": "Proposed", "enroute": "Flying", "holding": "Needs you", "landed": "Landed", "done": "Done"}
 
 
 def _undash(s):
@@ -2113,7 +2023,8 @@ def _readable(md, me, cap=600):
 
 
 def _ask(iss, me):
-    """The question a holding tap waits on: the newest comment not by me that mentions @me."""
+    """The question a colleague pilot put to me in a comment (read only while needs-reply is on): the newest comment
+    not by me that mentions @me."""
     hit = re.compile(rf"(?<![\w/-])@{re.escape(me)}(?![\w-])", re.I)
     for c in reversed(iss["comments"]):
         if c["author"]["login"].casefold() != me.casefold() and hit.search(c["body"] or ""):
@@ -2250,118 +2161,239 @@ def _is_mine(iss):
         _has([l["name"] for l in iss["labels"]], TAP_JOURNEY)
 
 
-def _tap(repo, number, iss):
-    me = _me()
-    via = _via()
+def _residue(key, iss):
+    """What a tap's issue adds to its board row (R9: the board carries none of it): the thread (who, words, when, the
+    seen mark, its url, the agent that sent it), replying, when it was filed, closed and last spoken in, the fly and
+    needs-reply labels, a colleague pilot's question (only while needs-reply is on: the board shows that wait as en
+    route), the proof images in its body, and its title (R8's last resort)."""
+    me, via = _me(), _via()
     labels = [l["name"] for l in iss["labels"]]
-    msgs = []
-    for c in iss["comments"]:
-        mine = c["author"]["login"] == me
-        seen = any(g["content"] == "EYES" for g in c.get("reactionGroups") or [])
-        msgs.append({"who": "you" if mine else "tap", "body": c["body"],
-                     "ts": c["createdAt"], "seen": seen, "url": c["url"],
-                     "via": via.get(c["url"], "")})
-    tap_msgs = [m for m in msgs if m["who"] == "tap"]
-    # legacy status, kept for old clients (landed here means closed)
-    if iss["state"] != "OPEN":
-        status = "landed"
-    elif _has(labels, TAP_NEEDS_REPLY):
-        status = "needs-you"
-    elif tap_msgs:
-        status = "flying"
-    else:
-        status = "boarding"
-    key = f"{repo}#{number}"
-    prev = next((t.get("phase") for t in TAPS["items"] if t["key"] == key), None)
-    phase = _phase(repo, number, iss, msgs, prev)
-    return {"key": key, "repo": repo, "number": number, "initial": _initial(repo.split("/")[-1]),
-            "title": iss["title"], "url": iss["url"], "status": status,
-            "goals": _goals(iss["body"]), "messages": msgs,
+    msgs = [{"who": "you" if c["author"]["login"] == me else "tap", "body": c["body"], "ts": c["createdAt"],
+             "seen": any(g["content"] == "EYES" for g in c.get("reactionGroups") or []), "url": c["url"],
+             "via": via.get(c["url"], "")} for c in iss["comments"]]
+    is_open = iss["state"] == "OPEN"
+    needs = is_open and _has(labels, TAP_NEEDS_REPLY)
+    return {"title": iss["title"], "url": iss["url"], "messages": msgs,
             # the tap has your latest message (👀) and has not answered yet
-            "replying": iss["state"] == "OPEN" and bool(msgs) and msgs[-1]["who"] == "you"
-                        and msgs[-1]["seen"],
+            "replying": is_open and bool(msgs) and msgs[-1]["who"] == "you" and msgs[-1]["seen"],
             "created": iss["createdAt"], "closed": iss.get("closedAt"),
             "last": msgs[-1]["ts"] if msgs else iss["createdAt"],
-            "phase": phase, "phase_word": PHASE_WORD[phase],
-            "ask": _ask(iss, me) if phase == "holding" else None,
-            "fly_requested": _has(labels, TAP_FLY),
-            "proof": _proof(key, iss["body"])}
+            "fly_requested": _has(labels, TAP_FLY), "needs_reply": needs,
+            "ask": _ask(iss, me) if needs else None, "proof": _proof(key, iss["body"])}
+
+
+def _utc():
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _journey(key):
+    """A tap's journey as the board names it: its issue url, lower-cased (R5)."""
+    return ("https://github.com/" + key.replace("#", "/issues/")).lower()
+
+
+def _unread(key):
+    """A tap's residue until its issue is first read: no thread, labels or proof yet, its url from its key, last
+    spoken in when TapSpace first saw it (so it sorts as new)."""
+    return {"unread": True, "title": "", "url": "https://github.com/" + key.replace("#", "/issues/"), "messages": [],
+            "replying": False, "created": "", "closed": None, "last": _utc(), "fly_requested": False,
+            "needs_reply": False, "ask": None, "proof": []}
+
+
+def _word(label, phase):
+    """A tap's word (R7): the board's label without its leading glyph, in the board's own words and case;
+    PHASE_WORD's when nothing is left."""
+    return _undash(re.sub(r"^\W+", "", label or "").strip()) or PHASE_WORD[phase]
+
+
+def _outcome_of(r):
+    """How a done journey ended (R11), from its board row or its read answer: shipped, aborted or closed."""
+    said = {r.get("status"), r.get("event")}
+    return "shipped" if said & {"accepted", "shipped"} else "aborted" if said & {"aborted", "discarded"} else "closed"
+
+
+def _item(key, row, gh, prev):
+    """One served tap (R6 to R10): the board row's phase, word, goals, title and question over the tap's GitHub
+    residue gh; prev is the tap as last served. A fog row (unread, or no phase or label the board names) keeps
+    prev's phase, word, goals, question and outcome. None while there is nothing true to show: a first row in fog,
+    or no title from the board or GitHub (never the key)."""
+    phase = _PHASE_OF.get(row.get("phase"))
+    fog = row.get("read") is False or not phase or not row.get("label")
+    if fog and not prev:
+        return None
+    if fog:
+        phase, word, goals, outcome = prev["phase"], prev["phase_word"], prev["goals"], prev.get("outcome")
+    else:
+        word = _word(row["label"], phase)
+        goals = [{"text": g.get("text") or "", "done": bool(g.get("checked"))} for g in row.get("goalList") or []
+                 if not g.get("standard") and not g.get("cancelled")]
+        outcome = _outcome_of(row) if phase == "done" else None
+    title = row.get("title") or row.get("headline") or gh["title"]
+    if not title:
+        return None
+    done, a = phase == "done", row.get("ask") or {}
+    if done:
+        ask = None
+    elif fog:
+        ask = prev["ask"]                       # a fog row carries no ask: keep the question
+    elif a.get("question"):
+        opts = ", ".join(o["label"] for o in a.get("options") or [] if o.get("label"))
+        text = _undash(a["question"] + (f" ({opts})" if opts else ""))
+        old = prev and prev.get("ask") or {}
+        ask = {"text": text, "url": gh["url"], "at": old["at"] if old.get("text") == text else _utc()}
+    else:
+        ask = gh["ask"]                         # a colleague pilot's question: set only while needs-reply is on
+    repo, n = key.split("#")
+    return {"key": key, "repo": repo, "number": int(n), "initial": _initial(repo.split("/")[-1]), "title": title,
+            "url": gh["url"],
+            "status": "landed" if done else "needs-you" if phase == "holding" or gh["needs_reply"] else
+                      "boarding" if phase == "proposed" else "flying",
+            "goals": goals, "messages": gh["messages"], "replying": gh["replying"] and not done,
+            "created": gh["created"], "closed": gh["closed"], "last": gh["last"], "phase": phase,
+            "phase_word": word, "ask": ask, "fly_requested": gh["fly_requested"], "proof": gh["proof"],
+            **({"outcome": outcome} if done else {})}
 
 
 _ORDER = {"needs-you": 0, "flying": 1, "boarding": 2, "landed": 3}
 
 
-def _publish(items):
-    items.sort(key=lambda t: t["last"], reverse=True)       # newest first...
-    items.sort(key=lambda t: _ORDER[t["status"]])          # ...within each status
-    old, known = TAPS["items"], TAPS["fetched"]
-    TAPS.update({"items": items, "fetched": time.time(), "error": ""})
-    if items == old:
+def _publish(items, error=""):
+    """Serves the composed items, needs you first, then flying, boarding and done (newest first within each), and
+    the board's plain sentence (R12). Any change wakes every client: the fleet on /api/agents shows taps too."""
+    items.sort(key=lambda t: t["last"], reverse=True)
+    items.sort(key=lambda t: _ORDER[t["status"]])
+    old = (TAPS["items"], TAPS["error"])
+    TAPS.update(items=items, fetched=time.time(), error=error)
+    if (items, error) != old:
+        _bump("taps", "agents")
+
+
+def _kept(m):
+    """tap_outcomes as kept (R11): the newest OUTCOMES_KEEP of the last OUTCOMES_DAYS."""
+    cut = time.time() - OUTCOMES_DAYS * 86400
+    return dict(sorted(((k, v) for k, v in m.items() if v.get("at", 0) > cut),
+                       key=lambda kv: kv[1]["at"])[-OUTCOMES_KEEP:])
+
+
+def _outcome(key, o):
+    """Keeps how a tap ended in the state file (tickets.json tap_outcomes: {key: {outcome, at}}, _kept) and serves
+    the map as /api/taps outcomes, so a card about the tap stays settled after its done item leaves (R11, R13).
+    o None forgets it: the tap is on the board again and open, and outcomes never names a listed open tap (A1.3)."""
+    if TAPS["outcomes"].get(key) == o:
         return
-    _bump("taps", "agents")      # the fleet on /api/agents shows taps too
-    before = {t["key"]: len(t["messages"]) for t in old}
-    for t in items if known else []:
-        said = [m for m in t["messages"][before.get(t["key"], len(t["messages"])):] if m["who"] == "tap"]
-        if said:
-            _push(t["title"], said[-1]["body"], key=t["key"])
+    with _lock:
+        state = _load()
+        m = {k: v for k, v in (state.get("tap_outcomes") or {}).items() if k != key}
+        state["tap_outcomes"] = kept = _kept({**m, **({key: {"outcome": o, "at": time.time()}} if o else {})})
+        _save(state)
+    TAPS["outcomes"] = {k: v["outcome"] for k, v in kept.items()}
+    _bump("taps", "agents")
 
 
-def _refresh_taps():
-    me = _me()
-    # label:a,b is GitHub's OR; repeating --label would AND them. Newest first, so the cap never
-    # crowds out a live tap behind old closed ones.
-    found = json.loads(_gh("search", "issues", "label:" + ",".join(TAP_JOURNEY), "--author", me,
-                           "--limit", "60", "--sort", "updated",
-                           "--json", "repository,number,state,closedAt"))
-    items, listed = [], set()
-    for f in found:
-        repo = f["repository"]["nameWithOwner"]
-        listed.add(f"{repo}#{f['number']}")
-        if f["state"] != "open" and _too_old(f.get("closedAt")):
-            continue
-        iss = _issue(repo, f["number"])
-        if _is_mine(iss):
-            items.append(_tap(repo, f["number"], iss))
-    # GitHub search lags a new issue by minutes: a tap someone just talked to (hot) that search does not
-    # list yet stays, up to TAP_SEARCH_LAG, instead of vanishing until the index catches up
-    now = time.time()
-    for key in list(HOT):
-        _UNLISTED.setdefault(key, now)
-    for key in list(_UNLISTED):
-        if key in listed or now - _UNLISTED[key] > TAP_SEARCH_LAG:
-            _UNLISTED.pop(key, None)
-            continue
-        repo, num = key.split("#")
-        try:
-            iss = _issue(repo, num)
-        except Exception:
-            iss = None
-        if not iss or not _is_mine(iss) or (iss["state"] != "OPEN" and _too_old(iss.get("closedAt"))):
-            _UNLISTED.pop(key, None)
-            continue
-        items.append(_tap(repo, int(num), iss))
-    _publish(items)
-
-
-def _refresh_hot():
-    """Re-reads only the taps someone is talking to right now (one gh call each)."""
-    now = time.time()
-    for k in [k for k, until in HOT.items() if until < now]:
-        HOT.pop(k, None)
-    if not HOT:
+def _read_issue(t):
+    """One gh read of the issue t names (owner/repo#n, any case): learns the repo's GitHub spelling from the issue's
+    own url (R5) and keeps its residue under GitHub's key. A pilot comment that came since the last read pushes; a
+    first read never does, so neither a boot, a new tap nor a reconnect pushes old comments (R14). A failed read
+    changes nothing: the tap keeps what it had, and _TRIED spaces the next try. So does an issue GitHub answers
+    from another repo or number (moved or renamed): only the case of a name is learned, never a different tap."""
+    repo, n = t.split("#")
+    try:
+        iss = _issue(repo, n)
+        canon, num = _JOURNEY.match(iss["url"]).groups()
+        if canon.lower() != repo.lower() or num != n:
+            return
+        new = _residue(f"{canon}#{n}", iss)
+    except Exception:
         return
-    items = list(TAPS["items"])
-    for key in list(HOT):
-        repo, num = key.split("#")
-        iss = _issue(repo, num)
-        if not _is_mine(iss) or (iss["state"] != "OPEN" and _too_old(iss.get("closedAt"))):
+    _CANON[repo.lower()] = canon
+    key = f"{canon}#{n}"
+    old = _ISSUES.get(key)
+    _ISSUES[key] = new
+    said = [m for m in new["messages"][len(old["messages"]):] if m["who"] == "tap"] \
+        if old and not old.get("unread") else []
+    if said:
+        _push(iss["title"], said[-1]["body"], key=key)
+
+
+def _compose():
+    """One pass of _taps_loop, the only writer of TAPS (R14). BOARD's rows over each tap's GitHub residue become the
+    served items (_item). A row the board itself lists as done is a done item at once, at boot too (A1.4). A tap
+    that left the board is served as it was until the board says how it ended, at most LEAVE_WAIT; done, it lingers
+    DONE_LINGER as a done item (R11); else it just leaves, with no ending invented (A1.4). Then at most one slow
+    call: a board read of how a leaving tap ended, else an issue read (a repo whose spelling is not known yet, a tap
+    not read yet, a hot one), else a board read for an Accept card's tap nobody saw end (R13). After a slow call it
+    kicks itself, so a board change waits behind at most one call (a gh read, normally 1 to 2 s; a board read, at
+    most 8 s)."""
+    snap = BOARD.snapshot()
+    if not snap["loaded"]:
+        if TAPS["error"] != snap["error"]:
+            TAPS["error"] = snap["error"]
+            _bump("taps")
+        return
+    now = time.time()
+    for key in [k for k, until in list(HOT.items()) if until < now]:
+        HOT.pop(key, None)
+    live, unkeyed = {}, []
+    for journey, row in snap["rows"].items():
+        m = _JOURNEY.match(journey.lower())
+        if m and m[1] in _CANON:
+            live[f"{_CANON[m[1]]}#{m[2]}"] = row
+        elif m:
+            unkeyed.append(f"{m[1]}#{m[2]}")                    # never served under the board's lower case (R5)
+    prev = {t["key"]: t for t in TAPS["items"]}
+    for key in _ON_BOARD - live.keys():                         # left the board since the last pass
+        if key in prev:
+            if prev[key]["phase"] == "done":
+                _DONE[key] = (now + DONE_LINGER, prev[key])
+            else:
+                _LEAVING[key] = (now, prev[key])
+    _ON_BOARD.clear()
+    _ON_BOARD.update(live)
+    for key in [k for k, (until, _) in list(_DONE.items()) if until <= now or k in live]:
+        del _DONE[key]
+    for key in [k for k, (since, _) in list(_LEAVING.items()) if now - since >= LEAVE_WAIT or k in live]:
+        del _LEAVING[key]
+    for key in [k for k in list(_SETTLE) if k in live or k in _DONE or k in TAPS["outcomes"]]:
+        _SETTLE.pop(key, None)
+    for key in [k for k in _ISSUES if k not in live and k not in _LEAVING]:
+        del _ISSUES[key]
+    items = []
+    for key, row in live.items():
+        if key not in _ISSUES:
+            _ISSUES[key] = _unread(key)
+        was = prev.get(key)
+        it = _item(key, row, _ISSUES[key], was)
+        if not it:
             continue
-        fresh = _tap(repo, int(num), iss)
-        items = [fresh if t["key"] == key else t for t in items]
-        if not any(t["key"] == key for t in items):
-            items.append(fresh)
-            _UNLISTED.setdefault(key, time.time())      # the last search did not list it: keep it (_refresh_taps)
-    _publish(items)
+        if was and (it["phase"], it["phase_word"], it["goals"]) != (was["phase"], was["phase_word"], was["goals"]):
+            _hot(key, 0.15)                                     # its board row moved: read its issue again (R9)
+        _outcome(key, it.get("outcome"))                        # kept when done; forgotten when open again (A1.3)
+        items.append(it)
+    if TAPS["fetched"] or all(t in _TRIED for t in unkeyed):    # the first list waits until each repo was tried once
+        _publish(items + [it for _, it in _LEAVING.values()] + [it for _, it in _DONE.values()], snap["error"])
+    due = lambda t, wait: now - _TRIED.get(t, 0) >= wait
+    if _LEAVING:                                                # first: it is served as it was until this answers
+        key = next(iter(_LEAVING))
+        _, last = _LEAVING.pop(key)
+        r = BOARD.read(_journey(key))
+        if r and r.get("phase") == "done":                     # else it just leaves: no ending is invented (A1.4)
+            o = _outcome_of(r)
+            _outcome(key, o)
+            _DONE[key] = (time.time() + DONE_LINGER, dict(
+                last, phase="done", phase_word=_word((r.get("board") or {}).get("label"), "done"), status="landed",
+                ask=None, replying=False, outcome=o))
+    elif (t := next((t for t in unkeyed if due(t, TAP_RETRY)), None) or
+            next((k for k in live if _ISSUES[k].get("unread") and due(k, TAP_RETRY)), None) or
+            next((k for k in live if k in HOT and due(k, TAP_HOT_EVERY)), None)):
+        _TRIED[t] = now
+        _read_issue(t)
+    elif (key := next((k for k, at in list(_SETTLE.items()) if now - at >= DONE_LINGER), None)):
+        _SETTLE[key] = now
+        r = BOARD.read(_journey(key))
+        if r and r.get("phase") == "done":
+            _outcome(key, _outcome_of(r))
+    else:
+        return
+    _taps_kick.set()
 
 
 TAP_FLY_LABEL = {"color": "0e8a16", "description": "Flightdeck: fly this journey without a tap (capped, never auto-accepted)"}
@@ -2461,17 +2493,14 @@ def _watch_loop():
 
 
 def _taps_loop():
-    last_full = 0.0
+    """Composes the taps whenever the board changes (BOARD's on_change), a tap is talked to (_hot) or a refresh asks;
+    every TAP_HOT_EVERY while a tap is hot, else every TAP_RETRY."""
     while True:
         try:
-            if time.time() - last_full >= TAP_REFRESH:
-                _refresh_taps()
-                last_full = time.time()
-            else:
-                _refresh_hot()
-        except Exception as e:
-            TAPS["error"] = str(e)
-        _taps_kick.wait(TAP_HOT_EVERY if HOT else TAP_REFRESH - (time.time() - last_full))
+            _compose()
+        except Exception as e:          # a fault in this file: board.py and the gh reads fail quietly on their own
+            print(time.strftime("%Y-%m-%d %H:%M:%S"), "taps", repr(e)[:240], flush=True)
+        _taps_kick.wait(TAP_HOT_EVERY if HOT else TAP_RETRY)
         _taps_kick.clear()
 
 
@@ -2641,7 +2670,7 @@ class H(BaseHTTPRequestHandler):
             self._json({"pending": pend})
             return
         if path == "/api/taps":
-            self._json({k: TAPS[k] for k in ("me", "items", "fetched", "error")})
+            self._json({k: TAPS[k] for k in ("me", "items", "fetched", "error", "outcomes")})
             return
         if path == "/api/taps/proof":
             # one proof image of one of your taps, as its proof[].url names it (local or bearer, like /api/taps)
@@ -3154,10 +3183,16 @@ if __name__ == "__main__":
     if not STATE.exists():
         _save({"tickets": []})
     TOKEN = _token()
+    TAPS["outcomes"] = {k: v["outcome"] for k, v in _kept(_load().get("tap_outcomes") or {}).items()}
     threading.Thread(target=_agents_watch, daemon=True).start()
     threading.Thread(target=_scan_sessions, daemon=True).start()
-    threading.Thread(target=_taps_loop, daemon=True).start()
-    threading.Thread(target=_watch_loop, daemon=True).start()
+    import board                        # the live server's tap source (R4); tests never import it
+    if board.enabled():
+        BOARD = board.Board(base=os.environ.get("TAPSPACE_BOARD_URL") or None,
+                            key=os.environ.get("TAPSPACE_BOARD_KEY") or None, on_change=_taps_kick.set)
+        BOARD.start()
+        threading.Thread(target=_taps_loop, daemon=True).start()
+        threading.Thread(target=_watch_loop, daemon=True).start()
     links.start(DATA, _bump, titles=lambda: {n: _title(i) for n, i in _agents().items()})
     print(f"TapSpace serving on http://127.0.0.1:{PORT}")
     ThreadingHTTPServer(("127.0.0.1", PORT), H).serve_forever()
