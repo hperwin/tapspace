@@ -14,8 +14,8 @@
 # on an unanswered question. Each master owns its cards (by the session that posts them, or --owner)
 # and publishes a goal card. Mac app polish is the lead, so everything else folds under it, and its
 # thread holds two update cards (tap.py card): one with a timeline and a question Hayden answered, one
-# with a progress bar, two items, two pictures to approve and an open question. Taps are read live
-# from GitHub by the scratch server (read-only).
+# with a progress bar, two items, two pictures to approve and an open question. No taps: a scratch
+# server reads no Flightdeck board (TAPSPACE_DATA is set and TAPSPACE_BOARD_URL is not).
 #
 # A scratch server never pushes to a phone (it has no APNs keys), a seeded one reads only its own
 # Claude Code folder, and seed.sh only ever wipes a folder it made itself.

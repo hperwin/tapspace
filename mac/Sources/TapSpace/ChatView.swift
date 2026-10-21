@@ -140,7 +140,7 @@ struct RailView: View {
 
     private var tapsEmptyText: String {
         if store.taps.fetched > 0 { return "No taps flying under your name." }
-        return store.taps.error.isEmpty ? "Looking for your taps…" : "Couldn’t reach GitHub: " + store.taps.error
+        return store.taps.error.isEmpty ? "Looking for your taps…" : store.taps.error
     }
 
     private func agentSub(_ a: Agent) -> String {

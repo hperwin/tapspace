@@ -101,9 +101,11 @@ struct CardItemShown {
 
     init(_ it: CardItem, now: Bool) {
         if let p = it.phase.flatMap(TapPhase.init(rawValue:)) {
-            let was = it.was?.phase.flatMap(TapPhase.init(rawValue:)) ?? p
-            let shown = now ? p : was
-            word = now && !it.word.isEmpty ? it.word : shown.word
+            let was = it.was?.phase.flatMap(TapPhase.init(rawValue:))
+            let shown = now ? p : was ?? p
+            // The word each card showed: the served one now, the earlier card's own before; else the table's.
+            let said = now ? it.word : was == nil ? "" : it.was?.word ?? ""
+            word = said.isEmpty ? shown.word : said
             color = switch shown {
             case .holding: .tapBlue
             case .landed, .done: .up

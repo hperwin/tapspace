@@ -171,6 +171,60 @@ enum HarnessCard {
         anim.sync(thread: "u", loaded: true, keys: [], fly: [])
         anim.sync(thread: "t", loaded: true, keys: keys, fly: [], cards: cards, mark: { 4 }, plays: true)
         expect(!keys.contains(where: anim.opens), "a card drawn at rest at an open never plays at a later open")
+
+        // Endings: a done tap and a tap that left the list read their outcome; open taps and an older server as before.
+        let ends = decode(TapsResponse.self, [
+            "items": [["key": "o/a#1", "phase": "done", "phase_word": "aborted", "outcome": "aborted"],
+                      ["key": "o/c#2", "phase": "done", "outcome": "closed"],
+                      ["key": "o/s#3", "phase": "done", "phase_word": "shipped", "outcome": "shipped"],
+                      ["key": "o/d#4", "phase": "done"],
+                      ["key": "o/l#5", "phase": "landed", "phase_word": "ready for sign-off"]],
+            "outcomes": ["o/a#1": "aborted", "o/l#5": "aborted", "o/g#6": "shipped", "o/h#7": "aborted", "o/i#8": "closed"],
+            "fetched": 1.0])
+        let tp = { (k: String) in ends?.tapPhase(k) }
+        expect(ends?.items.count == 5 && ends?.outcomes.count == 5, "items and outcomes decode")
+        expect(tp("o/a#1") == .closed && tp("o/c#2") == .closed && tp("o/s#3") == .done && tp("o/d#4") == .done,
+               "a done tap: aborted or closed reads closed, shipped or no outcome reads done")
+        let aborted = ends?.items.first
+        expect(aborted?.chipState == "closed" && aborted?.phaseLabel == "aborted" && aborted?.cardKind == nil,
+               "an aborted tap: the closed chip, the server's word, no card")
+        expect(tp("o/l#5") == .landed, "a listed tap's own phase wins over a recorded ending (reopened)")
+        expect(tp("o/g#6") == .done && tp("o/h#7") == .closed && tp("o/i#8") == .closed && tp("o/z#9") == nil,
+               "a tap that left the list reads its recorded ending; an unknown one reads nothing")
+        expect(CardSaid.settled(tp("o/g#6"))?.word == "Accepted" && CardSaid.settled(tp("o/s#3"))?.word == "Accepted"
+               && CardSaid.settled(tp("o/h#7")) == nil && CardSaid.settled(tp("o/a#1")) == nil
+               && CardSaid.settled(tp("o/l#5")) == nil && CardSaid.settled(tp("o/z#9")) == nil,
+               "an Accept settles Accepted only when shipped; aborted, closed, open or unknown keep the buttons")
+        expect(ends?.items.last?.phaseLabel == "ready for sign-off" && ends?.items.last?.cardKind == .landed,
+               "a landed tap's card label is the board's word")
+        let older = decode(TapsResponse.self, ["items": [["key": "o/d#4", "phase": "done"], ["key": "o/x#5", "phase": "closed"]],
+                                                "outcomes": ["o/y#6": 3]])
+        expect(older?.items.count == 2 && older?.outcomes == [:] && older?.tapPhase("o/d#4") == .done
+               && older?.tapPhase("o/x#5") == .closed, "an older server (or a bad outcomes map): no outcomes, phases as served")
+
+        // Waits on you: the board's question, or a pilot's comment question the board keeps en route; ring and chip
+        // keep the board's phase.
+        let asks = decode(TapsResponse.self, ["items": [
+            ["key": "o/q#1", "phase": "enroute", "phase_word": "en route", "status": "needs-you",
+             "ask": ["text": "Which league first?", "url": "u", "at": "2026-10-21T22:00:00Z"]],
+            ["key": "o/h#2", "phase": "holding", "status": "needs-you", "ask": ["text": "Ship it? (Yes, No)", "url": "u", "at": ""]],
+            ["key": "o/f#3", "phase": "enroute", "status": "flying"],
+            ["key": "o/o#4", "status": "needs-you"]]])?.items ?? []
+        expect(asks.map(\.waits) == [true, true, false, true], "waits on you: holding, or status needs-you; flying does not")
+        expect(asks.first?.cardKind == .holding && asks.first?.chipState == "enroute" && asks.first?.phaseLabel == "en route",
+               "a comment question: the question card, the en route chip and word")
+        expect(asks.count == 4 && asks[1].cardKind == .holding && asks[2].cardKind == nil && asks[3].cardKind == nil,
+               "a board question shows its card; en route shows none; an older server's needs-you keeps today's (no card)")
+
+        // The change beat: the earlier card's own word before, the served word now; an older card's: the table's.
+        let beat = row(cardRow(["v": 1, "line": "x", "items": [
+            ["ref": "o/r#1", "kind": "tap", "phase": "landed", "word": "ready for sign-off", "was": ["phase": "enroute", "word": "en route"]],
+            ["ref": "o/r#2", "kind": "tap", "phase": "landed", "word": "ready for sign-off", "was": ["phase": "enroute"]],
+            ["ref": "o/r#3", "kind": "tap", "phase": "landed", "word": "ready for sign-off", "was": ["word": "stray"]]]]))?.card?.items ?? []
+        expect(beat.first?.was?.word == "en route" && beat.count == 3, "a card item's was word decodes")
+        expect(beat.map { CardItemShown($0, now: false).word } == ["en route", "Flying", "Landed"]
+               && beat.map { CardItemShown($0, now: true).word } == Array(repeating: "ready for sign-off", count: 3),
+               "the beat starts on the earlier card's word (the table's without one) and lands on the served word")
         return failed
     }
 }
