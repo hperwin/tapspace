@@ -242,7 +242,7 @@ workspace where any number of agents can be connected at once:
 - **Taps.** Your Flightdeck journeys, read live from Flightdeck's own board
   with the Flightdeck sign-in Claude Code already has on this Mac (see
   Security): one stream, and a read every 10 seconds while the stream is
-  down, so the list matches the board phase for phase within seconds. A
+  down, so the list matches the board phase for phase. A
   tap's `phase` is one of the board's five: `proposed`, `enroute` (the
   board's "en route"), `holding`, `landed` or `done`. Its word is the
   board's own ("en route", "needs you", "ready for sign-off"). A journey
