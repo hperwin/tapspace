@@ -130,7 +130,7 @@ struct MuddiLandedCard: View {
         let actions = MuddiTapActions.shared
         let items = tap.proofItems
         let busy = actions.busy.contains(tap.key)
-        MuddiCardLabel(text: "Landed", color: .up)
+        MuddiCardLabel(text: tap.phaseLabel, color: .up)
         if items.isEmpty {
             Text("No pictures in the issue yet.")
                 .font(.system(size: 12.5))

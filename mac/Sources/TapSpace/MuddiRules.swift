@@ -43,7 +43,8 @@ enum MuddiOrder {
     }
 }
 
-/// Hayden's five tap states plus closed (closed but not done: shown greyed).
+/// Hayden's five tap states plus closed: a done tap aborted or closed without a sign-off (and an older server's
+/// closed), shown greyed.
 enum TapPhase: String {
     case proposed, enroute, holding, landed, done, closed
 
@@ -56,6 +57,15 @@ enum TapPhase: String {
         case .landed: "Landed"
         case .done: "Done"
         case .closed: "Closed"
+        }
+    }
+
+    /// A finished tap's look by how it ended: shipped is done; aborted or closed is closed; anything else nil.
+    init?(outcome: String?) {
+        switch outcome {
+        case "shipped": self = .done
+        case "aborted", "closed": self = .closed
+        default: return nil
         }
     }
 }
@@ -75,8 +85,16 @@ struct MuddiProofItem: Equatable, Identifiable {
 let muddiLegacyWords = ["needs-you": "Needs you", "flying": "Flying", "boarding": "Boarding", "landed": "Landed"]
 
 extension Tap {
-    /// nil from an older server or an unknown spelling: the legacy look stays.
-    var tapPhase: TapPhase? { phase.flatMap(TapPhase.init(rawValue:)) }
+    /// nil from an older server or an unknown spelling: the legacy look stays. A done tap that was aborted or
+    /// closed reads closed.
+    var tapPhase: TapPhase? {
+        let p = phase.flatMap(TapPhase.init(rawValue:))
+        return p == .done ? TapPhase(outcome: outcome) ?? p : p
+    }
+
+    /// It waits on Hayden: the board holds on a question, or a pilot asked in a comment (status needs-you, which an
+    /// older server sends exactly while holding). Its ring and chip still follow the board's phase.
+    var waits: Bool { tapPhase == .holding || status == "needs-you" }
 
     /// The server's word, else the phase's word, else the legacy word, else the raw status.
     var phaseLabel: String {
@@ -97,13 +115,15 @@ extension Tap {
         }
     }
 
-    /// Which card the thread shows, if any (enroute, done, closed and no phase: none).
+    /// Which card the thread shows, if any: the question whenever it waits on Hayden, else by phase (enroute, done,
+    /// closed and no phase: none).
     var cardKind: MuddiCardKind? {
-        switch tapPhase {
-        case .holding: .holding
-        case .landed: .landed
-        case .proposed: .proposed
-        default: nil
+        guard let p = tapPhase else { return nil }
+        if waits { return .holding }
+        switch p {
+        case .landed: return .landed
+        case .proposed: return .proposed
+        default: return nil
         }
     }
 
@@ -121,7 +141,7 @@ extension Tap {
         return out
     }
 
-    /// Hayden has replied to the holding question: one of his comments, or a
+    /// Hayden has replied to the question it waits on: one of his comments, or a
     /// bubble still on its way (`pending`: their timestamps), is newer than the
     /// ask. With no usable time on the ask: his is the newest message, or one
     /// is on its way. False without an ask.
@@ -132,5 +152,14 @@ extension Tap {
             return messages.contains { $0.who == "you" && $0.date > at } || pending.contains { $0 > at }
         }
         return messages.last?.who == "you" || !pending.isEmpty
+    }
+}
+
+extension TapsResponse {
+    /// A tap's phase for its face and its card: the listed tap's while it is listed, else its recorded ending's;
+    /// nil when neither knows the key.
+    func tapPhase(_ key: String) -> TapPhase? {
+        if let t = items.first(where: { $0.key == key }) { return t.tapPhase }
+        return TapPhase(outcome: outcomes[key])
     }
 }

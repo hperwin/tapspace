@@ -233,9 +233,11 @@ struct CardItemProgress: Decodable, Equatable {
     var steps: [String] = []
 }
 
-/// Taps carry phase and goals, masters state and current (no current when the steps changed).
+/// Taps carry phase, word and goals, masters state and current (no current when the steps changed).
 struct CardWas: Decodable, Equatable {
     var phase: String? = nil
+    /// The word that earlier card showed for its phase; "" from an older server.
+    var word = ""
     var goals: [Int] = []
     var state: String? = nil
     var current: Int? = nil
@@ -314,7 +316,8 @@ struct TapMessage: Decodable, Equatable {
     var date: Double { parseISO(ts) }
 }
 
-/// What a holding tap asks Hayden: the newest non-hperwin comment that mentions him. Plain text.
+/// What a tap waiting on Hayden asks: the board's question (its options after it in parentheses), or a pilot's
+/// comment question. Plain text.
 struct TapAsk: Decodable, Equatable {
     let text: String
     let url: String
@@ -344,17 +347,19 @@ struct Tap: Decodable, Equatable, Identifiable {
     let last: String
     /// the pilot is working on a reply right now
     let replying: Bool?
-    /// proposed | enroute | holding | landed | done | closed; nil from a server older than Muddi.
+    /// proposed | enroute | holding | landed | done (closed only from an older server); nil from a server older than Muddi.
     var phase: String? = nil
     /// The one word the server says to show (phase_word); nil from an older server.
     var phaseWord: String? = nil
-    /// Set only while holding (null otherwise).
+    /// Set only while it waits on Hayden (null otherwise).
     var ask: TapAsk? = nil
     /// The fly label is on: a proposed tap waiting to fly.
     var flyRequested = false
     var proof: [TapProof] = []
     /// The repo's letter for its face (the server's one rule); "" from an older server.
     var initial = ""
+    /// How a done tap ended: shipped | aborted | closed; nil while open and from an older server.
+    var outcome: String? = nil
 
     var id: String { key }
     /// "[tap] Fix the thing" -> "Fix the thing"
@@ -369,6 +374,8 @@ struct TapsResponse: Decodable, Equatable {
     var items: [Tap] = []
     var fetched: Double = 0
     var error: String = ""
+    /// Every recent ending by tap key (shipped | aborted | closed), kept after the tap leaves `items`; [:] from an older server.
+    var outcomes: [String: String] = [:]
 }
 
 struct ActivityRow: Decodable, Equatable {
@@ -618,6 +625,7 @@ extension CardWas {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: Keys.self)
         phase = (c.opt(Keys("phase")) as String?).flatMap { $0.isEmpty ? nil : $0 }
+        word = c.or(Keys("word"), "")
         goals = c.lossy(Keys("goals"))
         state = (c.opt(Keys("state")) as String?).flatMap { $0.isEmpty ? nil : $0 }
         current = c.opt(Keys("current"))
@@ -763,6 +771,7 @@ extension Tap {
         flyRequested = c.or(Keys("fly_requested"), false)
         proof = c.lossy(Keys("proof"))
         initial = c.or(Keys("initial"), "")
+        outcome = (c.opt(Keys("outcome")) as String?).flatMap { $0.isEmpty ? nil : $0 }
     }
 }
 
@@ -773,6 +782,7 @@ extension TapsResponse {
         items = c.lossy(Keys("items"))
         fetched = c.or(Keys("fetched"), 0)
         error = c.or(Keys("error"), "")
+        outcomes = c.or(Keys("outcomes"), [:])
     }
 }
 

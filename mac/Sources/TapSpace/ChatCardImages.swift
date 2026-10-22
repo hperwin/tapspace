@@ -157,6 +157,12 @@ struct CardSaid: Equatable {
     var color: Color
     var note = ""
     var sending = false
+
+    /// An Accept with no answer row, once its tap shipped, reads Accepted; any other phase or none: nil (the buttons
+    /// stay, an aborted or closed tap's too).
+    static func settled(_ phase: TapPhase?) -> CardSaid? {
+        phase == .done ? CardSaid(word: "Accepted", color: .up) : nil
+    }
 }
 
 /// Approve (or the card's Accept) and Not quite, with the field that spreads out of Not quite: the Visual card's
@@ -325,8 +331,8 @@ struct CardActionView: View {
         guard let v = row.state.action else {
             if fresh { return CardSaid(word: "Accepted", color: .up, note: "It shows as Done in a moment.") }
             // Accepted somewhere else (its tap card, another client): once the tap is Done the card says so too, in
-            // place of its buttons (CONTRACT 18, Glint's rule).
-            return store.tap(tap)?.tapPhase == .done ? CardSaid(word: "Accepted", color: .up) : nil
+            // place of its buttons, listed or only in the recorded endings (CONTRACT 18, Glint's rule).
+            return CardSaid.settled(store.taps.tapPhase(tap))
         }
         if v.approve {
             // An Accept on its way keeps its button ("Accepting…"), as the tap card's does: it closes the tap on

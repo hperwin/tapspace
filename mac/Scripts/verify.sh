@@ -35,12 +35,6 @@ BIN="$(swift build --scratch-path "$SCRATCH" --show-bin-path)/TapSpace"
 trap 'Scripts/seed.sh --stop "$DATA" >/dev/null 2>&1 || true' EXIT
 Scripts/seed.sh "$PORT" "$DATA"
 
-echo "==> Waiting for the scratch server to read the taps from GitHub"
-for _ in $(seq 1 60); do
-    curl -fs "$URL/api/taps" | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin)["fetched"] else 1)' && break
-    sleep 1
-done
-
 echo "==> The two masters exchange a message"
 Scripts/seed.sh --link "$DATA" || true
 

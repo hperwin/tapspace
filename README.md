@@ -239,13 +239,37 @@ workspace where any number of agents can be connected at once:
   again under the same NAME: Muddi through `muddi.sh`, any other master in
   its own folder under its own lead. On an Offline row the spin down
   control reads Clear and only takes the row off the list.
-- **Taps.** GitHub issues you authored with a Flightdeck journey label, read
-  through your `gh` login. Both label families are read: Flightdeck's
-  (`flightdeck`, `flightdeck:fly`, `flightdeck:needs-reply`) and the legacy
-  nava ones (`nava`, `auto-launch`, `needs-reply`); `TAPSPACE_TAP_LABEL` adds
-  one more journey label. Each tap shows its goals, its comments, and
-  whether your messages were seen (an 👀 reaction). Writing to a tap posts an issue comment as you. Taps
-  are scoped by issue author, so other people's taps never appear.
+- **Taps.** Your Flightdeck journeys, read live from Flightdeck's own board
+  with the Flightdeck sign-in Claude Code already has on this Mac (see
+  Security): one stream, and a read every 10 seconds while the stream is
+  down, so the list matches the board phase for phase. A tap's `phase` is
+  one of the board's five: `proposed`, `enroute` (the board's "en route"),
+  `holding`, `landed` or `done`. Its word is the
+  board's own ("en route", "needs you", "ready for sign-off"). A journey
+  the board reports as ended (signed off or cancelled) turns `done` under
+  the board's final word for it ("shipped", "aborted", or "closed" when
+  GitHub gave no reason) and lingers as done for ten minutes; one whose
+  ending the board cannot confirm simply leaves the list. The old Closed
+  phase is gone.
+  What the board does not carry still comes from GitHub through your `gh`
+  login: each tap's comments and whether your messages were seen (an 👀
+  reaction), the fly label (`flightdeck:fly`, legacy `auto-launch`), the
+  needs-reply label (`flightdeck:needs-reply`, legacy `needs-reply`) with
+  the question the pilot asked in a comment, and the proof pictures in the
+  issue body. A pilot waiting on your reply reads en route on the board, so
+  TapSpace still counts it as needing you. Fly, Accept and replies stay
+  GitHub writes: Fly adds the fly label, which is what Flightdeck reads to
+  launch a pilot; Accept closes the issue as completed, your sign-off,
+  because Flightdeck's own accept also merges the pilot's PR and needs your
+  own quoted words; a reply is an issue comment as you. All three act only
+  on issues with a journey label (`flightdeck` or `nava`;
+  `TAPSPACE_TAP_LABEL` adds one). The board
+  lists only journeys you authored, so other people's taps never appear.
+  When the sign-in is missing or ran out, or the board can't be reached
+  for a minute, the list keeps its last rows, and `/api/taps` `error` says
+  why in one plain sentence. A server on another data folder
+  (`TAPSPACE_DATA`, as seed.sh and the tests run it) reads no board unless
+  `TAPSPACE_BOARD_URL` (with `TAPSPACE_BOARD_KEY`) names one.
 
 The page, the Mac app and Glint draw a card the same way. Its head is its
 subject, never the sender (the thread already says who is talking): one
@@ -267,9 +291,10 @@ session; it reports nothing.
 
 Every agent can talk to all of your taps too: `tap.py taps`, `tap.py tap-read KEY`,
 `tap.py tap-say --as NAME KEY "text"` (posted as you, signed "Sent by NAME"), and
-`tap.py tap-watch` (blocks until any tap says something new). The server checks
-each open tap every 3 seconds with GitHub conditional requests (a 304 costs no
-rate limit), so replies show up within seconds without webhooks.
+`tap.py tap-watch` (blocks until any tap says something new, changes state or
+asks something new, and prints its question). The server checks each open tap
+every 3 seconds with GitHub conditional requests (a 304 costs no rate limit),
+so replies show up within seconds without webhooks.
 
 Endpoints: `GET /api/agents` (`{agents, links, fleet, focus}`), `GET /api/chat?agent=NAME`,
 `GET /api/chat/listen?agent=NAME`, `POST /api/chat {agent, body, images?}`,
@@ -289,7 +314,9 @@ while the taps load),
 live Claude session answers `{ok: false, error}` and ends nothing; an Offline row is cleared,
 `{ok, ended: [], cleared: true}`),
 `POST /api/agents/restart {name}` (`{ok, agent, how: "muddi" | "master"}`; 409 while a session of it still
-runs or it is already starting), `GET /api/taps`,
+runs or it is already starting),
+`GET /api/taps` (`{me, items, fetched, error, outcomes}`; `outcomes` maps each finished tap's key to shipped,
+aborted or closed for 30 days, never a tap listed open again, and a done item carries the same `outcome`),
 `POST /api/taps/say {key: "owner/repo#n", body}`, `POST /api/taps/refresh`,
 `POST /api/taps/accept {key, card?}` (your sign-off on a landed tap, never an
 agent's; with `card`, the card whose Accept you pressed, it also writes that
@@ -371,7 +398,7 @@ Keep recordings short (5 to 20 seconds, under ~60MB; the CLI enforces the cap). 
 
 ## Security
 
-The server binds to `127.0.0.1` only. Callers on this Mac need no auth; everything else, which includes every request through a tunnel, needs the bearer token in `data/token` (see "Your phone"). Reach it from elsewhere only through `tap.py pair`, never by changing the bind address.
+The server binds to `127.0.0.1` only. Callers on this Mac need no auth; everything else, which includes every request through a tunnel, needs the bearer token in `data/token` (see "Your phone"). For the taps, the server reads the Flightdeck sign-in Claude Code keeps in this Mac's login Keychain, read only: it never refreshes it (a refresh would sign Claude Code out) and never writes, logs or serves it. Reach the server from elsewhere only through `tap.py pair`, never by changing the bind address.
 
 ## Requirements
 

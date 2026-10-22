@@ -171,7 +171,7 @@ AG = {"Muddi": {"role": "lead", "title": "Muddi"}, "Claude · t · 1": {"title":
 
 
 def tap(key, phase, last, title="A tap", goals=(1, 3)):
-    """A TAPS item as _tap serves it, with done of total goals checked."""
+    """A TAPS item as _item serves it, with done of total goals checked."""
     return {"key": key, "repo": key.split("#")[0], "number": int(key.split("#")[1]), "title": title,
             "status": "flying", "phase": phase, "phase_word": S.PHASE_WORD[phase], "last": last,
             "goals": [{"text": str(i), "done": i < goals[0]} for i in range(goals[1])], "messages": [], "proof": []}
@@ -538,7 +538,7 @@ class CardFillTests(unittest.TestCase):
         c = self.fill({"line": "L", "items": [{"ref": TAP["key"]}, {"ref": "Claude · t · 1"},
                                               {"ref": "project:tapspace"}]}, thread=[a, b])
         tap_, master, project = c["items"]
-        self.assertEqual(tap_["was"], {"phase": "enroute", "goals": [1, 3]})
+        self.assertEqual(tap_["was"], {"phase": "enroute", "word": "Flying", "goals": [1, 3]})
         self.assertEqual(master["was"], {"state": "starting", "current": 1})
         self.assertNotIn("was", project)
         self.assertNotIn("was", self.fill({"line": "L", "items": [{"ref": TAP["key"]}]})["items"][0])
@@ -729,7 +729,10 @@ class CardApiTests(Taps):
         S.TAPS["me"] = "hperwin"
         iss = {"author": {"login": "hperwin"}, "title": "T", "body": "- [ ] open", "labels": [{"name": "flightdeck"}],
                "state": "OPEN", "comments": [], "url": "u", "createdAt": "2026-10-16T19:00:00Z", "closedAt": None}
-        self.assertEqual(S._tap("SnappStats/snapp-ios", 1583, iss)["initial"], "S")
+        gh = S._residue("SnappStats/snapp-ios#1583", iss)
+        self.assertEqual(S._item("SnappStats/snapp-ios#1583", {"phase": "landed", "label": "✔ ready for sign-off",
+                                                               "title": "T", "goalList": [], "read": True},
+                                 gh, None)["initial"], "S")
         self.assertEqual(self.gh_calls(), [])
 
     def test_a_short_name_is_stored_beside_the_title(self):
@@ -1171,7 +1174,7 @@ class FleetTests(Taps):
         taps = [tap("a/app#1", "holding", "2026-10-16T19:50:00Z", "Holding one"),
                 tap("a/app#2", "landed", "2026-10-16T19:30:00Z"), tap("a/app#3", "enroute", "2026-10-16T19:55:00Z"),
                 tap("a/app#4", "proposed", "2026-10-16T19:25:00Z"), tap("a/app#5", "done", "2026-10-16T19:59:00Z"),
-                tap("a/app#6", "closed", "2026-10-16T19:59:00Z")]
+                dict(tap("a/app#6", "done", "2026-10-16T19:59:00Z"), outcome="aborted")]   # aborted: done too
         chat = [self.ask_card("m5", 10, ask={"q": "Q?", "checks": [{"id": "c1", "label": "A"}], "text": False})]
         f = S._fleet(rows, taps, chat)
         self.assertEqual([x["key"] for x in f], ["a/app#1", "agent:m5", "a/app#2", "a/app#3", "agent:m1",
@@ -1212,14 +1215,16 @@ class FleetTests(Taps):
         self.assertFalse(w(moved_on))
         self.assertTrue(w([self.ask_card("m", 1, ask=ask), self.you("m", 1, 2, checks=["c1"]), self.ask_card("m", 3, ask=ask)]))
         self.assertFalse(w([self.ask_card("m", 1, ask=ask), self.ask_card("m", 3, ask=ask), self.you("m", 3, 4, checks=[])]))
-        # an Accept card is settled by its answer row, or once its tap is no longer open (accepted on its tap card or
-        # on GitHub, or closed)
+        # an Accept card is settled by its answer row, or once its tap is done, or has left with its outcome kept
         acc = self.ask_card("m", 5, images=[{"label": "One"}], action={"kind": "tap_accept", "tap": TAP["key"]})
-        for phase, waits in (("landed", True), ("holding", True), ("done", False), ("closed", False)):
+        for phase, waits in (("landed", True), ("holding", True), ("done", False)):
             with self.subTest(phase=phase):
                 self.assertEqual(w([acc], [tap(TAP["key"], phase, TAP["last"])]), waits)
         self.assertTrue(w([acc], [tap("hperwin/other-app#1", "done", TAP["last"])]))     # another tap says nothing
         self.assertTrue(w([acc], []))                                                     # not served: still waits
+        self.assertFalse(w([acc], [], {TAP["key"]: "shipped"}))                         # left the board, its ending kept
+        self.assertFalse(w([acc], [], {TAP["key"]: "aborted"}))
+        self.assertTrue(w([acc], [tap(TAP["key"], "enroute", TAP["last"])], {TAP["key"]: "aborted"}))   # reopened
         # the fleet's needs_you reads the same rule
         rows = [self.master("lead", "here", role="lead"), self.master("m", "here", last="19:40")]
         f = lambda phase: next(x for x in S._fleet(rows, [tap(TAP["key"], phase, "2026-10-16T19:50:00Z")], [acc])
@@ -1260,7 +1265,7 @@ class FocusTests(Taps):
         return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts))
 
     def his(self, ts):
-        """A tap comment the reviewer sent through TapSpace, as _tap serves it, recorded the way the say route does."""
+        """A tap comment the reviewer sent through TapSpace, as _residue reads it, recorded the way the say route does."""
         url = f"{TAP['url']}#issuecomment-{uuid.uuid4().int % 10 ** 9}"
         with S._lock:
             S.SAID.write_text(json.dumps({**S._said(), url: time.time()}))
@@ -1330,7 +1335,8 @@ class FocusTests(Taps):
         self.assertIn(his, S._said())
         self.assertNotIn(for_him, S._said())
         self.assertEqual(S._via()[for_him], "Muddi")
-        # the tap as _tap serves it: his comment, Muddi's tap-say, then Muddi's own gh comment, signed in as him too
+        # the tap's thread as _residue reads it: his comment, Muddi's tap-say, then Muddi's own gh comment, signed in
+        # as him too
         t0 = float(int(time.time()))                       # whole seconds, like GitHub's createdAt
         said = [("Ship the lineup first", his), ("On it", for_him),
                 ("Accepted: all three goals", "https://github.com/hperwin/fixture-say/issues/9#issuecomment-999")]
@@ -1339,7 +1345,7 @@ class FocusTests(Taps):
                "closedAt": None, "stateReason": None,
                "comments": [{"author": {"login": "hperwin"}, "body": b, "createdAt": self.iso(t0 + k), "url": u}
                             for k, (b, u) in enumerate(said, 1)]}
-        item = S._tap("hperwin/fixture-say", 9, iss)
+        item = dict(TAP, key=key, messages=S._residue(key, iss)["messages"])
         self.assertEqual([(m["who"], m["via"]) for m in item["messages"]], [("you", ""), ("you", "Muddi"), ("you", "")])
         self.assertEqual(S._focus([{"id": 1, "agent": "Muddi", "role": "you", "ts": t0}], [item]), key)
         # Muddi's thread stays the focus while Muddi talks on the tap (its tap-say at +2 s, its own comment at +3 s)
