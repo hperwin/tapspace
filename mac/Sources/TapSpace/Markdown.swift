@@ -41,6 +41,7 @@ enum Markdown {
         let well = dark ? NSColor.white.withAlphaComponent(0.12) : NSColor.black.withAlphaComponent(0.05)
         let out = NSMutableAttributedString()
         var prev: Line?                       // the last line with height
+        var above: CGFloat = 0                // its line spacing
         var last: [NSAttributedString.Key: Any] = [:]   // the paragraph above, for its newline
         for line in lines {
             let style = NSMutableParagraphStyle()
@@ -69,15 +70,16 @@ enum Markdown {
                 lineFont = mono
                 text = NSAttributedString(string: s, attributes: [.font: mono, .foregroundColor: ink, .codeWell: well])
             }
+            // The gap above this paragraph; TextKit already put the paragraph above's line spacing under its last line.
             switch (prev, line) {
             case (nil, .code): style.paragraphSpacingBefore = Markdown.wellPad
             case (nil, _), (_, .blank): style.paragraphSpacingBefore = 0
             case (.code, .code): style.paragraphSpacingBefore = 0
-            case (_, .code), (.code, _): style.paragraphSpacingBefore = 7 + Markdown.wellPad
-            case (.item, .item): style.paragraphSpacingBefore = 3
-            default: style.paragraphSpacingBefore = 7
+            case (_, .code), (.code, _): style.paragraphSpacingBefore = 7 + Markdown.wellPad - above
+            case (.item, .item): style.paragraphSpacingBefore = 3 - above
+            default: style.paragraphSpacingBefore = 7 - above
             }
-            if case .blank = line {} else { prev = line }
+            if case .blank = line {} else { prev = line; above = style.lineSpacing }
             // A paragraph's newline is its own last character: it carries the paragraph's font, style and well.
             if out.length > 0 { out.append(NSAttributedString(string: "\n", attributes: last)) }
             let start = out.length
@@ -264,6 +266,9 @@ final class ChatTextView: NSTextView {
                 box = box.union(used)
             }
             guard !box.isNull else { return }
+            if NSMaxRange(range) < s.length {        // the last code line's line spacing sits under it, outside the well
+                box.size.height -= (s.attribute(.paragraphStyle, at: NSMaxRange(range) - 1, effectiveRange: nil) as? NSParagraphStyle)?.lineSpacing ?? 0
+            }
             let well = NSRect(x: 0, y: box.minY - Markdown.wellPad, width: bounds.width, height: box.height + 2 * Markdown.wellPad)
             color.setFill()
             NSBezierPath(roundedRect: well, xRadius: 10, yRadius: 10).fill()
