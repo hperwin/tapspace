@@ -407,7 +407,7 @@ def _chat_images(p):
             # already imported by /api/chat/import
             f = (DATA / served.lstrip("/")).resolve()
             if not served.startswith("/chat-media/") or not f.is_file() or \
-               not str(f).startswith(str(MEDIA.resolve()) + "/"):
+               not f.is_relative_to(MEDIA.resolve()):
                 raise ValueError("unknown image")
             got.append((served, None))
             continue
@@ -2858,7 +2858,7 @@ class H(BaseHTTPRequestHandler):
         if path.startswith("/shots/") or path.startswith("/chat-media/"):
             f = (DATA / path.lstrip("/")).resolve()
             root = SHOTS if path.startswith("/shots/") else MEDIA
-            if not str(f).startswith(str(root.resolve()) + "/") or not f.is_file():
+            if not f.is_relative_to(root.resolve()) or not f.is_file():     # any path separator (a Windows scratch run)
                 self.send_error(404)
                 return
             ctype = _CTYPES.get(f.suffix.lower(), "application/octet-stream")

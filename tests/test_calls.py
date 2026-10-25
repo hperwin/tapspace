@@ -251,6 +251,15 @@ class Decision(unittest.TestCase):
         call("/api/decide", {"id": tid, "action": "approve"})
         self.assertEqual([c for c in calls() if c.get("ticket") == tid], [])
 
+    def test_a_visual_and_its_picture_are_served_and_nothing_outside(self):
+        tid = call("/api/post", {"agent": "lane", "title": "Pic", "image_b64": PNG})[1]["id"]
+        url = [c for c in calls() if c.get("ticket") == tid][0]["url"]
+        with urllib.request.urlopen(BASE + url, timeout=10) as r:
+            self.assertEqual((r.status, r.headers["content-type"]), (200, "image/png"))
+        for bad in ("/shots/../tickets.json", f"/shots/{tid}/../../token", "/chat-media/../token"):
+            self.assertEqual(call(bad)[0], 404, bad)
+        call("/api/decide", {"id": tid, "action": "approve"})
+
     def test_served_through_a_tunnel_with_the_token_only(self):
         self.assertEqual(call("/api/calls", headers={"X-Forwarded-For": "203.0.113.7"})[0], 401)
         code, r = call("/api/calls", headers=REMOTE)
