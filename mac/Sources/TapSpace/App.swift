@@ -193,7 +193,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         withObservationTracking { _ = store.tab } onChange: { [weak self] in
             Task { @MainActor in
                 guard let self else { return }
-                if self.store.tab == .visual, let tv = self.window.firstResponder as? NSTextView,
+                if self.store.tab == .visual, let tv = self.window.firstResponder as? NSTextView, tv.isEditable,
                    tv.isDescendant(of: self.hosting) {
                     self.chatResponder = tv
                     self.window.makeFirstResponder(nil)

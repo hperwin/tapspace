@@ -10,6 +10,8 @@ import AppKit
 ///                     instead of the scenes
 ///   TAPSPACE_CARD_FRAMES=1|live|checks with --snapshot: card frames
 ///                     (HarnessCard): an update card arriving and answered
+///   TAPSPACE_COPY_TEST=1 with --snapshot: a drag-select and Copy through the
+///                     open thread (HarnessCopy), to a private pasteboard
 ///   --demo            a scripted ~10 s loop that never stops (HarnessDemo):
 ///                     tabs, notes liquid, rail selection, a bubble flying in,
 ///                     the pill bulging, spreading and retracting
@@ -30,6 +32,8 @@ enum Harness {
                 HarnessLink.run(app: app, dir: url)
             } else if HarnessCard.asked {
                 HarnessCard.run(app: app, dir: url)
+            } else if HarnessCopy.asked {
+                HarnessCopy.run(app: app, dir: url)
             } else {
                 HarnessSnapshot(app: app, dir: url).start()
             }

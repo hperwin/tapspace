@@ -67,7 +67,9 @@ Naming: Hayden's GitHub agent issues are called TAPS. Never show the word "pilot
   The selected-row highlight is ONE liquid white body that springs from row to row (like the WAU body), not a per-row background.
 - Right pane: header (avatar, name/title, subtitle, status chip with breathing dot; taps get an "Open issue" link), for taps a goals
   strip (checkbox pills, "n/m goals" with numericText), then the message list: bubbles (Hayden = black, right; others = light grey,
-  left), markdown rendered (bold, inline code, code blocks, links open in the default browser, bullet lists), timestamps, and for
+  left), markdown rendered (bold, inline code, code blocks, links open in the default browser, bullet lists), each message one
+  selectable text, so a drag selects across its paragraphs and on through the messages it crosses and Copy takes all of it with
+  its line breaks (a blank line between messages), timestamps, and for
   Hayden's tap messages a receipt: "sending" -> "delivered" -> "seen 👀" (seen = the comment has an EYES reaction). New bubbles
   spring in (blur + offset + scale); a sent bubble flies from the composer into place. Typing dots (three bouncing dots) while an
   agent is "thinking". Keep scroll pinned to the bottom when already near it.
