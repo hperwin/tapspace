@@ -98,6 +98,7 @@ You don't need an orchestrator: a solo agent can post and `wait`. But if one pro
 | Master | update card | `tap.py card --as NAME "one line"`, with `--item "REF\|name=note"` per master or tap it moves (name: a short name shown in place of a long title; note: what changed), pictures to approve, a question, or `--accept KEY` to offer a landed tap's Accept; prints the stored row |
 | Human | answer a card | Approve / Not quite on a picture, ticks and words on the question, Accept / Not quite on an `--accept` card, in any client; `tap.py listen` prints each with one `answer:` line |
 | Human | fly or accept a tap | space page, Mac app, Glint (`/api/taps/fly`, `/api/taps/accept`); never an agent |
+| Any client | what calls the human now | `GET /api/calls`: needs you (a card that waits on him, a waiting visual, a tap holding, landed or asking) and finished (a goal card at done, a tap shipped); the phone's needs-you and finished pushes follow it |
 
 Decision JSON, as returned by `tap.py wait` (and stored per-version in the ticket's `decisions` array):
 

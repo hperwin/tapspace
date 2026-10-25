@@ -595,7 +595,7 @@ class CardFillTests(unittest.TestCase):
 class CardApiTests(Taps):
     """POST /api/chat/reply with a card: stored, served, pushed, refused whole."""
 
-    def test_a_card_is_stored_served_and_pushed(self):
+    def test_a_card_is_stored_served_and_pushed_as_its_call(self):
         a = name("card")
         join(a)
         say(a, "How is it going?")
@@ -610,7 +610,13 @@ class CardApiTests(Taps):
         self.assertEqual((S.DATA / m["images"][0].lstrip("/")).read_bytes(), PNG_BYTES)
         self.assertEqual(m["card"]["images"], [{"label": "Grid"}])
         self.assertEqual(thread(a), before + [m])                   # served verbatim; nothing earlier changed
-        self.assertEqual(self.pushes, [((row(a)["title"], line), {"key": "agent:" + a})])
+        # its image waits on a verdict, so it calls him: no reply push; the agents watch pushes it as needs_you
+        self.assertFalse([p for p in self.pushes if p[1].get("kind", "replies") == "replies"])
+        mine = lambda: [p for p in self.pushes if p[1].get("key") == "agent:" + a]   # other tests' calls push too
+        until = time.time() + 5
+        while time.time() < until and not mine():
+            time.sleep(0.1)
+        self.assertEqual(mine(), [((row(a)["title"], line), {"kind": "needs_you", "key": "agent:" + a})])
 
     def test_the_face_is_the_subject_never_the_sender(self):
         a, b = name("subject"), name("other")
@@ -668,7 +674,7 @@ class CardApiTests(Taps):
         self.assertEqual(code, 400)
         self.assertIn("unsupported image type", r["error"])
         self.assertEqual((media(), thread(a)), (files, rows))
-        self.assertEqual(self.pushes, [])
+        self.assertEqual([p for p in self.pushes if p[1].get("key") == "agent:" + a], [])   # other tests' calls push too
 
     def test_proof_images_are_copied_into_chat_media(self):
         a = name("proof")

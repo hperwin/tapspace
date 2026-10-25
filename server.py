@@ -178,8 +178,9 @@ def _jwt(c):
 
 
 def _push(title, body, kind="replies", **ref):
-    """Alerts every registered phone that wants this kind ("replies" or "needs_you");
-    ref is {key: thread} or {id: card}, for the tap-through."""
+    """Alerts every registered phone that wants this kind: "replies" (what agents and pilots say), or a call
+    (_announce): "needs_you" or "finished"; a phone that never said is in. ref is {key: thread} or {id: card},
+    for the tap-through."""
     c = _apns()
     try:
         devs = {t: d for t, d in json.loads(DEVICES.read_text()).items() if d.get(kind, True)}
@@ -218,7 +219,7 @@ def _push_send(c, devs, payload):
 # ---- change cursor: GET /api/wait returns the moment anything a client shows changes ----
 # It starts at the boot time in ms, so a cursor from before a restart is never ahead.
 _cv = threading.Condition()
-KINDS = ("agents", "chat", "taps", "cards")
+KINDS = ("agents", "chat", "taps", "cards", "calls")
 CURSOR = dict.fromkeys(("n",) + KINDS, int(time.time() * 1000))
 
 
@@ -686,6 +687,111 @@ def _fleet(rows, taps, chat):
     return [{k: v for k, v in f.items() if k != "at"} for f in out]
 
 
+# ---- calls: what reaches the reviewer, decided once for every client and the push ----
+FINISHED_KEEP = 43200                 # a goal card at done calls this long after its last change
+CALL_FRESH = 900                      # a pilot's question on a tap pushes only when it is this new (an issue read
+                                      # after a boot learns old questions)
+
+
+def _calls(rows, taps, chat, tickets, ix):
+    """GET /api/calls: what calls the reviewer now, newest first. The one decision behind every client's alert (the
+    Windows card) and the phone's needs_you and finished pushes (_announce). needs_you: a master's thread that waits on
+    him (_waits_on_you, the lead's too) with its question, the images without a verdict and an Accept nobody pressed;
+    a visual waiting on a decision; a tap holding, landed or with a pilot's question. finished: a master's goal card at
+    its last step (FINISHED_KEEP); a tap that shipped, while it is served. A plain reply, a card that asks nothing and
+    a step that is not the last never call. An id is stable and a new card, version or question is a new id. rows:
+    _agent_rows(chat); taps: TAPS items; chat: every row; tickets: the state's tickets; ix: _owner_index()."""
+    threads, out, now = {}, [], time.time()
+    for m in chat:
+        threads.setdefault(m.get("agent"), []).append(m)
+    titles = {r["name"]: r["title"] for r in rows}
+    for r in rows:
+        thread, key = threads.get(r["name"], []), "agent:" + r["name"]
+        if _waits_on_you(thread, taps):
+            row = _newest_card(thread)
+            c = row["card"]
+            said = [m["answer"] for m in thread
+                    if m.get("role") == "you" and (m.get("answer") or {}).get("card") == row["id"]]
+            files = row.get("images") or []
+            call = {"id": f"card:{row['id']}", "kind": "needs_you", "from": "master", "key": key, "title": r["title"],
+                    "line": c["line"], "at": row["ts"], "card": row["id"],
+                    "images": [{"i": i, "label": im.get("label") or f"Image {i + 1}", "url": files[i]}
+                               for i, im in enumerate(c.get("images") or [])
+                               if i < len(files) and not any(a.get("image") == i for a in said)]}
+            if _ask_open(thread):
+                call["ask"] = c["ask"]
+            if c.get("action") and not any("action" in a for a in said):
+                call["accept"] = {"tap": c["action"]["tap"], "title": _action_title(c)}
+            out.append(call)
+        pg = r.get("progress") or {}
+        steps = pg.get("steps") or []
+        if steps and (pg.get("current") or 0) >= len(steps) and now - (pg.get("updated") or 0) < FINISHED_KEEP:
+            run = hashlib.sha1(json.dumps([pg.get("goal"), steps]).encode()).hexdigest()[:10]
+            out.append({"id": f"done:{r['name']}:{run}", "kind": "finished", "from": "master", "key": key,
+                        "title": r["title"], "line": pg.get("goal") or "", "steps": steps, "at": pg.get("updated") or 0})
+    for t in tickets:
+        if t.get("archived") or t.get("status") != "waiting":
+            continue
+        v = (t.get("versions") or [{}])[-1]
+        owner = _owner_of(t, ix)[0]
+        out.append({"id": f"visual:{t['id']}:{t['version']}", "kind": "needs_you", "from": "visual",
+                    "key": "agent:" + owner if owner else None, "title": titles.get(owner) or t["agent"],
+                    "line": t["title"], "at": v.get("ts") or t.get("created") or 0, "ticket": t["id"],
+                    "version": t["version"], "media": v.get("media") or "image",
+                    "url": f"/shots/{t['id']}/{t['version']}.{v.get('ext') or 'png'}"})
+    for t in taps:
+        ask, base = t.get("ask") or {}, {"from": "tap", "key": t["key"], "title": _note_words(_undash(t["title"]), 80),
+                                         "phase": t["phase"], "word": t["phase_word"], "url": t["url"]}
+        if t["phase"] == "landed":
+            out.append({**base, "id": f"tap:{t['key']}:landed", "kind": "needs_you", "line": t["phase_word"],
+                        "at": _epoch(t["last"]) or 0, "accept": {"tap": t["key"], "title": base["title"]}})
+        elif t["phase"] == "holding" or t["status"] == "needs-you":
+            out.append({**base, "id": f"tap:{t['key']}:ask:{ask.get('at') or t['phase']}", "kind": "needs_you",
+                        "line": ask.get("text") or t["phase_word"], "at": _epoch(ask.get("at")) or _epoch(t["last"]) or 0,
+                        "board": t["phase"] == "holding"})
+        elif t["phase"] == "done" and t.get("outcome") == "shipped":
+            out.append({**base, "id": f"done:{t['key']}", "kind": "finished", "line": t["phase_word"],
+                        "at": _epoch(t["last"]) or 0})
+    out.sort(key=lambda c: -c["at"])
+    return out
+
+
+_ANNOUNCED = {"ids": None, "taps": False}   # the call ids the last pass had (None before the first pass)
+_CALL_NEW = {}                              # call id -> when _announce first saw it come in (and pushed it)
+
+
+def _announce(calls, taps_loaded):
+    """Pushes each call that came in since the last pass, once, in the class a phone opts into (needs_you or
+    finished), and stamps it new for GET /api/calls. The first pass, the first one with the taps loaded and a pilot's
+    question older than CALL_FRESH only learn what is there, so a boot never pushes old calls. Runs in _agents_watch."""
+    ids, seen, now = {c["id"] for c in calls}, _ANNOUNCED["ids"], time.time()
+    if seen is None:
+        seen = set(ids)
+    elif taps_loaded and not _ANNOUNCED["taps"]:
+        seen |= {c["id"] for c in calls if c["from"] == "tap"}
+    _ANNOUNCED.update(ids=ids, taps=taps_loaded)
+    for k in [k for k in _CALL_NEW if k not in ids]:
+        del _CALL_NEW[k]
+    fresh = [c for c in calls if c["id"] not in seen and not
+             (c["from"] == "tap" and not c.get("board") and ":ask:" in c["id"] and now - c["at"] > CALL_FRESH)]
+    for c in fresh:
+        _CALL_NEW[c["id"]] = now
+        title, body = ("New visual", c["line"]) if c["from"] == "visual" else \
+            (c["title"], ("Done: " if c["kind"] == "finished" else "") + ((c.get("ask") or {}).get("q") or c["line"]))
+        _push(title, body, kind=c["kind"], **({"id": c["ticket"]} if c["from"] == "visual" else {"key": c["key"]}))
+    if fresh:
+        _bump("calls")
+
+
+def _calls_now():
+    """GET /api/calls as served: every call with new (when it came in, or None for one already there at boot)."""
+    chat = _chat_rows()
+    with _lock:
+        tickets = _load()["tickets"]
+    calls = _calls(_agent_rows(chat), TAPS["items"], chat, tickets, _owner_index())
+    return [{**c, "new": _CALL_NEW.get(c["id"])} for c in calls]
+
+
 def _set_lead(name):
     """NAME becomes the one lead (the newest call wins). A NAME that has not joined yet gets a bare row,
     off the rail until it listens. The lead reports to no one."""
@@ -732,7 +838,8 @@ def _adopt(lead, child):
 
 def _agents_watch():
     """Agent state also changes with time (Here goes Away, a new car starts listening),
-    so the cursor follows the rendered rows, not only the writes."""
+    so the cursor follows the rendered rows, not only the writes. Each pass also announces the calls that came in
+    (_announce), so every write that can call the reviewer pushes from this one place."""
     last = None
     while True:
         try:
@@ -748,6 +855,9 @@ def _agents_watch():
             if sig != last:
                 last = sig
                 _bump("agents")
+            with _lock:
+                tickets = _load()["tickets"]
+            _announce(_calls(rows, TAPS["items"], chat, tickets, _owner_index()), bool(TAPS["fetched"]))
         except Exception:
             pass
         time.sleep(1)
@@ -1320,7 +1430,8 @@ def _send_card(name, p, who):
         return _refusal(e)
     body = _one_line(p.get("body")) or card["line"]
     row = _chat_add(name, "master", body, images, card=card)
-    _push(_title(_agents().get(name, {})), body, key="agent:" + name)
+    if not _waits_on_you(_chat_rows(name), TAPS["items"]):    # a card that calls him pushes as its call (_announce)
+        _push(_title(_agents().get(name, {})), body, key="agent:" + name)
     return 200, {"ok": True, "message": row}
 
 
@@ -2316,7 +2427,7 @@ def _read_issue(t):
     _ISSUES[key] = new
     said = [m for m in new["messages"][len(old["messages"]):] if m["who"] == "tap"] \
         if old and not old.get("unread") else []
-    if said:
+    if said and not (new["ask"] and new["ask"]["at"] == said[-1]["ts"]):     # a question pushes as its call
         _push(iss["title"], said[-1]["body"], key=key)
 
 
@@ -2648,6 +2759,10 @@ class H(BaseHTTPRequestHandler):
                 self._json({"error": "since and timeout are numbers"}, 400)
                 return
             self._json(_wait(since, timeout))
+            return
+        if path == "/api/calls":
+            # what calls the reviewer now (_calls): the PC's cards; new says when each one came in
+            self._json({"calls": _calls_now(), "taps": bool(TAPS["fetched"]), "time": time.time()})
             return
         if path == "/api/health":
             self._json({"ok": True, "version": VERSION, "push": bool(_apns()), "time": time.time()})
@@ -3095,8 +3210,7 @@ class H(BaseHTTPRequestHandler):
                 })
                 _save(state)
                 _learn_campaign(p.get("campaign", ""), owner)
-            _touch(p.get("campaign"), p["agent"], "posted", p["title"])
-            _push("New visual", p["title"], kind="needs_you", id=tid)
+            _touch(p.get("campaign"), p["agent"], "posted", p["title"])      # it pushes as a call (_announce)
             self._json({"ok": True, "id": tid, "version": 1})
             return
 
@@ -3130,8 +3244,7 @@ class H(BaseHTTPRequestHandler):
                 _save(state)
                 _learn_campaign(t.get("campaign", ""), owner)
             _touch(t.get("campaign"), t["agent"], "iterating",
-                   p.get("note", "") or t["title"])
-            _push("New visual", t["title"], kind="needs_you", id=tid)
+                   p.get("note", "") or t["title"])             # the new version pushes as a call (_announce)
             self._json({"ok": True, "id": tid, "version": v})
             return
 

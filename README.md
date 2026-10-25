@@ -296,7 +296,8 @@ asks something new, and prints its question). The server checks each open tap
 every 3 seconds with GitHub conditional requests (a 304 costs no rate limit),
 so replies show up within seconds without webhooks.
 
-Endpoints: `GET /api/agents` (`{agents, links, fleet, focus}`), `GET /api/chat?agent=NAME`,
+Endpoints: `GET /api/agents` (`{agents, links, fleet, focus}`), `GET /api/calls` (`{calls, taps, time}`, below),
+`GET /api/chat?agent=NAME`,
 `GET /api/chat/listen?agent=NAME`, `POST /api/chat {agent, body, images?}`,
 `POST /api/chat/reply {agent, body, images?}` (images: `[{b64, ext}]`),
 `POST /api/chat/reply {agent, card, images?}` sends an update card (this Mac only;
@@ -366,9 +367,25 @@ taps and cards as this page and the Mac app.
    answers ride `chat` and `agents`; the fleet, the focus and the lead's
    activity ride `agents` (a change of its state, word or detail, never of
    `since` alone).
-4. **Push.** `POST /api/devices {token, env: "sandbox"|"production"}` stores the
-   phone in `data/devices.json`. Agent replies, tap comments and new or updated
-   cards then send a notification, once an APNs key exists:
+4. **Calls.** `GET /api/calls` is what calls you right now, newest first, decided
+   in one place (`_calls`) for every client: **needs you** is a master's thread
+   that waits on you (its newest card asks something, has an image without a
+   verdict, or an Accept nobody pressed; the lead's too), a visual waiting on a
+   decision, or a tap holding, landed or with a pilot's question; **finished** is
+   a goal card at its last step (for 12 hours) or a tap that shipped. A plain
+   reply, a card that asks nothing and any other step never call. Each call has
+   a stable `id` (a new card, version or question is a new id), `kind`, `from`
+   (`master`, `visual`, `tap`), `key` (the thread), `title`, `line`, `at`, what
+   to answer with (`card` + `ask` and `images`, `accept`, `ticket` + `url`), and
+   `new`: when it came in, or null for one already there when the server
+   started. A change wakes `/api/wait` with the `calls` kind. The Windows app
+   (hperwin/glint-windows) draws these as its cards.
+5. **Push.** `POST /api/devices {token, env: "sandbox"|"production"}` stores the
+   phone in `data/devices.json`. Each new call pushes once in its class
+   (`needs_you` or `finished`, the same decision as `/api/calls`); agent replies,
+   a card that asks nothing and tap comments push as `replies`. A phone opts out
+   of a class with `replies: false` or `needs_you: false`; pushes go out once an
+   APNs key exists:
    `~/.config/glint/apns/AuthKey_<KEYID>.p8` plus `key.json`
    `{"key_id": "<KEYID>", "team_id": "289D9TAJCH", "topic": "com.tappinai.glint"}`.
    `GET /api/health` returns `{ok, version, push, time}`; `push` says whether the
