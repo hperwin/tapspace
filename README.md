@@ -348,11 +348,14 @@ taps and cards as this page and the Mac app.
    phone to this Mac and prints a `glint://pair?url=...&token=...` link plus a QR
    code (also at `http://127.0.0.1:4747/pair`, which only this Mac can open). In
    Glint, open You, then Pair with your Mac, and scan it.
-   - **Tailscale Serve** (private HTTPS, preferred) when this Mac is logged in to
-     Tailscale. Log in on the Mac and on your phone, run `tap.py pair` again, and
-     it switches over and closes ngrok.
+   - **Tailscale Funnel** (preferred) when this Mac is logged in to Tailscale: a
+     public HTTPS link on the Mac's `ts.net` name, so the phone and the PC need no
+     Tailscale app. Log in on the Mac and run `tap.py pair` again: it switches over
+     and closes ngrok. Funnel needs HTTPS certificates and the Funnel permission on
+     the tailnet; the first `tailscale funnel` prints a link that turns both on.
    - **ngrok** otherwise: a public URL, reused while the tunnel runs (set
-     `TAPSPACE_NGROK_DOMAIN` for a reserved domain). `tap.py pair --off` closes it.
+     `TAPSPACE_NGROK_DOMAIN` for a reserved domain).
+   - `tap.py pair --off` closes either one.
 2. **Token.** The server makes `data/token` on first start (mode 600). A request
    counts as local only when it comes from loopback with no proxy header
    (`X-Forwarded-*`, `Forwarded`, `X-Real-IP`, `Tailscale-User-Login`, `Ngrok-*`).
