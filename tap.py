@@ -71,9 +71,9 @@
                                             --image or --proof). His answers come back through listen.
                                             exit 0 = stored, 1 = refused (the reason is printed)
   Any number of agents can be in the space at once; NAME defaults to $TAPSPACE_AGENT.
-  tap.py pair [--off]                    -> opens the phone's route to this Mac (Tailscale Serve when
-                                            logged in, else an ngrok tunnel) and prints the Glint
-                                            pairing link and QR code; --off closes the ngrok tunnel
+  tap.py pair [--off]                    -> opens the phone's route to this Mac (a public Tailscale
+                                            Funnel link when logged in, else an ngrok tunnel) and prints
+                                            the Glint pairing link and QR code; --off closes the route
 
 Cards land under their master by themselves: inside Claude Code every call names the session it
 runs in (only when that Claude process is an ancestor of this one, so an id inherited through tmux
@@ -172,8 +172,9 @@ def _ngrok_pid(cur):
 
 def _pair(off):
     """The phone's route to this Mac, then the glint://pair link as text and as a QR code.
-    Tailscale Serve (private HTTPS) when this Mac is logged in to Tailscale, else ngrok
-    (public URL; the server's token guards every request that comes through it)."""
+    Tailscale Funnel when this Mac is logged in to Tailscale, else ngrok. Both are public HTTPS
+    URLs, so the phone and the PC need no app of their own; the server's token guards every
+    request that comes through either (Funnel's proxy headers make every request remote)."""
     import qr
     remote = DATA / "remote.json"
     try:
@@ -184,8 +185,11 @@ def _pair(off):
     if off:
         if pid:
             os.kill(pid, 15)
+        funnel = cur.get("kind") == "tailscale"
+        if funnel:
+            subprocess.run([TAILSCALE, "funnel", "--https=443", "off"], capture_output=True, timeout=30)
         remote.unlink(missing_ok=True)
-        print("Route closed." if pid else "No ngrok tunnel was open.")
+        print("Route closed." if pid or funnel else "No route was open.")
         return 0
     try:
         if not _call("/api/health").get("ok"):
@@ -199,15 +203,15 @@ def _pair(off):
         st = json.loads(subprocess.run([TAILSCALE, "status", "--json"], capture_output=True,
                                        text=True, timeout=15).stdout)
         if st.get("BackendState") == "Running":
-            subprocess.run([TAILSCALE, "serve", "--bg", str(port)], capture_output=True,
+            subprocess.run([TAILSCALE, "funnel", "--bg", str(port)], capture_output=True,
                            timeout=30, check=True)
             url = "https://" + st["Self"]["DNSName"].rstrip(".")
     except Exception:
         pass
     if url:
         if pid:
-            os.kill(pid, 15)            # the private route replaces the public one
-        cur = {"kind": "tailscale", "url": url, "port": port}
+            os.kill(pid, 15)            # Funnel replaces the ngrok tunnel
+        cur = {"kind": "tailscale", "url": url, "port": port, "public": True}
     elif pid and cur.get("port") == port:
         url = cur["url"]
     else:
@@ -242,11 +246,12 @@ def _pair(off):
     print(qr.terminal(link))
     print(f"\nScan this in Glint (You, then Pair with your Mac), or paste the link:\n{link}\n")
     if cur["kind"] == "tailscale":
-        print(f"Route: Tailscale Serve, private to your tailnet ({url}).")
+        print(f"Route: Tailscale Funnel, a public URL ({url}); the token guards every request.\n"
+              "Close it any time with: tap.py pair --off")
     else:
         print(f"Route: ngrok, a public URL ({url}); the token guards every request.\n"
-              "For a private route, open Tailscale on this Mac and on your phone, log in, and run "
-              "tap.py pair again: it switches to Tailscale Serve and closes ngrok.\n"
+              "To move off ngrok, log in to Tailscale on this Mac and run tap.py pair again: it "
+              "switches to Tailscale Funnel and closes ngrok.\n"
               "Close the tunnel any time with: tap.py pair --off")
     return 0
 

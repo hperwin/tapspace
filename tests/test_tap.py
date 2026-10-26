@@ -320,6 +320,37 @@ class TapWire(unittest.TestCase):
                           d["link_scanner"]), (0, 0, 0, None, None))
 
 
+    # pair
+
+    def fake_tailscale(self):
+        """A tailscale CLI on PATH that is logged in and writes down every call it gets."""
+        bin_ = self.data / "bin"
+        bin_.mkdir()
+        log = self.data / "tailscale.log"
+        status = json.dumps({"BackendState": "Running", "Self": {"DNSName": "mac.tail1234.ts.net."}})
+        exe = bin_ / "tailscale"
+        exe.write_text(f"#!/bin/sh\necho \"$@\" >> '{log}'\n[ \"$1\" = status ] && echo '{status}'\nexit 0\n")
+        exe.chmod(0o755)
+        return {"PATH": f"{bin_}{os.pathsep}{os.environ['PATH']}"}, log
+
+    def test_pair_opens_a_public_funnel_and_off_closes_it(self):
+        (self.data / "token").write_text("tok\n")
+        env, log = self.fake_tailscale()
+        port = self.srv.server_address[1]
+        r = self.tap("pair", **env)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn(f"funnel --bg {port}", log.read_text().splitlines())
+        self.assertEqual(json.loads((self.data / "remote.json").read_text()),
+                         {"kind": "tailscale", "url": "https://mac.tail1234.ts.net", "port": port, "public": True})
+        self.assertIn("glint://pair?url=https%3A%2F%2Fmac.tail1234.ts.net&token=tok", r.stdout)
+        self.assertIn("Route: Tailscale Funnel, a public URL (https://mac.tail1234.ts.net)", r.stdout)
+        r = self.tap("pair", "--off", **env)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("funnel --https=443 off", log.read_text().splitlines())
+        self.assertFalse((self.data / "remote.json").exists())
+        self.assertIn("Route closed.", r.stdout)
+
+
 class TapWatch(unittest.TestCase):
     """tap-watch in process: _call hands out /api/taps answers in turn (the last one repeats; an exception in
     the list is raised) and the 5 s sleep returns at once, so a case takes milliseconds and a miss ends in 5 s."""
