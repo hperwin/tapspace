@@ -1064,8 +1064,9 @@ class ArchiveTests(unittest.TestCase):
 
 class CompatTests(unittest.TestCase):
 
-    def test_change_kinds_unchanged(self):
-        self.assertEqual(S.KINDS, ("agents", "chat", "taps", "cards"))
+    def test_change_kinds_only_grow(self):
+        # clients read a kind they do not know as nothing to do (Glint decodes changed as a set of strings)
+        self.assertEqual(S.KINDS, ("agents", "chat", "taps", "cards", "calls"))
 
     def test_rows_and_tickets_keep_their_fields(self):
         a = name("compat")
