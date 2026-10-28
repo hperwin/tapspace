@@ -33,15 +33,18 @@
                                             session already ended (Offline) is cleared off the list
   tap.py restart --as NAME               -> starts an Offline (or spun down) master again under the same NAME,
                                             as the Chat rail's Restart does: Muddi through muddi.sh, any other in
-                                            its own folder under its own lead (--as is required)
-                                            exit 0 = starting, 1 = refused (it is still running, or no such row)
+                                            its own folder under its own lead (--as is required); waits up to 6 s
+                                            for the launcher's verdict (started, launching or pending)
+                                            exit 0 = starting, 1 = refused (it is still running, no such row, or
+                                            the launcher refused or died: the answer's error says why)
   tap.py lead --as NAME                  -> marks NAME the lead, the master over all masters: every client
                                             shows it first and the other masters under it (one lead at a time;
                                             the newest replaces the old one; --as is required)
   tap.py new --as LEAD --dir DIR [--order-file FILE]
                                          -> starts a new master in DIR (headless tmux, as the space's New
                                             session does), born under LEAD, FILE's text added to its first
-                                            prompt; prints its NAME and tmux session
+                                            prompt; prints its NAME, tmux session and the launcher's verdict
+                                            (exit 1 when new-master.sh refused or claude died, with why)
   tap.py adopt --as LEAD CHILD           -> puts CHILD, a master already running, under LEAD
   Taps (the reviewer's Flightdeck journeys, listed live from Flightdeck's board; each thread stays on GitHub;
   every agent can talk to all of them):
