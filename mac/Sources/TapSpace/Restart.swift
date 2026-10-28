@@ -3,7 +3,9 @@ import SwiftUI
 // Restart from the rail: after a crash or reboot a master whose sessions all
 // ended is served "offline". Its row shows a Restart button that starts it again
 // under the same NAME (Muddi through muddi.sh, any other master as a fresh one in
-// its folder) via POST /api/agents/restart. No confirm: nothing is lost.
+// its folder) via POST /api/agents/restart. No confirm: nothing is lost. When a
+// launch fails after the server already answered, the row is offline again and
+// carries the launcher's reason (`launch`), shown under it until a launch works.
 
 extension API {
     /// POST /api/agents/restart {name}: starts an offline (or stopped) master
@@ -59,5 +61,37 @@ struct RestartButton: View {
         .help("Restart")
         .accessibilityLabel("Restart")
         .onHover { h in withAnimation(.easeOut(duration: 0.2)) { hover = h } }
+    }
+}
+
+/// Under an offline row whose last launch failed (the server's `launch`): "Couldn’t start: claude missing from
+/// PATH", dim, on the row's text column, so the next Restart is an informed one. A sibling of the row, like
+/// the rail's note lines, so the selection's frame is unchanged.
+struct RestartReason: View {
+    let error: String
+
+    /// The reason to show under this row: offline with a failed launch on record; nil otherwise.
+    static func error(_ a: Agent) -> String? {
+        guard a.state == "offline", let why = a.launch?.error.trimmingCharacters(in: .whitespacesAndNewlines),
+              !why.isEmpty else { return nil }
+        return why
+    }
+
+    var body: some View {
+        Text("Couldn’t start: " + error)
+            .font(.system(size: 11))
+            .foregroundStyle(Color.dim)
+            .lineLimit(2)
+            .truncationMode(.tail)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 8)
+            // The text column of the row above (RailAgentDetail's inset).
+            .padding(.leading, 54)
+            .padding(.trailing, 6)
+            .padding(.bottom, 4)
+            .help(error)
+            .modifier(RailArrival(index: 0))
+            .transition(RailNoteRow.exit)
     }
 }

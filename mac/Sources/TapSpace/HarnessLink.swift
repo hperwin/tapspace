@@ -2,18 +2,20 @@ import AppKit
 import CoreGraphics
 import Observation
 
-/// Link frames (harness lane, for the progress column's connector): motion
+/// Link frames (harness lane, for the third column's talk lines): motion
 /// evidence without an on-screen recording. Run with `--snapshot <dir>` and
 /// `TAPSPACE_LINK_FRAMES=1`; Harness.run then dispatches here instead of the
 /// scene run, so the window is offscreen and nothing activates. It first
-/// checks the board's rules on synthetic rows (the package has no test
-/// target), then poses the REAL panel against a scratch server and renders
-/// the link between two cards forming, chasing, turning around and ending as
-/// 2x PNG frames (`<dir>/f000.png`...), 30 per second of motion, plus
-/// `frames.json`. Springs step offline on a fixed 1/30 s clock; the chase is
-/// scrubbed through model values (cacheDisplay draws models, not running
-/// animations). Refuses unless TAPSPACE_URL names a local scratch server;
-/// never writes (allowWrites is off).
+/// checks the progress board's and the pool's rules on synthetic rows (the
+/// package has no test target: LINKCHECK, POOLCHECK), then poses the REAL
+/// face pool (ChatPoolPanel) against a scratch server and renders a new talk
+/// between the lead and a pool face (the line drawing on from the sender,
+/// the chase, the receiver's ping), the answer coming back the other way, and
+/// the line leaving, as 2x PNG frames (`<dir>/f000.png`...), 30 per second of
+/// motion, plus `frames.json`. Springs step offline on a fixed 1/30 s clock;
+/// the beat is scrubbed through model values (`HarnessPool.pin`: cacheDisplay
+/// draws models, not running animations). Refuses unless TAPSPACE_URL names a
+/// local scratch server; never writes (allowWrites is off).
 ///
 ///   TAPSPACE_URL=http://127.0.0.1:4748 TAPSPACE_LINK_FRAMES=1 .build/debug/TapSpace --snapshot <dir>
 ///   ffmpeg -framerate 30 -i <dir>/f%03d.png -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2" -c:v libx264 -pix_fmt yuv420p <dir>/link.mp4
@@ -26,7 +28,8 @@ final class HarnessLink {
     var links: [AgentLink]?
     /// The chase's phase (0..<1), pinned for offline frames (nil = the running animation).
     var phase: Double?
-    /// The progress column's frame in the window (points, top-left origin), reported only while asked.
+    /// The third column's frame in the window (points, top-left origin), reported only while asked (link or
+    /// pool frames).
     @ObservationIgnored var panel: CGRect = .zero
 
     static func run(app: AppDelegate, dir: URL) {
@@ -153,50 +156,48 @@ private final class LinkDrive {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let failed = HarnessLink.checks()
         Harness.log("LINKCHECK " + (failed.isEmpty ? "all passed" : "\(failed.count) failed"))
-        problems += failed
+        let pooled = ChatPoolBoard.checks()
+        Harness.log("POOLCHECK " + (pooled.isEmpty ? "all passed" : "\(pooled.count) failed"))
+        problems += failed + pooled
         // The pill off the real menu bar; the window at the live width (offscreen under --snapshot).
         if let p = app.pill.panel { p.setFrameOrigin(NSPoint(x: -32000, y: p.frame.minY)) }
         app.window.setContentSize(NSSize(width: 1512, height: 900))
         let store = app.store
-        let me = HarnessLink.shared
-        me.links = []
+        let pool = HarnessPool.shared
+        pool.talks = []
         await Harness.wait(20) { store.agentsLoaded }
-        let now = Date().timeIntervalSince1970
-        let cards = ChatProgressBoard.rows(agents: store.agents, links: [], now: now).map(\.agent)
-        guard cards.count >= 2 else {
-            fail("fewer than two progress cards on \(API.base.absoluteString)")
+        // The lead and the first face in its pool (a master when there is one).
+        let members = HarnessPool.members(store)
+        guard let lead = MuddiOrder.lead(store.agents),
+              let face = members.first(where: { $0.kind != "tap" }) ?? members.first else {
+            fail("no lead with a face in its pool on \(API.base.absoluteString)")
             return finish()
         }
-        // The real pair when the server has an active link between two cards, else the first two cards.
-        let names = Set(cards.map(\.name))
-        let real = store.links.first { $0.active && $0.a != $0.b && names.contains($0.a) && names.contains($0.b) }
-        let x = real?.a ?? cards[0].name, y = real?.b ?? cards[1].name
-        let titles = Dictionary(store.agents.map { ($0.name, $0.title) }, uniquingKeysWith: { first, _ in first })
-        source = real == nil ? "pose" : "server pair"
-        pair = [titles[x] ?? "", titles[y] ?? ""]
-        store.thread = "agent:" + x       // before the tab, so the switch reads only this thread
+        source = "pose"
+        pair = [lead.title, face.title]
+        store.thread = lead.key       // before the tab, so the switch reads only this thread
         store.tab = .chat
         await settle()
-        await Harness.wait(5) { me.panel.width > 0 }
-        if me.panel.width <= 0 { fail("the progress column is not on screen (ChatView must host ChatProgressPanel)") }
+        await Harness.wait(5) { HarnessLink.shared.panel.width > 0 }
+        if HarnessLink.shared.panel.width <= 0 { fail("the pool is not on screen (ChatView must host ChatPoolPanel)") }
         // From here the drive owns the clock: every frame steps every spring by exactly 1/30 s.
         Motion.main.link?.invalidate()
-        for _ in 0..<6 { await frame() }                                  // apart
-        let first = real?.from ?? x
-        let second = first == x ? y : x
-        me.links = [HarnessLink.link(x, y, from: first, last: Date().timeIntervalSince1970,
-                                     summary: real?.summary ?? "Is the progress feed live yet?")].compactMap { $0 }
-        if me.links?.isEmpty ?? true { fail("AgentLink does not decode the served shape") }
-        for _ in 0..<36 { await frame() }                                 // the gap opens, the line draws in
-        let joined = ChatProgressBoard.rows(agents: store.agents, links: me.links ?? [], now: Date().timeIntervalSince1970)
-        if !joined.contains(where: { $0.linkBelow != nil }) { fail("the pair did not join") }
-        for i in 0..<57 { me.phase = Double(i) / 57; await frame() }     // one chase, sender to receiver (1.9 s)
-        me.links = [HarnessLink.link(x, y, from: second, last: Date().timeIntervalSince1970,
-                                     summary: "Live now, the cards are drawing")].compactMap { $0 }
-        for i in 0..<57 { me.phase = Double(i) / 57; await frame() }     // the answer: the chase turns, a nod
-        me.phase = nil
-        me.links = []
-        for _ in 0..<30 { await frame() }                                 // the talk ends: words, line, gap
+        for _ in 0..<6 { await frame() }                                  // the pool at rest
+        let beat = Int((ChatPoolBeat.length * 30).rounded(.up))
+        for (id, from, to, text) in [("link-1", lead.key, face.key, "Is the pool live yet?"),
+                                     ("link-2", face.key, lead.key, "Live now, the faces are floating")] {
+            pool.talks = [HarnessPool.talk(id, from: from, to: to, ts: Date().timeIntervalSince1970, text: text)].compactMap { $0 }
+            if pool.talks?.isEmpty ?? true { fail("AgentTalk does not decode the served shape") }
+            let drawn = ChatPoolBoard.lines(talks: pool.talks ?? [], lead: lead.key, members: members.map(\.key),
+                                            now: Date().timeIntervalSince1970)
+            if drawn.count != 1 { fail("the talk \(id) drew \(drawn.count) lines") }
+            for i in 0..<beat { pool.pin = (id, Double(i) / 30); await frame() }   // draw-on, chase, ping
+            pool.pin = nil
+            for _ in 0..<6 { await frame() }                              // the line at rest
+        }
+        pool.talks = []
+        for _ in 0..<15 { await frame() }                                 // the talk ends: the line leaves
+        pool.talks = nil
         finish()
     }
 

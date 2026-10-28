@@ -8,7 +8,7 @@ let agentLabel = ["thinking": "Thinking", "here": "Here", "away": "Away", "switc
 
 struct ChatView: View {
     let store: Store
-    /// Room for the masters' progress column beside the thread.
+    /// Room for the lead's face pool beside the thread.
     @State private var wide = true
 
     static let panelWidth: CGFloat = 288
@@ -19,7 +19,7 @@ struct ChatView: View {
                 .frame(width: 300)
             PaneView(store: store)
             if wide {
-                ChatProgressPanel()
+                ChatPoolPanel()
                     .frame(width: Self.panelWidth)
                     .frame(maxHeight: .infinity, alignment: .top)
             }
@@ -83,6 +83,7 @@ struct RailView: View {
                                 .padding(.trailing, a.state == "offline" ? RestartButton.room : 0)   // clear of Restart
                         }
                         .modifier(SpinDownRow(key: a.key, title: a.title, offline: a.state == "offline", store: store))
+                        if let why = RestartReason.error(a) { RestartReason(error: why) }
                         RailAgentDetail(detail: details[a.key] ?? RailDetail()) { store.open(a.key) }
                         if a.key == lead?.key {
                             ChatFleetStrip(fleet: store.fleet, lead: a.title, open: fleetOpen,
@@ -121,7 +122,8 @@ struct RailView: View {
             // and gain or shed the lines under them; the group folds and unfolds:
             // rows glide, the body follows.
             .animation(.spring(response: 0.5, dampingFraction: 0.82),
-                       value: rows.map { $0.agent.key + ($0.child ? ">" : "") + "|" + (details[$0.agent.key]?.sig ?? "") }
+                       value: rows.map { $0.agent.key + ($0.child ? ">" : "") + "|" + (details[$0.agent.key]?.sig ?? "")
+                           + (RestartReason.error($0.agent) == nil ? "" : "|launch") }
                            + ["open:\(open)"])
         }
         .scrollIndicators(.never)
