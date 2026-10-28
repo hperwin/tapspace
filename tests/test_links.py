@@ -78,6 +78,26 @@ def got_busy(ts, msg_id, pid, body="Body of the message"):
                            "origin": origin(pid, msg_id, body)}}
 
 
+def pilot(ts, call, tool, **inp):
+    return {"type": "assistant", "timestamp": iso(ts), "message": {"role": "assistant", "content": [
+        {"type": "tool_use", "id": call, "name": "mcp__flightdeck__" + tool, "input": inp}]}}
+
+
+def pilot_result(ts, call, body, error=False, blocks=False):
+    """A Flightdeck call's result as Claude Code writes it: the tool's JSON text in the result block (or as a text
+    block), the same string as toolUseResult, is_error on a failure."""
+    b = {"tool_use_id": call, "type": "tool_result", "content": [{"type": "text", "text": body}] if blocks else body}
+    if error:
+        b["is_error"] = True
+    return {"type": "user", "timestamp": iso(ts + 0.4), "message": {"role": "user", "content": [b]},
+            "toolUseResult": body}
+
+
+OK_SENT = json.dumps({"ok": True, "undelivered": False, "held": False, "reason": None,
+                      "flight": "42fc7f72-806a-43db-a94c-83513a517fcd",
+                      "journey": "https://github.com/snappstats/snapp-ios/issues/1614"}, separators=(",", ":"))
+
+
 class Rig(unittest.TestCase):
     """A throwaway ~/.claude (projects/ + sessions/ registry) and TapSpace data dir per test."""
 
@@ -353,6 +373,79 @@ class Serving(Rig):
         self.assertIs(links.start(self.data), one)
         self.assertEqual(links.rows({NA, NB}), [])
         self.assertIn("passes", links.stats())
+
+
+class Talks(Rig):
+    def test_each_message_is_a_talk_for_ten_minutes(self):
+        self.two_masters()
+        self.write(A, send(T0, "toolu_1", "beta-3c", summary="First"), result(T0, "toolu_1", "m1"))
+        self.write(B, send(T0 + 10, "toolu_2", "alpha-1a", summary="Answer"), result(T0 + 10, "toolu_2", "m2"))
+        self.scan.tick()
+        self.assertEqual(self.scan.talks({NA, NB}), [
+            {"id": "m2", "from": NB, "to": NA, "ts": T0 + 10, "text": "Answer", "kind": "message"},
+            {"id": "m1", "from": NA, "to": NB, "ts": T0, "text": "First", "kind": "message"}])
+        self.assertEqual(self.scan.talks({NA}), [])                  # both ends must be served
+        self.now = T0 + 605
+        self.assertEqual([t["id"] for t in self.scan.talks({NA, NB})], ["m2"])
+        self.now = T0 + 611
+        self.assertEqual(self.scan.talks({NA, NB}), [])
+        self.assertEqual(self.scan.rows({NA, NB})[0]["count"], 2)     # the pair row still serves the day
+
+    def test_each_flightdeck_call_to_a_tap_is_a_talk(self):
+        self.two_masters()
+        self.write(A, pilot(T0, "toolu_m", "message_pilot", journey="SnappStats/snapp-ios#1622",
+                            text="From Muddi: the staging sign-in steps in ~/docs/pilot.md were corrected (#1620)\nmore"),
+                   pilot_result(T0, "toolu_m", OK_SENT),
+                   pilot(T0 + 1, "toolu_a", "answer_pilot", journey="snappstats/snapp-ios#1614",
+                         toolUseID="toolu_x", choice="Pilot removes fly label"),
+                   pilot_result(T0 + 1, "toolu_a", OK_SENT, blocks=True),
+                   pilot(T0 + 2, "toolu_f", "fly_journey", journey="https://github.com/SnappStats/snappy/issues/3323",
+                         quiet=True, ultracode=True),
+                   pilot_result(T0 + 2, "toolu_f", json.dumps({"ok": True, "queued": True, "how": "flightdeck:fly"})))
+        self.scan.tick()
+        self.assertEqual(self.scan.talks({NA, NB}), [
+            {"id": "toolu_f", "from": NA, "to": "SnappStats/snappy#3323", "ts": T0 + 2, "text": "Flying it", "kind": "tap"},
+            {"id": "toolu_a", "from": NA, "to": "snappstats/snapp-ios#1614", "ts": T0 + 1,
+             "text": "Pilot removes fly label", "kind": "tap"},
+            {"id": "toolu_m", "from": NA, "to": "SnappStats/snapp-ios#1622", "ts": T0,
+             "text": "the staging sign-in steps were corrected", "kind": "tap"}])
+        self.assertEqual(self.scan.rows({NA, NB}), [])                # never a pair row
+        self.assertEqual(self.file_rows(), [])                        # and never in links.jsonl
+        self.assertEqual(self.bumps, [("agents",)])
+
+    def test_failed_or_undelivered_calls_and_unnamed_sessions_make_no_talk(self):
+        self.two_masters()
+        self.write(A, pilot(T0, "toolu_1", "fly_journey", journey="SnappStats/snappy#3285"),
+                   pilot_result(T0, "toolu_1", "GitHub refused the option label", error=True),
+                   pilot(T0 + 1, "toolu_2", "message_pilot", journey="SnappStats/snapp-ios#1622", text="x"),
+                   pilot_result(T0 + 1, "toolu_2", json.dumps({"ok": True, "undelivered": True})),
+                   pilot(T0 + 2, "toolu_3", "message_pilot", journey="not a key", text="x"),
+                   pilot_result(T0 + 2, "toolu_3", OK_SENT),
+                   pilot(T0 + 3, "toolu_4", "message_pilot", journey="SnappStats/snapp-ios#1622", text="no result yet"))
+        self.scan.tick()
+        self.assertEqual(self.scan.talks({NA, NB}), [])
+        self.write(A, pilot_result(T0 + 3, "toolu_4", OK_SENT))      # its result lands on a later pass
+        self.scan.tick()
+        self.assertEqual([t["id"] for t in self.scan.talks({NA, NB})], ["toolu_4"])
+        self.assertEqual(self.scan.talks({NB}), [])                   # its sender is not served
+
+    def test_a_talk_waits_for_its_session_to_have_a_name(self):
+        self.write(A, pilot(T0, "toolu_1", "fly_journey", journey="o/r#1"), pilot_result(T0, "toolu_1", "{}"))
+        self.scan.tick()
+        self.assertEqual(self.scan.talks({NA}), [])
+        (self.data / "sessions.json").write_text(dump({"sessions": {A: {"name": NA}}}))   # tap.py's stamp, later
+        self.scan.tick()
+        self.assertEqual([(t["from"], t["to"]) for t in self.scan.talks({NA})], [(NA, "o/r#1")])
+
+    def test_a_scan_every_two_seconds(self):
+        self.assertEqual(links.EVERY, 2)
+
+    def test_line_and_journey(self):
+        self.assertEqual(links.line("\n## From Muddi: Ship the lineup page first\nmore"), "Ship the lineup page first")
+        self.assertEqual(links.line(" ".join(["w"] * 80), cap=20), "w w w w w w w w...")
+        self.assertEqual(links.journey("https://github.com/snappstats/snappy/issues/3286"), "snappstats/snappy#3286")
+        self.assertEqual(links.journey("SnappStats/snappy#3286"), "SnappStats/snappy#3286")
+        self.assertEqual(links.journey("snappy#3286"), "")
 
 
 class Text(Rig):

@@ -720,7 +720,13 @@ class TapsBoardTests(unittest.TestCase):
 
         def record(args, *a, **kw):
             envs.append(kw["env"])
-        with mock.patch.dict(os.environ, board_env), mock.patch.object(S.subprocess, "Popen", record), \
+
+        def launch(args, *a, **kw):                  # new-master.sh says it started, and has ended
+            record(args, *a, **kw)
+            kw["stdout"].write("MASTER-OK\n")
+            kw["stdout"].flush()
+            return mock.Mock(poll=lambda: 0, wait=lambda: 0)
+        with mock.patch.dict(os.environ, board_env), mock.patch.object(S.subprocess, "Popen", launch), \
                 mock.patch.object(S.subprocess, "run", record):
             S._spawn_master(str(pathlib.Path.home()), "Claude · scrub · 0001")     # every new master (new-master.sh)
             self.assertEqual(call("/pair")[0], 200)                                # tap.py pair

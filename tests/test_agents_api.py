@@ -134,6 +134,47 @@ def row(who):
     return next(r for r in call("/api/agents")[1]["agents"] if r["name"] == who)
 
 
+class FakeLaunch:
+    """What the fake Popen hands back for muddi.sh or new-master.sh: it writes its scripted lines, each (seconds
+    after the launch, line), into the file the server gave it as stdout once their time has come, and ends with rc
+    at `end` seconds. poll() and wait() are all the server's _launch and _settle ask of it."""
+
+    def __init__(self, path, lines, rc=0, end=0.0):
+        self.path, self.rc, self.end, self.t0 = path, rc, end, time.monotonic()
+        self.lines = sorted(((0.0, x) if isinstance(x, str) else x for x in lines), key=lambda x: x[0])
+        self._due(0.0)
+
+    def _due(self, at):
+        with open(self.path, "a") as fh:
+            while self.lines and self.lines[0][0] <= at:
+                fh.write(self.lines.pop(0)[1] + "\n")
+
+    def poll(self):
+        at = time.monotonic() - self.t0
+        if at < self.end:
+            self._due(at)
+            return None
+        self._due(float("inf"))
+        return self.rc
+
+    def wait(self, timeout=None):
+        time.sleep(max(0.0, self.end - (time.monotonic() - self.t0)))
+        return self.poll()
+
+
+MUDDI_SID = "03dfce63-847b-4965-b64a-a03035cd477e"
+REFUSED = """muddi.sh start · October 26, 2026 2:09 PM PT
+--- preflight
+ok   tmux /opt/homebrew/bin/tmux
+FAIL claude missing from PATH
+ok   doctrine /Users/haydenerwin/orchestration/muddi/MUDDI.md (9790 bytes)
+ok   TapSpace up at http://127.0.0.1:4747 (version 611c0a346578)
+ok   TapSpace row Muddi is gone
+--- live check
+recorded car 53fb7b38-df9c-452c-a9d3-310745cb6071 (tmux muddi-53fb7b38) is not running: a new car starts
+MUDDI-REFUSED: claude missing from PATH""".splitlines()               # spawn.log, Oct 26 (trimmed)
+
+
 def decide(tid, action="change", message="Tighten the header spacing"):
     return call("/api/decide", {"id": tid, "action": action, "message": message})
 
@@ -491,7 +532,7 @@ class StopTests(unittest.TestCase):
 
     def setUp(self):
         self.saved = {k: getattr(S, k) for k in ("_procs", "_tmux_panes", "_kill_pid", "_kill_tmux", "STOP_GRACE",
-                                                 "_proc_start", "MUDDI_SH")}
+                                                 "_proc_start", "MUDDI_SH", "LAUNCH_WAIT")}
         me = os.getpid()
         self.table = {me: (1, self.START, "python3", "S")}     # this server, at the top of its own tree
         self.panes, self.calls, self.stubborn = [], [], set()
@@ -501,6 +542,7 @@ class StopTests(unittest.TestCase):
         S._kill_tmux = self.kill_tmux
         S._proc_start = lambda pid: self.table[pid][1] if pid in self.table else ""
         S.STOP_GRACE = 0.3
+        S.LAUNCH_WAIT = 0.5                    # a launcher with no verdict by then answers pending
         # activity.py's Reader decides Offline: its session registry and its pid check read this fake table too
         self.claude = pathlib.Path(tempfile.mkdtemp(prefix="claude-", dir=TMP.name))
         (self.claude / "sessions").mkdir()
@@ -562,14 +604,18 @@ class StopTests(unittest.TestCase):
         self.table.pop(pid)
         return a, sids
 
-    def popen(self):
-        """Records every launch of muddi.sh or new-master.sh instead of running it; any other Popen runs."""
+    def popen(self, lines=None, rc=0, end=0.0):
+        """Records every launch of muddi.sh or new-master.sh instead of running it and hands back a FakeLaunch that
+        prints lines (default: the script's own OK line) and ends with rc at end; any other Popen runs."""
         launched, real = [], S.subprocess.Popen
 
         def fake(args, *a, **kw):
             if args[0] in ("/bin/zsh", "bash"):
                 launched.append((args, kw))
-                return None
+                env = kw.get("env") or {}
+                ok = [f"MASTER-OK session={env['TAPSPACE_MASTER_UUID']} tmux={env['TAPSPACE_MASTER_TMUX']}"
+                      if "TAPSPACE_MASTER_UUID" in env else f"MUDDI-OK session={MUDDI_SID} tmux=muddi"]
+                return FakeLaunch(kw["stdout"].name, ok if lines is None else lines, rc, end)
             return real(args, *a, **kw)
         S.subprocess.Popen = fake
         self.addCleanup(setattr, S.subprocess, "Popen", real)
@@ -728,12 +774,17 @@ class StopTests(unittest.TestCase):
         finally:
             for k, v in saved.items():
                 os.environ.pop(k) if v is None else os.environ.__setitem__(k, v)
-        self.assertEqual((code, r), (200, {"ok": True, "agent": "Muddi", "how": "muddi"}))
+        self.assertEqual((code, {k: r[k] for k in r if k != "ms"}),
+                         (200, {"ok": True, "agent": "Muddi", "how": "muddi", "verdict": "started",
+                                "session": MUDDI_SID, "tmux": "muddi"}))
+        self.assertIsInstance(r["ms"], int)
         self.assertEqual(len(launched), 1)
         args, kw = launched[0]
         self.assertEqual(args, ["/bin/zsh", "-l", "-c", 'exec bash "$0" "$@"', str(sh)])
         self.assertTrue(kw["start_new_session"])
-        self.assertEqual(pathlib.Path(kw["stdout"].name), S.DATA / "spawn.log")
+        out = pathlib.Path(kw["stdout"].name)                    # its own file, never a pipe
+        self.assertEqual(out.parent, S.DATA / "spawn")
+        self.assertRegex(out.name, r"^\d{8}-\d{6}-[0-9a-f]{6}\.log$")
         self.assertEqual(kw["env"]["TAPSPACE_URL"], f"http://127.0.0.1:{S.PORT}")
         self.assertFalse(set(planted) & set(kw["env"]))
         self.assertEqual(kw["env"].get("PATH"), os.environ.get("PATH"))
@@ -751,7 +802,7 @@ class StopTests(unittest.TestCase):
         self.edit(a, parent=lead, where=("~/" + str(ROOT.relative_to(home))) if inside else "~")
         launched = self.popen()
         code, r = self.restart(a)
-        self.assertEqual((code, r["ok"], r["agent"], r["how"]), (200, True, a, "master"), r)
+        self.assertEqual((code, r["ok"], r["agent"], r["how"], r["verdict"]), (200, True, a, "master", "started"), r)
         self.assertTrue(r["session"] and r["tmux"].startswith("master-"))
         args, kw = launched[0]
         self.assertEqual(args, ["/bin/zsh", "-l", "-c", 'exec bash "$0" "$@"', str(S.ROOT / "new-master.sh"),
@@ -837,6 +888,181 @@ class StopTests(unittest.TestCase):
                          (500, {"ok": False, "error": f"muddi.sh not found at {S.MUDDI_SH}"}))
         self.assertEqual((launched, S._agents()["Muddi"]), ([], before))     # never a plain master instead
 
+    # Truthful restart: the launcher's own verdict decides the answer (server.py _launch)
+
+    def offline_muddi(self, pid):
+        sh = pathlib.Path(TMP.name) / "muddi.sh"
+        sh.write_text("#!/bin/bash\nexit 0\n")
+        S.MUDDI_SH = sh
+        self.dead("lead", pid, who="Muddi")
+        S._set_lead("Muddi")
+        self.addCleanup(self.forget, "Muddi")
+        self.assertEqual(row("Muddi")["state"], "offline")
+
+    def forget(self, who):
+        """Takes the row out of agents.json, so the next test's Muddi starts from nothing."""
+        with S._lock:
+            a = S._agents()
+            a.pop(who, None)
+            S._agents_write(a)
+
+    def spawn_log(self):
+        f = S.DATA / "spawn.log"
+        return f.read_text() if f.exists() else ""
+
+    def until(self, test, timeout=4.0):
+        deadline = time.time() + timeout
+        while not test():
+            self.assertLess(time.time(), deadline, "timed out")
+            time.sleep(0.05)
+
+    def test_a_refused_restart_answers_409_with_the_reason_and_the_row_is_offline_at_once(self):
+        self.offline_muddi(990040)
+        before = self.spawn_log().count("== ")
+        launched = self.popen(REFUSED, rc=1)
+        code, r = self.restart("Muddi")
+        self.assertEqual((code, {k: r[k] for k in r if k != "ms"}),
+                         (409, {"ok": False, "agent": "Muddi", "how": "muddi", "verdict": "refused",
+                                "error": "claude missing from PATH"}))
+        self.assertLess(r["ms"], 1000)
+        served = row("Muddi")
+        self.assertEqual(served["state"], "offline")             # at once: the button is back
+        self.assertEqual((served["launch"]["verdict"], served["launch"]["error"]), ("refused", "claude missing from PATH"))
+        code, r = self.restart("Muddi")                          # the next tap is taken, never "already starting"
+        self.assertEqual((code, r["verdict"], r["error"]), (409, "refused", "claude missing from PATH"))
+        self.assertEqual(len(launched), 2)
+        line = [x for x in self.log.getvalue().splitlines() if " restart " in x][-1]
+        self.assertIn('"verdict": "refused"', line)
+        self.assertIn('"error": "claude missing from PATH"', line)
+        self.until(lambda: self.spawn_log().count("== ") >= before + 2)
+        block = self.spawn_log().split("== ")[-1]
+        self.assertRegex(block.splitlines()[0], r"^\w+ \d+, \d{4} \d+:\d\d:\d\d [AP]M PT Muddi via muddi\.sh "
+                                                r"-> refused in \d+ ms \(spawn/\d{8}-\d{6}-[0-9a-f]{6}\.log\)$")
+        self.assertIn("MUDDI-REFUSED: claude missing from PATH", block)
+        self.assertEqual(self.calls, [])
+
+    def test_pending_at_the_deadline_answers_200_and_the_row_stays_starting(self):
+        self.offline_muddi(990041)
+        self.popen([], rc=0, end=1.0)
+        t0 = time.monotonic()
+        code, r = self.restart("Muddi")
+        self.assertGreaterEqual(time.monotonic() - t0, S.LAUNCH_WAIT)
+        self.assertEqual((code, r["ok"], r["verdict"]), (200, True, "pending"))
+        self.assertEqual(row("Muddi")["state"], "starting")
+        self.until(lambda: "Muddi via muddi.sh -> unverified" in self.spawn_log())
+        self.assertEqual(row("Muddi")["state"], "starting")      # no verdict is no failure: nothing undone
+        self.assertNotIn("launch", row("Muddi"))
+
+    def test_a_late_refusal_is_rolled_back_by_the_settle_thread(self):
+        self.offline_muddi(990042)
+        self.popen([(0.9, x) for x in REFUSED], rc=1, end=0.9)
+        code, r = self.restart("Muddi")
+        self.assertEqual((code, r["verdict"]), (200, "pending"))
+        self.assertEqual(row("Muddi")["state"], "starting")
+        cur = call("/api/wait?since=0&timeout=0")[1]["cursor"]
+        self.until(lambda: row("Muddi")["state"] == "offline")
+        self.assertEqual(row("Muddi")["launch"]["error"], "claude missing from PATH")
+        self.assertIn("agents", call(f"/api/wait?since={cur}&timeout=0")[1]["changed"])
+        self.until(lambda: '"late": true' in self.log.getvalue())
+        self.popen()
+        code, r = self.restart("Muddi")                          # Restart is taken again, and this one starts
+        self.assertEqual((code, r["verdict"]), (200, "started"))
+        self.assertNotIn("launch", row("Muddi"))
+
+    def test_a_late_failure_never_undoes_a_newer_launch(self):
+        a, _ = self.dead("newer", 990043)
+        self.popen(["MASTER-LAUNCHING session=x tmux=master-x-000000",
+                    (0.9, "MASTER-DIED session=x tmux=master-x-000000: claude exited at once")], rc=4, end=0.9)
+        code, r = self.restart(a)
+        self.assertEqual((code, r["verdict"]), (200, "launching"))
+        self.edit(a, spawned=time.time())                        # a newer launch owns the row now
+        self.until(lambda: f"{a} via new-master.sh -> died" in self.spawn_log())
+        time.sleep(0.1)
+        self.assertEqual(row(a)["state"], "starting")
+        self.assertNotIn("launch", S._agents()[a])
+
+    def test_exit_1_with_only_a_fail_line_is_refused_with_that_line(self):
+        self.offline_muddi(990044)
+        self.popen(["muddi.sh start · October 28, 2026 11:00 AM PT",
+                    "FAIL the boot prompt is not plain ASCII (a path has other characters)"], rc=1)
+        code, r = self.restart("Muddi")
+        self.assertEqual((code, r["verdict"], r["error"]),
+                         (409, "refused", "the boot prompt is not plain ASCII (a path has other characters)"))
+        self.assertEqual(row("Muddi")["state"], "offline")
+
+    def test_verdicts_read_from_the_launchers_lines(self):
+        v = S._verdict
+        self.assertEqual(v("", 2), {"verdict": "refused", "error": "the launcher exited 2"})
+        self.assertEqual(v("cannot create /x\n", 1), {"verdict": "refused", "error": "cannot create /x"})
+        self.assertEqual(v("TMUX-FAIL\n", 1), {"verdict": "refused", "error": "tmux could not start a session"})
+        self.assertEqual(v("MASTER-REFUSED: no such folder: /x\n", 1),
+                         {"verdict": "refused", "error": "no such folder: /x"})
+        self.assertEqual(v("MASTER-LAUNCHING session=s1 tmux=t1\n", None),
+                         {"verdict": "launching", "session": "s1", "tmux": "t1"})
+        self.assertEqual(v("MASTER-LAUNCHING session=s1 tmux=t1\nMASTER-OK session=s1 tmux=t1\n", None),
+                         {"verdict": "started", "session": "s1", "tmux": "t1"})
+        self.assertEqual(v("MUDDI-UNVERIFIED session=s1 tmux=muddi (60 s)\n", 3)["verdict"], "unverified")
+        self.assertEqual(v("--- preflight\n", None), {"verdict": "pending"})
+        self.assertEqual(v("MUDDI-RELAY-OK session=s2 tmux=muddi\n", 0)["verdict"], "started")
+
+    def test_muddi_running_answers_409_and_puts_the_row_back(self):
+        self.offline_muddi(990045)
+        self.popen(["MUDDI-RUNNING session=53fb7b38-df9c-452c-a9d3-310745cb6071 tmux=muddi-53fb7b38 since=1 ctx=12%",
+                    "peek: tmux attach -t muddi-53fb7b38 (detach: ctrl-b d)"], rc=0)
+        code, r = self.restart("Muddi")
+        self.assertEqual((code, r["ok"], r["verdict"], r["error"]),
+                         (409, False, "running", "it is already running in tmux muddi-53fb7b38 but has not joined the chat"))
+        self.assertEqual(row("Muddi")["state"], "offline")
+
+    def test_master_died_answers_500_and_puts_the_row_back(self):
+        lead = name("died-lead")
+        join(lead)
+        a, _ = self.dead("died", 990046)
+        self.edit(a, parent=lead)
+        self.popen(["MASTER-LAUNCHING session=x tmux=master-x-000000",
+                    "MASTER-DIED session=x tmux=master-x-000000: claude missing from PATH inside tmux"], rc=4)
+        code, r = self.restart(a)
+        self.assertEqual((code, {k: r[k] for k in r if k != "ms"}),
+                         (500, {"ok": False, "agent": a, "how": "master", "verdict": "died",
+                                "error": "claude missing from PATH inside tmux"}))
+        served = row(a)
+        self.assertEqual((served["state"], served["parent"], served["launch"]["verdict"]), ("offline", lead, "died"))
+        join(a)                                                  # it joins at last: the old failure is history
+        self.assertNotIn("launch", row(a))
+
+    def test_a_new_session_gets_the_launchers_verdict_too(self):
+        home = str(pathlib.Path.home())
+        gone = name("new-refused")
+        self.popen(["MASTER-REFUSED: tmux missing"], rc=1)
+        code, r = call("/api/agents/new", {"folder": home, "name": gone})
+        self.assertEqual((code, r["ok"], r["verdict"], r["error"]), (409, False, "refused", "tmux missing"))
+        self.assertNotIn(gone, S._agents())                     # the row this call made is gone again
+        lead = name("brief-lead")
+        join(lead)
+        n = name("new-started")
+        self.popen()
+        order = ("# Build the lineup alerts page in ~/Developer/snappy/app.py for " + lead + " (#3286)\n"
+                 "Then the rest of the order, which no client shows.")
+        code, r = call("/api/agents/new", {"folder": home, "name": n, "parent": lead, "order": order})
+        self.assertEqual((code, r["ok"], r["verdict"], r["agent"], r["parent"]), (200, True, "started", n, lead), r)
+        self.assertEqual(S._agents()[n]["order"], r["session"])
+        self.assertEqual(row(n)["brief"], "Build the lineup alerts page for Claude")
+        self.assertEqual(row(n)["state"], "starting")
+
+    def test_a_brief_is_one_clipped_plain_line(self):
+        n = name("long-brief")
+        self.popen()
+        order = "\n\n" + " ".join(["word"] * 60) + "\nsecond line"
+        code, r = call("/api/agents/new", {"folder": str(pathlib.Path.home()), "name": n, "order": order})
+        self.assertEqual(code, 200, r)
+        brief = row(n)["brief"]
+        self.assertLessEqual(len(brief), S.BRIEF_MAX)
+        self.assertTrue(brief.startswith("word word") and brief.endswith("..."), brief)
+        plain = name("plain")
+        code, _ = call("/api/agents/new", {"folder": str(pathlib.Path.home()), "name": plain})
+        self.assertEqual(code, 200)
+        self.assertNotIn("brief", row(plain))                   # no order, no brief
+
     def test_stop_clears_an_offline_row_off_the_list(self):
         a, _ = self.dead("clear", 990027)
         code, r = self.stop(a)
@@ -917,6 +1143,100 @@ class LinksSeamTests(unittest.TestCase):
         d = call("/api/activity")[1]
         self.assertLessEqual({"rows", "sessions", "now", "links"}, set(d))
         self.assertIsInstance(d["links"], dict)
+
+
+GH_SAY = '''#!%s
+"""Fake gh for TalksTests: one open tap of hperwin's that takes comments; never reaches GitHub."""
+import json, sys
+a = sys.argv[1:]
+if a[:2] == ["issue", "view"]:
+    print(json.dumps({"author": {"login": "hperwin"}, "title": "A tap", "body": "- [ ] it works",
+                      "labels": [{"name": "flightdeck"}], "state": "OPEN", "comments": [],
+                      "url": "https://github.com/SnappStats/fu-talk/issues/5", "createdAt": "2026-10-28T18:00:00Z",
+                      "closedAt": None, "stateReason": None}))
+elif a[:2] == ["api", "user"]:
+    print("hperwin")
+elif a[:2] == ["issue", "comment"]:
+    import time
+    print("https://github.com/SnappStats/fu-talk/issues/5#issuecomment-%%d" %% int(time.time() * 1000))
+else:
+    sys.exit("fake gh: unexpected call " + " ".join(a))
+''' % sys.executable
+
+
+class TalksTests(unittest.TestCase):
+    """GET /api/agents talks: links.py's per-message talks as face keys, with a tap's key in the case /api/taps
+    serves it, and the tap-say a master sends, at once."""
+
+    def setUp(self):
+        self.saved = {"GH": S.GH, "talks": S.links.talks, "me": S.TAPS["me"]}
+        shim = pathlib.Path(TMP.name) / "gh-talk"
+        shim.mkdir(exist_ok=True)
+        (shim / "gh").write_text(GH_SAY)
+        (shim / "gh").chmod(0o755)
+        S.GH, S.TAPS["me"] = str(shim / "gh"), ""
+        S._SAYS.clear()
+
+    def tearDown(self):
+        S.GH, S.links.talks, S.TAPS["me"] = self.saved["GH"], self.saved["talks"], self.saved["me"]
+        S._SAYS.clear()
+        S.HOT.pop("SnappStats/fu-talk#5", None)
+
+    def test_talks_from_links_are_face_keys_and_tap_keys_take_the_served_case(self):
+        a, b = name("talk-a"), name("talk-b")
+        join(a)
+        join(b)
+        now = time.time()
+        fake = [{"id": "m1", "from": a, "to": b, "ts": now - 5, "text": "Rail is live", "kind": "message"},
+                {"id": "toolu_1", "from": a, "to": "snappstats/snappy#3286", "ts": now - 1, "text": "Flying it",
+                 "kind": "tap"},
+                {"id": "toolu_2", "from": a, "to": "SnappStats/other#9", "ts": now - 3, "text": "", "kind": "tap"}]
+        asked = []
+        S.links.talks = lambda names: (asked.append(set(names)), [dict(t) for t in fake])[1]
+        taps = [{"key": "SnappStats/snappy#3286"}]
+        rows = S._agent_rows()
+        self.assertEqual(S._talks(rows, taps), [
+            {"id": "toolu_1", "from": "agent:" + a, "to": "SnappStats/snappy#3286", "ts": now - 1, "text": "Flying it",
+             "kind": "tap"},
+            {"id": "toolu_2", "from": "agent:" + a, "to": "SnappStats/other#9", "ts": now - 3, "text": "", "kind": "tap"},
+            {"id": "m1", "from": "agent:" + a, "to": "agent:" + b, "ts": now - 5, "text": "Rail is live",
+             "kind": "message"}])
+        self.assertEqual(asked[-1], {r["name"] for r in rows})
+        served = call("/api/agents")[1]
+        self.assertEqual([t["id"] for t in served["talks"]], ["toolu_1", "toolu_2", "m1"])
+        self.assertNotIn("toolu_1", json.dumps(served["links"]))         # tap talks never enter the pair rows
+        S.links.talks = lambda names: [dict(fake[0], id=f"m{i}", ts=now - i) for i in range(80)]
+        self.assertEqual(len(S._talks(rows, taps)), S.TALKS_MAX)
+
+    def test_a_tap_say_with_via_is_a_talk_at_once_and_wakes_agents(self):
+        a = name("talk-say")
+        join(a)
+        S.links.talks = lambda names: []
+        cur = call("/api/wait?since=0&timeout=0")[1]["cursor"]
+        code, r = call("/api/taps/say", {"key": "snappstats/fu-talk#5", "via": a,
+                                         "body": "From " + a + ": check ~/Developer/x/app.py and #12 now\nmore"})
+        self.assertEqual(code, 200, r)
+        self.assertIn("agents", call(f"/api/wait?since={cur}&timeout=0")[1]["changed"])
+        [t] = [t for t in call("/api/agents")[1]["talks"] if t["id"] == r["url"]]
+        self.assertEqual((t["from"], t["to"], t["kind"], t["text"]), ("agent:" + a, "snappstats/fu-talk#5", "tap",
+                                                                      "check now"))
+        self.assertEqual(S._talks(S._agent_rows(), [{"key": "SnappStats/fu-talk#5"}])[0]["to"], "SnappStats/fu-talk#5")
+        code, r = call("/api/taps/say", {"key": "snappstats/fu-talk#5", "body": "his own words"})
+        self.assertEqual(code, 200, r)
+        self.assertNotIn(r["url"], [t["id"] for t in call("/api/agents")[1]["talks"]])     # no via: not a talk
+
+    def test_talks_live_for_ten_minutes(self):
+        a = name("talk-age")
+        join(a)
+        S.links.talks = lambda names: []
+        now = time.time()
+        with S._lock:
+            S._SAYS.extend([{"id": "old", "from": a, "to": "o/r#1", "ts": now - 601, "text": ""},
+                            {"id": "new", "from": a, "to": "o/r#1", "ts": now - 590, "text": ""}])
+        ids = [t["id"] for t in S._talks(S._agent_rows(), [])]
+        self.assertIn("new", ids)
+        self.assertNotIn("old", ids)
+        self.assertNotIn("old", [t["id"] for t in S._SAYS])
 
 
 GH_SHIM = '''#!%s
