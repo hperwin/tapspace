@@ -237,7 +237,10 @@ workspace where any number of agents can be connected at once:
 - **Offline and Restart.** A master whose Claude sessions all ended (a
   crash, a reboot) shows Offline, with a Restart button that starts it
   again under the same NAME: Muddi through `muddi.sh`, any other master in
-  its own folder under its own lead. On an Offline row the spin down
+  its own folder under its own lead. The answer is the launcher's own
+  verdict, within about 6 s: it is starting, or it could not start and
+  why ("claude missing from PATH"), with the row Offline again at once so
+  the next Restart is taken. On an Offline row the spin down
   control reads Clear and only takes the row off the list.
 - **Taps.** Your Flightdeck journeys, read live from Flightdeck's own board
   with the Flightdeck sign-in Claude Code already has on this Mac (see
@@ -314,8 +317,14 @@ while the taps load),
 `POST /api/agents/stop {name}` (`{ok, stopped: [pids], tmux: [sessions]}`; an unknown NAME or one with no
 live Claude session answers `{ok: false, error}` and ends nothing; an Offline row is cleared,
 `{ok, ended: [], cleared: true}`),
-`POST /api/agents/restart {name}` (`{ok, agent, how: "muddi" | "master"}`; 409 while a session of it still
-runs or it is already starting),
+`POST /api/agents/restart {name}` (`{ok, agent, how: "muddi" | "master", verdict, error?, session?, tmux?, ms}`;
+409 while a session of it still runs or it is already starting). It waits up to 6 s for the launcher's own
+verdict: 200 `started`, `launching` or `pending` (the row stays starting); 409 `refused` (with the launcher's
+reason, such as "claude missing from PATH") or `running` (its tmux session lives but never joined); 500
+`died` (claude ended inside tmux). On 409 and 500 the row is Offline again before the answer, so Restart is
+taken again at once. Each launch's output is its own file under `data/spawn/`, stamped into `data/spawn.log`
+when the launcher ends; a failure that lands after the answer puts the row back then. `POST /api/agents/new`
+answers the same way, with `verdict` and `ms` added to `{ok, agent, session, tmux, parent}`,
 `GET /api/taps` (`{me, items, fetched, error, outcomes}`; `outcomes` maps each finished tap's key to shipped,
 aborted or closed for 30 days, never a tap listed open again, and a done item carries the same `outcome`),
 `POST /api/taps/say {key: "owner/repo#n", body}`, `POST /api/taps/refresh`,
@@ -339,6 +348,15 @@ with no lead). `focus` is the thread key your newest own message went to
 `{a, b, last, count, summary, active, from}`: two agent NAMEs, the latest
 message's time and sender, the messages in the last 24 hours, a short plain
 summary, and `active` while the latest one is under 10 minutes old.
+`talks` lists every talk of the last 10 minutes, newest first, at most 60:
+`{id, from, to, ts, text, kind}`, `from` and `to` being face keys (`agent:NAME`,
+or a tap's key as `/api/taps` serves it), `kind` `message` (one agent-to-agent
+message) or `tap` (a master's Flightdeck message_pilot, answer_pilot or
+fly_journey call, or its `tap.py tap-say`), `text` up to 80 plain characters.
+Tap talks never show in `links`. A master started with an order carries
+`brief`, the order's first plain line (up to 140 characters), and a row whose
+last launch failed carries `launch` (`{verdict, error, at}`) until it joins
+or starts again.
 
 ## Your phone (Glint)
 

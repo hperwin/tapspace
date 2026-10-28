@@ -50,7 +50,9 @@ import re
 import threading
 import time
 import uuid
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from zoneinfo import ZoneInfo
 from urllib.parse import quote, urlencode
 
 import activity
@@ -354,6 +356,8 @@ def _agent_touch(name, **extra):
         row = a.get(name) or {"name": name, "first": time.time()}
         if "heard" in extra:            # listen's cursor only moves forward: two polls for one NAME can cross
             extra["heard"] = max(extra["heard"], row.get("heard") or 0)
+        if "listen" in extra:           # it joined: a launch that failed before is history
+            row.pop("launch", None)
         row.update(extra)
         row["seen"] = time.time()
         a[name] = row
@@ -543,6 +547,48 @@ def _title(info):
     return "Claude"
 
 
+BRIEF_MAX = 140
+_BRIEFS = {}                          # order session -> its brief (an order file never changes)
+
+
+def _brief(sid, agents):
+    """A spawned master's brief: the first plain line of the order it started with (data/orders/<sid>.md, sid stored
+    on the row as order), cleaned like a link summary (no paths, hex ids, keys or #numbers; NAMEs as titles), at most
+    BRIEF_MAX characters. "" for a row with no order."""
+    if not isinstance(sid, str) or not links._SID.match(sid):
+        return ""
+    if sid not in _BRIEFS:
+        try:
+            text = (DATA / "orders" / f"{sid}.md").read_text(errors="replace")
+        except OSError:
+            return ""
+        _BRIEFS[sid] = links.line(text, {n: _title(i) for n, i in agents.items()}, cap=BRIEF_MAX)
+    return _BRIEFS[sid]
+
+
+TALKS_MAX = 60
+_SAYS = []                            # talks the say route recorded: {id: comment url, from: NAME, to: key, ts, text}
+
+
+def _talks(rows, taps):
+    """GET /api/agents talks: every talk of the last links.LIVE seconds, newest first, at most TALKS_MAX, as face keys:
+    {id, from, to, ts, text, kind}. A message between two served masters (links.py, kind message), a Flightdeck call
+    from a served master to a tap (links.py, kind tap) and a tap-say a master sent (this route, kind tap). A tap's key
+    is the one /api/taps serves, matched without case (transcripts write both SnappStats/ and snappstats/). Tap talks
+    never enter the links rows. rows: _agent_rows(); taps: TAPS items."""
+    names = {r["name"] for r in rows}
+    served = {t["key"].casefold(): t["key"] for t in taps}
+    now = time.time()
+    with _lock:
+        _SAYS[:] = [t for t in _SAYS if now - t["ts"] <= links.LIVE]
+        said = [{**t, "kind": "tap"} for t in _SAYS if t["from"] in names]
+    out = [{"id": t["id"], "from": "agent:" + t["from"],
+            "to": "agent:" + t["to"] if t["kind"] == "message" else served.get(t["to"].casefold(), t["to"]),
+            "ts": t["ts"], "text": t["text"], "kind": t["kind"]} for t in links.talks(names) + said]
+    out.sort(key=lambda t: -t["ts"])
+    return out[:TALKS_MAX]
+
+
 def _focus(allrows, taps, said=None):
     """The thread the reviewer is talking in: the one his newest own message went to, a chat row of his
     (agent:NAME) or a comment he sent on a tap through TapSpace himself (that tap's key); None when he never
@@ -587,6 +633,12 @@ def _agent_rows(allrows=None):
                     "progress": info.get("progress"),
                     "notes": [n for n in notes.get(name, []) if n["ts"] > (read or 0)][:NOTES_MAX],
                     "notes_read": read, "look": _look(info)})
+        brief = _brief(info.get("order"), agents)
+        if brief:
+            out[-1]["brief"] = brief
+        launch = info.get("launch")
+        if isinstance(launch, dict) and (launch.get("at") or 0) > (info.get("listen") or 0):
+            out[-1]["launch"] = launch      # why its last launch failed, until it joins or starts again
     rank = {"thinking": 0, "switching": 0, "starting": 0, "here": 1, "away": 2, "offline": 3}
     out.sort(key=lambda r: -r["last"])
     out.sort(key=lambda r: rank[r["state"]])
@@ -848,10 +900,11 @@ def _agents_watch():
             # focus too: a tap comment of his moves it through the taps refresh, not a chat write
             sig = ([(r["name"], r["state"], r["where"], r["title"], (r["progress"] or {}).get("updated"),
                      r["notes_read"], [(n["ticket"], n["version"], n["ts"]) for n in r["notes"]],
-                     r.get("role"), r["parent"], r["look"],
+                     r.get("role"), r["parent"], r["look"], (r.get("launch") or {}).get("at"),
                      tuple((r.get("activity") or {}).get(k) for k in ("state", "word", "detail")))
                     for r in rows],
-                   links.rows({r["name"] for r in rows}), _focus(chat, TAPS["items"]))
+                   links.rows({r["name"] for r in rows}), _focus(chat, TAPS["items"]),
+                   [t["id"] for t in _talks(rows, TAPS["items"])])
             if sig != last:
                 last = sig
                 _bump("agents")
@@ -1904,12 +1957,15 @@ def _projects():
 ORDER_MAX = 65536                    # bytes of a first order appended to a new master's prompt
 
 
-def _spawn_master(folder, name, parent="", order="", restart=False):
-    """Starts a master in folder under name (new-master.sh, detached) -> {agent, session, tmux, parent}.
-    The server picks the session id and the tmux name, so the answer names them before the child exists.
-    parent (a joined NAME) is stored on the row first, so the child is born under its lead; order is
-    kept under data/orders/ and appended to its first prompt. restart: _restart_master already found
-    the row of that NAME offline. new-master.sh always runs through a login shell (LOGIN)."""
+def _spawn_master(folder, name, parent="", order="", restart=False, undo=None):
+    """Starts a master in folder under name (new-master.sh, through _launch) -> {agent, session, tmux, parent,
+    verdict, error?, ms}. The server picks the session id and the tmux name, so the answer names them before the
+    child exists. parent (a joined NAME) is stored on the row first, so the child is born under its lead; order is
+    kept under data/orders/<session>.md, appended to its first prompt, and its session stored on the row (order),
+    which serves the order's first line as the row's brief. restart: _restart_master already found the row of that
+    NAME offline, and undo (its row edit) puts it back when the launch fails. Otherwise a failed launch puts back
+    what this call wrote: the fields it set, or the whole row when it made the row. new-master.sh always runs
+    through a login shell (LOGIN)."""
     home = pathlib.Path.home().resolve()
     f = pathlib.Path(folder).expanduser().resolve()
     if not f.is_dir() or not (str(f) + "/").startswith(str(home) + "/"):
@@ -1931,7 +1987,22 @@ def _spawn_master(folder, name, parent="", order="", restart=False):
     sid = str(uuid.uuid4())
     ts = "master-" + re.sub(r"[^A-Za-z0-9_-]", "-", f.name) + "-" + sid[:6]   # new-master.sh's own rule
     where = "~/" + str(f.relative_to(home)) if f != home else "~"
-    _agent_touch(name, spawned=time.time(), where=where, **({"parent": parent} if parent else {}))
+    fields = {"spawned": time.time(), "where": where, **({"parent": parent} if parent else {}),
+              **({"order": sid} if order else {})}
+    with _lock:
+        a = _agents()
+        before = {k: a[name][k] for k in (*fields, "launch") if k in a[name]} if name in a else None
+    _agent_touch(name, **fields)
+    _agent_edit(name, lambda row: row.pop("launch", None), seen=False)
+
+    def put_back(row):
+        if restart:
+            return undo(row) if undo else None
+        if before is None:
+            return "drop"                       # the row this call made
+        for k in (*fields, "launch"):
+            row.pop(k, None)
+        row.update(before)
     extra = [parent] if parent else []
     if order:
         orders = DATA / "orders"
@@ -1941,14 +2012,13 @@ def _spawn_master(folder, name, parent="", order="", restart=False):
         with os.fdopen(fd, "w") as fh:
             fh.write(order)
         extra = [parent, str(path)]
-    log = DATA / "spawn.log"
-    with log.open("a") as fh:
-        subprocess.Popen([*LOGIN, str(ROOT / "new-master.sh"), str(f), name] + extra,
-                         stdout=fh, stderr=subprocess.STDOUT, start_new_session=True,
-                         env={**{k: v for k, v in os.environ.items() if k not in SPAWN_SCRUB},
-                              "TAPSPACE_URL": f"http://127.0.0.1:{PORT}",
-                              "TAPSPACE_MASTER_UUID": sid, "TAPSPACE_MASTER_TMUX": ts})
-    return {"agent": name, "session": sid, "tmux": ts, "parent": parent or None}
+    v = _launch([str(ROOT / "new-master.sh"), str(f), name] + extra,
+                {**{k: v for k, v in os.environ.items() if k not in SPAWN_SCRUB},
+                 "TAPSPACE_URL": f"http://127.0.0.1:{PORT}",
+                 "TAPSPACE_MASTER_UUID": sid, "TAPSPACE_MASTER_TMUX": ts},
+                name, _launch_undo(name, fields["spawned"], put_back))
+    return {"agent": name, "session": sid, "tmux": ts, "parent": parent or None,
+            **{k: v[k] for k in ("verdict", "error", "ms", "log") if k in v}}
 
 
 # ---- restart a master after a crash or a reboot (POST /api/agents/restart) ----
@@ -1959,6 +2029,132 @@ SPAWN_SCRUB = ("CLAUDE_CODE_SESSION_ID", "CLAUDE_PID", "CLAUDE_CODE_MESSAGING_SO
                "CLAUDE_CODE_MESSAGING_TOKEN", "CODEX_COMPANION_SESSION_ID", "CODEX_COMPANION_TRANSCRIPT_PATH",
                "TAPSPACE_BOARD_KEY", "TAPSPACE_BOARD_URL")
 LOGIN = ("/bin/zsh", "-l", "-c", 'exec bash "$0" "$@"')     # + a script and its args: runs it with the login PATH
+LAUNCH_WAIT = 6.0                    # a restart or New session answers by then with the launcher's verdict, or pending
+SPAWN = DATA / "spawn"               # one output file per launch: <YYYYmmdd-HHMMSS>-<hex6>.log
+FAILED = ("refused", "running", "died")   # verdicts that put the row back
+LAUNCH_CODE = {"refused": 409, "running": 409, "died": 500}   # every other verdict answers 200, the only success
+DECIDED = ("started",) + FAILED           # verdicts that end the wait
+_VERDICT = re.compile(r"^(?:MUDDI|MASTER)(?:-RELAY)?-(OK|RUNNING|REFUSED|DIED|LAUNCHING|UNVERIFIED)\b:?\s*(.*)$")
+
+
+def _verdict(text, rc):
+    """The launcher's output so far (text) and its exit code (rc, None while it runs) -> {verdict, error?, session?,
+    tmux?}. muddi.sh and new-master.sh print one of: MUDDI-OK / MASTER-OK (started), MUDDI-RUNNING (running),
+    MUDDI-REFUSED: r / MASTER-REFUSED: r / TMUX-FAIL (refused), MASTER-DIED ...: r (died); the first of these wins.
+    Else MUDDI-UNVERIFIED / MASTER-UNVERIFIED (unverified), a non-zero exit (refused: its last FAIL line, else its
+    last line, else the exit code), a zero exit (unverified), MASTER-LAUNCHING (launching), else pending."""
+    ids, seen = {}, set()
+    lines = [x.strip() for x in text.splitlines() if x.strip()]
+    for x in lines:
+        if x.startswith("TMUX-FAIL"):
+            return {"verdict": "refused", "error": "tmux could not start a session", **ids}
+        m = _VERDICT.match(x)
+        if not m:
+            continue
+        word, rest = m.groups()
+        ids.update(re.findall(r"\b(session|tmux)=([^\s:]+)", rest.split(": ", 1)[0]))
+        if word == "OK":
+            return {"verdict": "started", **ids}
+        if word == "RUNNING":
+            return {"verdict": "running", **ids,
+                    "error": f"it is already running in tmux {ids.get('tmux') or 'muddi'} but has not joined the chat"}
+        if word == "REFUSED":
+            return {"verdict": "refused", "error": rest or "the launcher refused", **ids}
+        if word == "DIED":
+            return {"verdict": "died", "error": rest.split(": ", 1)[1].strip() if ": " in rest else
+                    "claude exited at once", **ids}
+        seen.add(word)
+    if "UNVERIFIED" in seen:
+        return {"verdict": "unverified", **ids}
+    if rc:
+        fails = [x[5:].strip() for x in lines if x.startswith("FAIL ")]
+        return {"verdict": "refused", **ids,
+                "error": fails[-1] if fails else lines[-1][:240] if lines else f"the launcher exited {rc}"}
+    if rc == 0:
+        return {"verdict": "unverified", **ids}
+    return {"verdict": "launching" if "LAUNCHING" in seen else "pending", **ids}
+
+
+def _pt(t=None):
+    """A time as people read it here: October 28, 2026 11:20:03 AM PT."""
+    d = datetime.fromtimestamp(time.time() if t is None else t, ZoneInfo("America/Los_Angeles"))
+    return d.strftime("%B ") + f"{d.day}, {d.year} {d.hour % 12 or 12}:{d:%M:%S} {d:%p} PT"
+
+
+def _launch(argv, env, name, fail):
+    """Runs a launcher (muddi.sh or new-master.sh, argv) through the login shell (LOGIN) and waits up to LAUNCH_WAIT
+    for its verdict (_verdict) -> {verdict, error?, session?, tmux?, log, ms}. Its output goes to its own file,
+    data/spawn/<stamp>-<hex6>.log (never a pipe, so it outlives a server restart), read every 0.1 s. A refused,
+    running or died verdict calls fail(verdict) before this returns. _settle waits for the launcher to end, then
+    stamps its whole output into data/spawn.log and calls fail for a failure that lands after the answer.
+    Popen raising (no shell) is the caller's."""
+    SPAWN.mkdir(exist_ok=True)
+    rel = f"spawn/{time.strftime('%Y%m%d-%H%M%S')}-{secrets.token_hex(3)}.log"
+    t0 = time.monotonic()
+    with (DATA / rel).open("w") as fh:
+        p = subprocess.Popen([*LOGIN, *argv], stdout=fh, stderr=subprocess.STDOUT, start_new_session=True, env=env)
+    while True:
+        rc = p.poll()                                # first: an exited launcher's output is all in the file
+        v = _verdict(_spawn_text(rel), rc)
+        if v["verdict"] in DECIDED or rc is not None or time.monotonic() - t0 >= LAUNCH_WAIT:
+            break
+        time.sleep(0.1)
+    v.update(log=rel, ms=int((time.monotonic() - t0) * 1000))
+    if v["verdict"] in FAILED:
+        fail(v)
+    threading.Thread(target=_settle, args=(p, rel, name, pathlib.Path(argv[0]).name, t0, v["verdict"], fail),
+                     daemon=True).start()
+    return v
+
+
+def _spawn_text(rel):
+    try:
+        return (DATA / rel).read_text(errors="replace")
+    except OSError:
+        return ""
+
+
+def _settle(p, rel, name, script, t0, early, fail):
+    """After _launch answered: waits for the launcher to end, appends a stamped block with its whole output to
+    data/spawn.log, and when the answer was not yet a verdict (launching, pending) but the end is a failure, puts
+    the row back through fail (which checks the row is still this launch's) and logs it."""
+    try:
+        rc = p.wait()
+    except Exception:
+        rc = None
+    text = _spawn_text(rel)
+    v = _verdict(text, rc)
+    ms = int((time.monotonic() - t0) * 1000)
+    try:
+        with (DATA / "spawn.log").open("a") as fh:
+            fh.write(f"== {_pt()} {name} via {script} -> {v['verdict']} in {ms} ms ({rel})\n" +
+                     text + ("\n" if text and not text.endswith("\n") else ""))
+    except OSError:
+        pass
+    if early not in FAILED and v["verdict"] in FAILED and fail({**v, "log": rel, "ms": ms}):
+        print(time.strftime("%Y-%m-%d %H:%M:%S"), "launch", json.dumps(name, ensure_ascii=False),
+              json.dumps({"verdict": v["verdict"], "error": v.get("error"), "late": True, "log": rel, "ms": ms},
+                         ensure_ascii=False), flush=True)
+
+
+def _launch_undo(name, at, undo):
+    """-> fail(verdict) for _launch: NAME's row put back by undo(row) (which returns "drop" to remove a row the launch
+    made), with launch = {verdict, error, at} kept on it, only while the row still carries this launch's spawned mark
+    (at) and has not listened since. True when it did; it also bumps agents."""
+    def fail(v):
+        with _lock:
+            a = _agents()
+            row = a.get(name)
+            if row is None or row.get("spawned") != at or (row.get("listen") or 0) > at:
+                return False
+            if undo(row) == "drop":
+                del a[name]
+            else:
+                row["launch"] = {"verdict": v["verdict"], "error": v.get("error") or "", "at": time.time()}
+            _agents_write(a)
+        _bump("agents")
+        return True
+    return fail
 
 
 def _restart_master(name):
@@ -1975,7 +2171,7 @@ def _restart_master(name):
         return 500, {"ok": False, "error": f"muddi.sh not found at {MUDDI_SH}"}
     offline = _offline(name)                 # never under _lock
     keys = ("stopped", "stopped_sessions", "spawned")
-    was = {}
+    was, mark = {}, {}
 
     def change(row):
         if not offline:
@@ -1985,7 +2181,8 @@ def _restart_master(name):
         was.update((k, row[k]) for k in keys if k in row)
         row.pop("stopped", None)
         row.pop("stopped_sessions", None)
-        row["spawned"] = time.time()
+        row.pop("launch", None)
+        row["spawned"] = mark["at"] = time.time()
 
     def undo(row):
         for k in keys:
@@ -1999,10 +2196,10 @@ def _restart_master(name):
         if muddi:
             env = {k: v for k, v in os.environ.items() if k not in SPAWN_SCRUB}
             env["TAPSPACE_URL"] = f"http://127.0.0.1:{PORT}"
-            with (DATA / "spawn.log").open("a") as fh:
-                subprocess.Popen([*LOGIN, str(MUDDI_SH)],
-                                 stdout=fh, stderr=subprocess.STDOUT, start_new_session=True, env=env)
-            out = {"ok": True, "agent": name, "how": "muddi"}
+            v = _launch([str(MUDDI_SH)], env, name, _launch_undo(name, mark["at"], undo))
+            out = {"ok": v["verdict"] not in FAILED, "agent": name, "how": "muddi",
+                   **{k: v[k] for k in ("verdict", "error", "session", "tmux", "ms") if k in v}}
+            log = v["log"]
         else:
             home = pathlib.Path.home().resolve()
             f = pathlib.Path(info.get("where") or "~").expanduser().resolve()
@@ -2010,15 +2207,19 @@ def _restart_master(name):
                 f = home
             parent = info.get("parent")
             parent = parent if isinstance(parent, str) and parent != name and parent in _agents() else ""
-            got = _spawn_master(str(f), name, parent=parent, restart=True)
-            out = {"ok": True, "agent": name, "how": "master", "session": got["session"], "tmux": got["tmux"]}
+            got = _spawn_master(str(f), name, parent=parent, restart=True, undo=undo)
+            ok = got["verdict"] not in FAILED
+            out = {"ok": ok, "agent": name, "how": "master", **({"session": got["session"], "tmux": got["tmux"]}
+                                                                  if ok else {}),
+                   **{k: got[k] for k in ("verdict", "error", "ms") if k in got}}
+            log = got.get("log")
     except Exception as e:
         _agent_edit(name, undo, seen=False)
         return 500, {"ok": False, "error": f"could not start it: {e}"}
     print(time.strftime("%Y-%m-%d %H:%M:%S"), "restart", json.dumps(name, ensure_ascii=False),
-          json.dumps({k: out[k] for k in out if k != "ok"}, ensure_ascii=False), flush=True)
+          json.dumps({**{k: out[k] for k in out if k != "ok"}, "log": log}, ensure_ascii=False), flush=True)
     _bump("agents")
-    return 200, out
+    return LAUNCH_CODE.get(out["verdict"], 200), out
 
 
 # ---- taps: the reviewer's Flightdeck journeys as the board lists them (board.py), over their GitHub residue ----
@@ -2742,7 +2943,8 @@ class H(BaseHTTPRequestHandler):
             chat = _chat_rows()
             rows = _agent_rows(chat)
             self._json({"agents": rows, "links": links.rows({r["name"] for r in rows}),
-                        "fleet": _fleet(rows, TAPS["items"], chat), "focus": _focus(chat, TAPS["items"])})
+                        "fleet": _fleet(rows, TAPS["items"], chat), "focus": _focus(chat, TAPS["items"]),
+                        "talks": _talks(rows, TAPS["items"])})
             return
         if path == "/api/projects":
             self._json({"projects": _projects()})
@@ -2931,7 +3133,11 @@ class H(BaseHTTPRequestHandler):
                 except Exception as e:
                     self._json({"error": str(e)}, 400)
                     return
-                self._json({"ok": True, **out})
+                log = out.pop("log", None)
+                print(time.strftime("%Y-%m-%d %H:%M:%S"), "new", json.dumps(out["agent"], ensure_ascii=False),
+                      json.dumps({**out, "log": log}, ensure_ascii=False), flush=True)
+                _bump("agents")
+                self._json({"ok": out["verdict"] not in FAILED, **out}, LAUNCH_CODE.get(out["verdict"], 200))
                 return
             if self.path == "/api/chat/clear":
                 msgs, agents = _chat_clear()
@@ -3128,17 +3334,21 @@ class H(BaseHTTPRequestHandler):
             except Exception as e:
                 self._json({"error": str(e)}, 502)
                 return
+            talk = links.line(body, {n: _title(i) for n, i in _agents().items()}) if via else ""
             with _lock:
                 if via:
                     v = _via()
                     v[url] = via
                     VIA.write_text(json.dumps(v, indent=1))
+                    _SAYS.append({"id": url, "from": via, "to": key, "ts": time.time(), "text": talk})   # a talk
                 else:       # his own words from a TapSpace surface: the only tap comments that move focus (_focus)
                     s = _said()
                     s[url] = time.time()
                     SAID.write_text(json.dumps(s, indent=1))
             _inbox({"kind": "tapspace-tap-say", "tap": key, "message": body, "url": url,
                     "via": via})
+            if via:
+                _bump("agents")             # its talk line draws now, not at the next watch pass
             _hot(key, 0.15)
             self._json({"ok": True, "url": url})
             return

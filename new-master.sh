@@ -7,12 +7,15 @@
 # session, same claude flags and cswap account as session-relay cars. It joins TapSpace chat under <tapspace-name>.
 # Called by the space's "New session" button (POST /api/agents/new, folder ~): the agent picks its project folder
 # itself once Hayden says what to work on. tap.py new adds the parent and an order. Peek: tmux attach -t <session> (ctrl-b d).
+# The server reads its verdict from these lines (server.py _verdict): MASTER-REFUSED: <why> or TMUX-FAIL
+# (exit 1), MASTER-LAUNCHING (tmux is up), then MASTER-OK once claude wrote its transcript (exit 0), MASTER-DIED
+# when the tmux session ended first (exit 4), or MASTER-UNVERIFIED when no transcript came in time (exit 3).
 set -uo pipefail
 DIR="$1"; NAME="$2"; PARENT="${3:-}"; ORDER="${4:-}"
 TMUX_BIN="$(command -v tmux || echo /opt/homebrew/bin/tmux)"
-[ -x "$TMUX_BIN" ] || { echo "tmux missing"; exit 1; }
-[ -d "$DIR" ] || { echo "no such folder: $DIR"; exit 1; }
-[ -z "$ORDER" ] || [ -f "$ORDER" ] || { echo "no such order file: $ORDER"; exit 1; }
+[ -x "$TMUX_BIN" ] || { echo "MASTER-REFUSED: tmux missing"; exit 1; }
+[ -d "$DIR" ] || { echo "MASTER-REFUSED: no such folder: $DIR"; exit 1; }
+[ -z "$ORDER" ] || [ -f "$ORDER" ] || { echo "MASTER-REFUSED: no such order file: $ORDER"; exit 1; }
 # the server picks the session id and tmux name (TAPSPACE_MASTER_UUID / _TMUX) so it can answer with them
 UUID="${TAPSPACE_MASTER_UUID:-}"; [[ "$UUID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || UUID=$(uuidgen | tr 'A-Z' 'a-z')
 BASE="$(basename "$DIR")"
@@ -42,19 +45,32 @@ cd "$DIR"
 export TAPSPACE_URL="${TAPSPACE_URL:-http://127.0.0.1:4747}"
 # a fresh session: never another session's identity (tmux and the server can pass on stale ones)
 unset CLAUDE_CODE_SESSION_ID CLAUDE_PID CLAUDE_CODE_MESSAGING_SOCKET CLAUDE_CODE_MESSAGING_TOKEN CODEX_COMPANION_SESSION_ID CODEX_COMPANION_TRANSCRIPT_PATH TAPSPACE_MASTER_UUID TAPSPACE_MASTER_TMUX
+# the PATH that counts is this one (tmux's own, plus the login shell): say why before the session ends
+command -v claude >/dev/null 2>&1 || { echo "claude missing from PATH inside tmux" > "$W/launch.err"; exit 127; }
 exec claude --session-id $UUID --effort ultracode --dangerously-skip-permissions --settings '{"ultracode":true}' "\$(cat $W/prompt.txt)"
 LAUNCH
 chmod +x "$W/launch.sh"
 "$TMUX_BIN" new-session -d -s "$TS" -x 200 -y 50 "$W/launch.sh" || { echo "TMUX-FAIL"; exit 1; }
-# A folder Claude has not opened before asks "Do you trust this folder?": answer it inside tmux.
-for i in $(seq 1 20); do
+echo "MASTER-LAUNCHING session=$UUID tmux=$TS"
+# Wait for its transcript, the sign claude really runs. A folder Claude has not opened before asks "Do you trust this
+# folder?" first: answer it inside tmux. A tmux session that is gone means claude ended: say why.
+TRUSTED=""
+for i in $(seq 1 30); do
   sleep 1
+  if compgen -G "$HOME/.claude/projects/*/$UUID.jsonl" >/dev/null; then
+    echo "MASTER-OK session=$UUID tmux=$TS"; exit 0
+  fi
+  if ! "$TMUX_BIN" has-session -t "=$TS" 2>/dev/null; then
+    WHY="$(tr '\n' ' ' < "$W/launch.err" 2>/dev/null | head -c 300)"; WHY="${WHY% }"
+    echo "MASTER-DIED session=$UUID tmux=$TS: ${WHY:-claude exited at once}"; exit 4
+  fi
+  [ -n "$TRUSTED" ] && continue
   P="$("$TMUX_BIN" capture-pane -p -t "$TS" 2>/dev/null)"
   if grep -qi "trust" <<<"$P"; then
     # pick the Yes option whichever line the cursor starts on
     if grep -qE "❯ *[0-9]\. *Yes" <<<"$P"; then "$TMUX_BIN" send-keys -t "$TS" Enter
     else "$TMUX_BIN" send-keys -t "$TS" Down Enter; fi
-    break
+    TRUSTED=1
   fi
 done
-echo "MASTER-OK session=$UUID tmux=$TS"
+echo "MASTER-UNVERIFIED session=$UUID tmux=$TS"; exit 3
