@@ -78,7 +78,9 @@ class WebFaceTests(unittest.TestCase):
         self.assertNotIn('class="orb ${a.state}"', PAGE)
         self.assertNotIn("'orb ' + (a.state", PAGE)
         self.assertIn("${masterFace(a)}", PAGE)                  # the rail row and the thread head
-        self.assertIn("c.orb.className !== cls", PAGE)           # the Progress card keeps its node and sets the look
+        # the pool (contract C4): the lead by its activity and every master face by its fleet look, through masterFace
+        self.assertIn("masterFace(look, ' style=\"--s:64px\"')", PAGE)
+        self.assertIn("masterFace({look: f.look, state: f.state}, ' style=\"--s:40px\"')", PAGE)
 
 
 @unittest.skipUnless(NODE, "node is not installed")
