@@ -15,6 +15,24 @@ import SwiftUI
 enum ChatPoolBoard {
     /// A pool face, the gap beside it, the row pitch and the column's side margin.
     static let face: CGFloat = 40, gap: CGFloat = 14, pitch: CGFloat = 48, side: CGFloat = 16
+
+    /// A tap wears a master's face with a P badge: its look from its key (the web page's tapLook, djb2 over the
+    /// lower-cased key, so both draw the same face), its state from its phase (asleep until it flies, focused
+    /// while flying, wow while it waits on you).
+    static func tapLook(_ key: String) -> Int {
+        var h: UInt32 = 5381
+        for c in key.lowercased().utf16 { h = h &* 33 &+ UInt32(c) }
+        return 1 + Int(h % 17)
+    }
+
+    static func tapState(_ phase: String) -> String {
+        switch phase {
+        case "enroute": "thinking"
+        case "holding": "starting"
+        case "landed": "here"
+        default: "away"
+        }
+    }
     /// The lead's face and the room above it.
     static let lead: CGFloat = 64, leadTop: CGFloat = 14
     /// The lead block: face, 10 pt, the title line (17), 2 pt, the activity line (15).
@@ -473,8 +491,21 @@ private struct ChatPoolFace: View {
         let size = ChatPoolBoard.face
         Button(action: open) {
             ChatPoolFloat(period: 3.6 + Double(index % 5) * 0.35, lift: 3, phase: Double(index) * 0.6, on: !still) {
-                FaceView(key: e.key, size: size, look: e.look, initial: e.initial,
-                         phase: e.kind == "tap" ? TapPhase(rawValue: e.phase) : nil)
+                if e.kind == "tap" {
+                    OrbView(state: ChatPoolBoard.tapState(e.phase), look: ChatPoolBoard.tapLook(e.key), animated: !still)
+                        .frame(width: size, height: size)
+                        .overlay(alignment: .topTrailing) {
+                            Text(verbatim: "P")
+                                .font(.system(size: 9.5, weight: .heavy))
+                                .foregroundStyle(.white)
+                                .frame(width: 16, height: 16)
+                                .background(Circle().fill(Color(nsColor: Palette.green)))
+                                .overlay(Circle().strokeBorder(.white, lineWidth: 1.5).padding(-1.5))
+                                .offset(x: 2, y: -2)
+                        }
+                } else {
+                    FaceView(key: e.key, size: size, look: e.look, initial: e.initial)
+                }
             }
             .frame(width: size, height: size)
             .contentShape(Circle())

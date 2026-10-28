@@ -703,7 +703,8 @@ def _fleet(rows, taps, chat):
     """GET /api/agents fleet: everything running under the lead. Needs you first (taps holding or landed, or with a
     pilot's question on their issue, masters whose newest card waits on you), then working (masters thinking,
     starting or switching cars, taps flying), then the rest, newest first within each. A master is in it unless it
-    is away with its run done (or no run); a tap while it is proposed, flying, holding or landed. [] when no lead is
+    is away with its run done (or no run); a tap while it is proposed, flying or holding (a landed tap is done to
+    Hayden's eye: it waits for sign-off in the taps list, not under the lead). [] when no lead is
     served. Clients render it as is and never work membership out themselves. rows: _agent_rows(chat); taps: TAPS
     items; chat: every row."""
     lead = next((r for r in rows if r.get("role") == "lead"), None)
@@ -725,13 +726,13 @@ def _fleet(rows, taps, chat):
                     "working": r["state"] in ("thinking", "starting", "switching"),
                     "at": max(r["last"], pg.get("updated") or 0)})
     for t in taps:
-        if t.get("phase") not in ("holding", "landed", "enroute", "proposed"):
+        if t.get("phase") not in ("holding", "enroute", "proposed"):
             continue
         g = t.get("goals") or []
         out.append({"key": t["key"], "kind": "tap", "title": _note_words(_undash(t["title"]), 80),
                     "initial": _initial(t["repo"].split("/")[-1]), "phase": t["phase"], "word": t["phase_word"],
                     "done": sum(1 for x in g if x.get("done")), "total": len(g),
-                    "needs_you": t["phase"] in ("holding", "landed") or t["status"] == "needs-you",
+                    "needs_you": t["phase"] == "holding" or t["status"] == "needs-you",
                     "working": t["phase"] == "enroute",
                     "at": _epoch(t["last"])})
     out.sort(key=lambda f: -f["at"])

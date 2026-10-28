@@ -632,6 +632,8 @@
   .pf.ping::after{animation:ripple 1.2s ease-out 1}
   .pf:focus-visible{outline:2px solid rgba(var(--hl),.45);outline-offset:3px}
   .pm.on .pf{transform:scale(1.12);transition:transform .5s cubic-bezier(.3,1.4,.5,1)}
+  .pf .pbadge{position:absolute;top:-2px;right:-2px;width:16px;height:16px;border-radius:50%;background:var(--green);
+    color:#fff;font:800 9.5px/16px -apple-system,system-ui,sans-serif;text-align:center;box-shadow:0 0 0 1.5px #fff}
   #poolfaces.revealing .pm:not(.on) .pf > *{opacity:.5}   /* the face dims; its white disc stays, so no line shows through */
   /* the reveal card: anchored under (or over) the face, the column's width less 24, its lines 40 ms apart */
   .pcard{position:absolute;left:12px;top:0;z-index:3;pointer-events:none;padding:12px 14px 13px;border-radius:14px;
@@ -2873,6 +2875,14 @@ function leadCenter(){                   // in the pool's own coordinates (its d
 }
 
 // ---- the pool's faces ----
+// A tap wears a master's face with a P badge: its look from its key (the Mac's rule, so both draw the same face),
+// its expression from its phase (asleep until it flies, focused while flying, wow while it waits on you).
+const TAP_FACE = {proposed: 'away', enroute: 'thinking', holding: 'starting', landed: 'here'};
+function tapLook(key){
+  let h = 5381;
+  for (const c of String(key).toLowerCase()) h = (Math.imul(h, 33) + c.charCodeAt(0)) >>> 0;
+  return 1 + h % 17;
+}
 function makeMember(key, i){
   const el = document.createElement('div'); el.className = 'pm'; el.dataset.key = key;
   el.innerHTML = '<span class="bob"><button type="button" class="pf"></button></span>';
@@ -2897,8 +2907,7 @@ function fillMember(m, f){
   if (m.sig !== sig){
     m.sig = sig;
     m.pf.innerHTML = f.kind === 'tap'
-      ? tapAvatar(Object.assign({key: f.key, repo: String(f.key).split('#')[0], title: f.title || '', status: ''}, t || {},
-          {phase: f.phase, initial: f.initial || (t && t.initial), replying: !!f.working}), ' style="--s:40px"')
+      ? masterFace({look: tapLook(f.key), state: TAP_FACE[f.phase] || 'away'}, ' style="--s:40px"') + '<b class="pbadge">P</b>'
       : masterFace({look: f.look, state: f.state}, ' style="--s:40px"');
   }
   const label = String(f.title || (f.kind === 'tap' ? 'Tap' : 'Claude')) + (wordOf(f) ? ', ' + wordOf(f) : '');
