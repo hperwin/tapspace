@@ -40,6 +40,8 @@ final class Store {
     private(set) var links: [AgentLink] = []
     /// Everything running under the lead (the agents poll; [] with no lead or an older server). The rail's strip.
     private(set) var fleet: [FleetEntry] = []
+    /// Who talked with whom in the last 10 minutes, newest first (the agents poll; [] on older servers). The pool's lines.
+    private(set) var talks: [AgentTalk] = []
     /// The thread Hayden's newest own message went to (the agents poll): the conversation he is having, which
     /// never badges (CONTRACT section 6). nil when he never wrote, or from an older server.
     private(set) var focus: String?
@@ -216,9 +218,10 @@ final class Store {
             if !Self.sameButActivity(b.agents, agents) { changed = true }
             agents = b.agents
         }
-        // Links and the fleet feed the rail and the progress column, not the pill: no onChange.
+        // Links, the fleet and the talks feed the rail and the pool, not the pill: no onChange.
         if b.links != links { links = b.links }
         if b.fleet != fleet { fleet = b.fleet }
+        if b.talks != talks { talks = b.talks }
         // Focus moves what the pill counts.
         if b.focus != focus { focus = b.focus; changed = true }
         afterThreadsLoaded()

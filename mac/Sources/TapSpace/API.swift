@@ -73,6 +73,12 @@ struct Agent: Decodable, Equatable, Identifiable {
     /// What the lead is doing right now, read from its live session (the lead's row only). nil when unknown:
     /// the activity strip hides.
     var activity: AgentActivity? = nil
+    /// The first plain line of the order a spawned master started with (titles only, at most 140 chars). nil
+    /// for a master nobody spawned: the pool's reveal card then shows its goal or nothing.
+    var brief: String? = nil
+    /// How its last restart or spawn ended when that ended badly after the reply (the row is offline again).
+    /// nil once a later listen or restart succeeds.
+    var launch: AgentLaunch? = nil
 
     var id: String { name }
     var key: String { "agent:" + name }
@@ -101,6 +107,28 @@ struct AgentActivity: Decodable, Equatable {
     var detail = ""
     /// When this word started (epoch).
     var since: Double = 0
+}
+
+/// A launch the server rolled back: `verdict` (refused | running | died, as the restart reply words it),
+/// `error` (the launcher's own reason, plain words) and when it was recorded (epoch).
+struct AgentLaunch: Decodable, Equatable {
+    var verdict = ""
+    var error = ""
+    var at: Double = 0
+}
+
+/// One message between the lead and a face in its pool (C3): a master's SendMessage, or the lead talking to a
+/// tap (Flightdeck or a tap-say). `from` and `to` are face keys (`agent:NAME`, or a tap's `owner/repo#n` in
+/// either casing); `text` is plain words (no paths, ids, NAMEs or numbers), possibly empty.
+struct AgentTalk: Decodable, Equatable, Identifiable {
+    let id: String
+    let from: String
+    let to: String
+    /// when it was said (epoch seconds)
+    let ts: Double
+    var text = ""
+    /// message | tap
+    var kind = "message"
 }
 
 /// One change note Hayden sent on a card this master owns.
@@ -149,6 +177,8 @@ struct AgentsBoard: Decodable, Equatable {
     var fleet: [FleetEntry] = []
     /// The thread Hayden's newest own message went to (a thread key): it never badges. nil when he never wrote.
     var focus: String? = nil
+    /// Who talked with whom in the last 10 minutes, newest first (C3). [] on older servers.
+    var talks: [AgentTalk] = []
 }
 
 struct ChatMessage: Decodable, Equatable, Identifiable {
@@ -312,6 +342,8 @@ struct TapMessage: Decodable, Equatable {
     let ts: String
     let seen: Bool?
     let url: String?
+    /// The NAME of the agent that posted it through tap-say (a hidden key, never shown); nil when Hayden did.
+    var via: String? = nil
 
     var date: Double { parseISO(ts) }
 }
@@ -478,6 +510,29 @@ extension Agent {
         parent = (c.opt(Keys("parent")) as String?).flatMap { $0.isEmpty ? nil : $0 }
         look = c.opt(Keys("look"))
         activity = c.opt(Keys("activity"))
+        brief = (c.opt(Keys("brief")) as String?).flatMap { $0.isEmpty ? nil : $0 }
+        launch = c.opt(Keys("launch"))
+    }
+}
+
+extension AgentLaunch {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        verdict = c.or(Keys("verdict"), "")
+        error = c.or(Keys("error"), "")
+        at = c.or(Keys("at"), 0)
+    }
+}
+
+extension AgentTalk {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        id = try c.decode(String.self, forKey: Keys("id"))
+        from = try c.decode(String.self, forKey: Keys("from"))
+        to = try c.decode(String.self, forKey: Keys("to"))
+        ts = c.or(Keys("ts"), 0)
+        text = c.or(Keys("text"), "")
+        kind = c.or(Keys("kind"), "message")
     }
 }
 
@@ -534,6 +589,7 @@ extension AgentsBoard {
         links = c.lossy(Keys("links"))
         fleet = c.lossy(Keys("fleet"))
         focus = (c.opt(Keys("focus")) as String?).flatMap { $0.isEmpty ? nil : $0 }
+        talks = c.lossy(Keys("talks"))
     }
 }
 
@@ -730,6 +786,7 @@ extension TapMessage {
         ts = c.or(Keys("ts"), "")
         seen = c.opt(Keys("seen"))
         url = c.opt(Keys("url"))
+        via = (c.opt(Keys("via")) as String?).flatMap { $0.isEmpty ? nil : $0 }
     }
 }
 

@@ -10,8 +10,13 @@ and keeps one small record per message in data/links.jsonl. Message bodies are n
 sender's own summary (or the first words of its first line), with paths, files, links, hex ids,
 keys and #numbers removed and agent NAMEs shown as their titles.
 
-server.py:  links.start(DATA, _bump, titles)   once, in __main__ (daemon thread, one pass every 5 s)
+The same pass finds a master talking to a tap: a successful Flightdeck message_pilot, answer_pilot or
+fly_journey call in a known session's transcript (the journey key is in the call). Those talks are kept
+in memory for LIVE only, are found again by the boot scan, and never enter the pair rows.
+
+server.py:  links.start(DATA, _bump, titles)   once, in __main__ (daemon thread, one pass every 2 s)
             links.rows(names)          the top-level "links" array of GET /api/agents
+            links.talks(names)         per-message talks within LIVE, for GET /api/agents "talks"
             links.stats()              counters for /api/activity and tap.py doctor
 """
 import json
@@ -25,7 +30,7 @@ from datetime import datetime
 CLAUDE_DIR = pathlib.Path(os.environ.get("TAPSPACE_CLAUDE_DIR") or pathlib.Path.home() / ".claude")
 WINDOW = 86400              # links are served, kept and persisted for a day
 LIVE = 600                  # a pair is active this long after its newest message
-EVERY = 5                   # seconds between passes
+EVERY = 2                   # seconds between passes (a pass costs about 10 ms)
 TAIL_FIRST = 4_000_000      # first sight of a transcript: read only its last 4 MB
 TAIL_MAX = 16_000_000       # never read more than this from one file in one pass
 PENDING_MAX = 200           # SendMessage calls per transcript still waiting for their result line
@@ -49,7 +54,9 @@ _LABEL = {"session", "ticket", "id", "key", "file", "path", "pid", "branch", "wo
 _CLAUDE = r"\bClaude(?:\s*\u00b7\s*[\w-]+)+"                     # a NAME no agent title is known for
 _PREAMBLE = re.compile(r"^\s*(?:[#>*+-]+\s*)*(?:from\b[^:\n]{0,80}:\s*)?", re.I)
 _SID = re.compile(r"^[0-9a-fA-F-]{8,64}$")
-_NEEDLES = (b'"SendMessage"', b'"msg_id"', b'"verifiedPeerPid"', b"tap.py listen")
+_NEEDLES = (b'"SendMessage"', b'"msg_id"', b'"verifiedPeerPid"', b"tap.py listen", b'"mcp__flightdeck__')
+PILOT = {"mcp__flightdeck__message_pilot", "mcp__flightdeck__answer_pilot", "mcp__flightdeck__fly_journey"}
+_JOURNEY = re.compile(r"^(?:https?://github\.com/)?([\w.-]+)/([\w.-]+)(?:#|/issues/)(\d+)/?$")
 
 
 def _epoch(iso):
@@ -92,15 +99,46 @@ def _named(s, titles):
     return re.sub(pat, lambda m: titles.get(m.group(0)) or "Claude", s)
 
 
-def _cut(s):
-    return s if len(s) <= SUMMARY_MAX else s[:SUMMARY_MAX - 3].rsplit(" ", 1)[0].rstrip(" ,;:.") + "..."
+def _cut(s, cap=SUMMARY_MAX):
+    return s if len(s) <= cap else s[:cap - 3].rsplit(" ", 1)[0].rstrip(" ,;:.") + "..."
 
 
-def _clip(summary, titles=None):
+def _clip(summary, titles=None, cap=SUMMARY_MAX):
     """The sender's own SendMessage summary as every agent UI may show it: no paths, files, links,
     hex ids, keys, #numbers or em dashes, agents by title (titles: {NAME: title}); at most
-    SUMMARY_MAX characters."""
-    return _cut(_named(_plain(summary), titles))
+    cap (SUMMARY_MAX) characters."""
+    return _cut(_named(_plain(summary), titles), cap)
+
+
+def line(text, titles=None, cap=SUMMARY_MAX):
+    """The first line of text that has words left once cleaned like a summary (a leading "From ...:" or
+    markdown mark dropped), at most cap characters: a talk's text to a tap, a spawned master's brief."""
+    if not isinstance(text, str):
+        return ""
+    for raw in text.splitlines():
+        s = _clip(_PREAMBLE.sub("", raw, count=1), titles, cap)
+        if s:
+            return s
+    return ""
+
+
+def journey(ref):
+    """A Flightdeck journey ref as a tap key, owner/repo#n (an issue URL too); "" for anything else.
+    The case is the caller's: the server matches it to the key it serves."""
+    m = _JOURNEY.match(str(ref or "").strip())
+    return f"{m.group(1)}/{m.group(2)}#{m.group(3)}" if m else ""
+
+
+def _delivered(content):
+    """A Flightdeck tool result that did what it was asked: its JSON (a string, or the text of its first
+    block) says ok and not undelivered. A result that is not JSON counts only when it is not an error."""
+    if isinstance(content, list):
+        content = next((b.get("text") for b in content if isinstance(b, dict) and b.get("type") == "text"), "")
+    try:
+        r = json.loads(content) if isinstance(content, str) else None
+    except ValueError:
+        return True
+    return not isinstance(r, dict) or (r.get("ok") is not False and not r.get("undelivered"))
 
 
 def _first_words(body, titles=None):
@@ -118,13 +156,15 @@ def _first_words(body, titles=None):
 
 def _events(o, pend, titles=dict):
     """Pure: one parsed transcript line -> events. `pend` carries a SendMessage call id to its
-    (to, text, ts) until the result line in the same transcript brings the msg_id. titles() gives
-    {NAME: title} for the text, read only when a SendMessage is in the line.
+    (to, text, ts) until the result line in the same transcript brings the msg_id, and a Flightdeck
+    call id (PILOT) to {"tap", "text", "ts"} until its result. titles() gives {NAME: title} for the
+    text, read only when a SendMessage or a Flightdeck call is in the line.
       ("name", NAME)                       this session listens under NAME
       ("sent", msg_id, to_ref, ts, text)   this session sent msg_id; to_ref ("pid", n) | ("name", s)
       ("got", msg_id, pid, ts)             this session received msg_id from claude process pid
-    In-session teammates (a result with `routing`), failed sends, in-process peers (no
-    verifiedPeerPid), queue-operation and api-request-blob copies produce nothing."""
+      ("tap", call_id, key, ts, text)      this session talked to the tap key (owner/repo#n)
+    In-session teammates (a result with `routing`), failed sends and Flightdeck calls, in-process
+    peers (no verifiedPeerPid), queue-operation and api-request-blob copies produce nothing."""
     out = []
     t = o.get("type")
     msg = o.get("message") if isinstance(o.get("message"), dict) else {}
@@ -140,6 +180,12 @@ def _events(o, pend, titles=dict):
                     names = titles()
                     pend[b["id"]] = (str(i.get("to") or ""),
                                      _clip(i.get("summary"), names) or _first_words(i.get("message"), names), ts)
+            elif b.get("name") in PILOT:
+                ts, key = _epoch(o.get("timestamp")), journey(i.get("journey"))
+                if ts is not None and key and b.get("id"):
+                    text = "Flying it" if b["name"].endswith("fly_journey") else \
+                        line(str(i.get("text") or i.get("choice") or ""), titles())
+                    pend[b["id"]] = {"tap": key, "text": text, "ts": ts}
             elif b.get("name") == "Bash":
                 m = None
                 for m in _LISTEN.finditer(str(i.get("command") or "")):
@@ -147,6 +193,12 @@ def _events(o, pend, titles=dict):
                 if m:
                     out.append(("name", m.group(1) or m.group(2) or m.group(3)))
     elif t == "user":
+        for b in content:                                   # a Flightdeck call's result
+            p = pend.get(b.get("tool_use_id")) if isinstance(b, dict) else None
+            if isinstance(p, dict):
+                del pend[b["tool_use_id"]]
+                if not b.get("is_error") and _delivered(b.get("content")):
+                    out.append(("tap", str(b["tool_use_id"]), p["tap"], p["ts"], p["text"]))
         r = o.get("toolUseResult")
         if isinstance(r, dict) and r.get("msg_id"):
             for b in content:
@@ -178,6 +230,8 @@ class Links:
         self.titles = titles or dict    # () -> {NAME: title}: a NAME in a summary shows as its title
         self._lock = threading.Lock()   # guards self.links (read by HTTP threads); never server._lock
         self.links = {}                 # msg_id -> {"msg", "ts", "from": NAME, "to": NAME, "summary"}
+        self.taps = {}                  # call id -> {"id", "ts", "from": NAME, "to": tap key, "text"}, within LIVE
+        self.tap_pending = {}           # call id -> {"sid", "ts", "to", "text"} until sid has a NAME
         self.pending = {}               # msg_id -> {"from": sid|None, "to": sid|None, "ts", "text"}
         self.heard = {}                 # sid -> NAME from the session's own tap.py listen --as
         self.claimed = {}               # sid -> NAME from data/sessions.json (tap.py's stamp)
@@ -257,14 +311,16 @@ class Links:
         self.off[f] = off + end
         sid = f.stem
         pend = self.pend.setdefault(sid, {})
+        calls = [k.encode() for k, v in pend.items() if isinstance(v, dict)]   # Flightdeck calls awaiting results
         for raw in chunk[:end].splitlines():
-            if not any(n in raw for n in _NEEDLES):     # about 2 percent of lines get parsed
-                continue
+            if not any(n in raw for n in _NEEDLES) and not any(k in raw for k in calls):
+                continue                                # about 2 percent of lines get parsed
             try:
                 evs = _events(json.loads(raw), pend, self._titles)
             except Exception:
                 self.counts["errors"] += 1
                 continue
+            calls = [k.encode() for k, v in pend.items() if isinstance(v, dict)]
             for ev in evs:
                 self._take(sid, ev)
         for k in list(pend)[:-PENDING_MAX]:             # results that never came: keep the newest
@@ -281,6 +337,10 @@ class Links:
     def _take(self, sid, ev):
         if ev[0] == "name":
             self.heard[sid] = ev[1]
+        elif ev[0] == "tap":
+            _, cid, key, ts, text = ev
+            if cid not in self.taps:
+                self.tap_pending[cid] = {"sid": sid, "ts": ts, "to": key, "text": text}
         elif ev[0] == "sent":
             _, mid, (how, ref), ts, text = ev
             other = self._session(ts, pid=ref) if how == "pid" else self._session(ts, name=ref)
@@ -346,9 +406,19 @@ class Links:
                 self.links[mid] = row
             self._out.append(dict(row))
             self._fresh = self._fresh or now - m["ts"] < LIVE
+        for cid, m in list(self.tap_pending.items()):
+            a = names.get(m["sid"])
+            if a or now - m["ts"] > LIVE:
+                del self.tap_pending[cid]
+            if a and now - m["ts"] <= LIVE:
+                with self._lock:
+                    self.taps[cid] = {"id": cid, "ts": m["ts"], "from": a, "to": m["to"], "text": m["text"]}
+                self._fresh = True
         with self._lock:
             for k in [k for k, r in self.links.items() if now - r["ts"] > WINDOW]:
                 del self.links[k]
+            for k in [k for k, r in self.taps.items() if now - r["ts"] > LIVE]:
+                del self.taps[k]
 
     def _read_claims(self):
         """data/sessions.json, re-read when it changes. Takes {sid: NAME}, {sid: {"name": NAME, ...}}
@@ -429,6 +499,19 @@ class Links:
             p["active"] = now - p["last"] < LIVE
         return sorted(pairs.values(), key=lambda p: -p["last"])
 
+    def talks(self, names):
+        """Every talk within LIVE whose sender is in `names`, newest first: a message between two agents
+        in names (kind "message", id the msg_id) or a Flightdeck call to a tap (kind "tap", id the call
+        id; `to` the journey key as the transcript wrote it). {"id", "from", "to", "ts", "text", "kind"},
+        ends as NAMEs and tap keys; the server turns them into face keys."""
+        now = self.clock()
+        with self._lock:
+            out = [{"id": r["msg"], "from": r["from"], "to": r["to"], "ts": r["ts"], "text": r["summary"],
+                    "kind": "message"} for r in self.links.values()
+                   if now - r["ts"] <= LIVE and r["from"] != r["to"] and r["from"] in names and r["to"] in names]
+            out += [{**r, "kind": "tap"} for r in self.taps.values() if now - r["ts"] <= LIVE and r["from"] in names]
+        return sorted(out, key=lambda r: -r["ts"])
+
     def stats(self):
         with self._lock:
             messages = len(self.links)
@@ -451,6 +534,10 @@ def start(data_dir, bump=None, titles=None):
 
 def rows(names):
     return _ONE.rows(names) if _ONE else []
+
+
+def talks(names):
+    return _ONE.talks(names) if _ONE else []
 
 
 def stats():

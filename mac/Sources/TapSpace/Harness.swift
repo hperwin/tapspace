@@ -10,6 +10,8 @@ import AppKit
 ///                     instead of the scenes
 ///   TAPSPACE_CARD_FRAMES=1|live|checks with --snapshot: card frames
 ///                     (HarnessCard): an update card arriving and answered
+///   TAPSPACE_POOL_FRAMES=1 with --snapshot: pool frames (HarnessPool): the
+///                     face pool's reveal card opening on a master and a tap
 ///   TAPSPACE_COPY_TEST=1 with --snapshot: a drag-select and Copy through the
 ///                     open thread (HarnessCopy), to a private pasteboard
 ///   --demo            a scripted ~10 s loop that never stops (HarnessDemo):
@@ -30,6 +32,8 @@ enum Harness {
             let url = URL(fileURLWithPath: (dir as NSString).expandingTildeInPath)
             if HarnessLink.asked {
                 HarnessLink.run(app: app, dir: url)
+            } else if HarnessPool.asked {
+                HarnessPool.run(app: app, dir: url)
             } else if HarnessCard.asked {
                 HarnessCard.run(app: app, dir: url)
             } else if HarnessCopy.asked {

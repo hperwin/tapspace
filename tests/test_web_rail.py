@@ -257,9 +257,17 @@ class OfflineTests(unittest.TestCase):
         self.assertEqual(clear["verb"], "Clear")
         self.assertEqual("Clear Muddi? " + clear["tail"], "Clear Muddi? Its session already ended; the row leaves the list.")
         self.assertEqual(js("stopWords({state: 'here'}).verb"), "Spin down")
-        self.assertEqual(js("[restartToast('Muddi', {ok: true}), restartToast('Muddi', {ok: false, error: 'it is still running'}), "
+        # contract C1: the reply carries the launcher's verdict; started says it is back, the rest are still starting
+        self.assertEqual(js("[restartToast('Muddi', {ok: true, verdict: 'started'}), restartToast('Muddi', {ok: true, verdict: 'pending'}), "
+                            "restartToast('Muddi', {ok: true}), "
+                            "restartToast('Muddi', {ok: false, verdict: 'refused', error: 'claude missing from PATH'}), "
                             "restartToast('Muddi', {})]"),
-                         ["Restarting Muddi", "Couldn't restart it: it is still running", "Couldn't restart it: TapSpace said no"])
+                         ["Back: Muddi", "Restarting Muddi", "Restarting Muddi", "Couldn't restart it: claude missing from PATH",
+                          "Couldn't restart it: TapSpace said no"])
+        # an offline row whose last launch failed after the reply says why (C1 `launch`)
+        self.assertEqual(js("[launchWhy({launch: {verdict: 'refused', error: ' claude missing from PATH ', at: 1}}), "
+                            "launchWhy({launch: {verdict: 'died', error: ''}}), launchWhy({launch: null}), launchWhy({}), launchWhy(null)]"),
+                         ["Couldn't start: claude missing from PATH", "", "", "", ""])
 
     def test_offline_label_and_chip(self):
         self.assertIn("offline:'Offline'", block("const MASTER = {", "};"))
@@ -276,8 +284,16 @@ class OfflineTests(unittest.TestCase):
         restart = block("async function restartAgent(", "// ---- Clear all")
         self.assertIn("postJ('/api/agents/restart', {name: a.name})", restart)
         self.assertIn("restartToast(", restart)
-        self.assertIn("if (r.ok) pollAgents();", restart)
+        # busy while the launcher decides (a real ellipsis), then back to Restart; the row is re-read either way
+        self.assertIn("btn.disabled = true; btn.textContent = 'Restarting\u2026';", restart)
+        self.assertIn("btn.disabled = false; btn.textContent = 'Restart';", restart)
+        self.assertLess(restart.index("'Restarting\u2026'"), restart.index("await postJ("))
+        self.assertLess(restart.index("await postJ("), restart.index("btn.textContent = 'Restart';"))
+        self.assertIn("\n  pollAgents();", restart)
         self.assertNotIn("confirm", restart)
+        # the launch's reason shows dim on its own line under Restart, only while the row is offline
+        self.assertIn("if (isOffline(a)){\n      const why = launchWhy(a);", sync)
+        self.assertIn(".agrp .restart .why{", CSS)
         ask = block("function askStop(g){", "// ---- Restart")
         self.assertIn("stopWords(a)", ask)
         self.assertIn("${w.verb}", ask)
