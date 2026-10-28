@@ -611,8 +611,10 @@
   .plead{position:relative;z-index:2;appearance:none;border:0;background:none;font:inherit;color:inherit;cursor:pointer;
     display:flex;flex-direction:column;align-items:center;width:100%;padding:4px 16px 0;text-align:center}
   .plead[hidden]{display:none}
-  .plead .nm{margin-top:10px;max-width:100%;font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .plead .aw{margin-top:1px;max-width:100%;font-size:11.5px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .plead .nm,.plead .aw{max-width:100%;padding:1px 6px;border-radius:6px;background:#fff;   /* on white: a talk line passes under the words */
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .plead .nm{margin-top:10px;font-size:13px;font-weight:600}
+  .plead .aw{font-size:11.5px;color:var(--dim)}
   /* the pool: 40 px faces in a honeycomb, each drifting on its own beat (index-set duration and delay), no labels */
   #poolfaces{position:relative;z-index:2;margin-top:28px}
   #poolfaces .railempty{text-align:center;padding:8px 16px}
@@ -622,14 +624,15 @@
   #pool.paused .bob{animation-play-state:paused}
   @keyframes bob{0%,100%{transform:none}50%{transform:translateY(var(--bob,-3px))}}
   /* a face sits on white, so a line under it never shows through a tint */
-  .pf{appearance:none;border:0;padding:0;cursor:pointer;position:relative;display:block;border-radius:50%;background:#fff;
-    transition:transform .18s ease,opacity .2s ease}
+  .pf{appearance:none;border:0;padding:0;cursor:pointer;position:relative;display:flex;border-radius:50%;background:#fff;
+    transition:transform .18s ease}
+  .pf > *{transition:opacity .2s ease}
   .pf::after{content:"";position:absolute;inset:-5px;border-radius:50%;border:1.5px solid rgba(var(--hl),.35);
     opacity:0;transform:scale(.85);pointer-events:none}
   .pf.ping::after{animation:ripple 1.2s ease-out 1}
   .pf:focus-visible{outline:2px solid rgba(var(--hl),.45);outline-offset:3px}
-  .pm.on .pf{transform:scale(1.12);transition:transform .5s cubic-bezier(.3,1.4,.5,1),opacity .2s ease}
-  #poolfaces.revealing .pm:not(.on) .pf{opacity:.5}
+  .pm.on .pf{transform:scale(1.12);transition:transform .5s cubic-bezier(.3,1.4,.5,1)}
+  #poolfaces.revealing .pm:not(.on) .pf > *{opacity:.5}   /* the face dims; its white disc stays, so no line shows through */
   /* the reveal card: anchored under (or over) the face, the column's width less 24, its lines 40 ms apart */
   .pcard{position:absolute;left:12px;top:0;z-index:3;pointer-events:none;padding:12px 14px 13px;border-radius:14px;
     background:var(--card);box-shadow:var(--shadow);transform-origin:50% 0;
@@ -674,7 +677,7 @@
     .agrp .talk i,.note.enter,.note.out,.orb.ping::after,.stopask,.actcard.enter{animation:none}
     #rail .thread.enter,.bead,.bead *{animation:none!important}   /* unfolding re-shows rows, which replays their entrance */
     #panehead .act.working i,#panehead .aw.swap{animation:none}
-    #progress,.pf,.pcard,.pcard .rl,.links .ltalk{transition:none}
+    #progress,.pf,.pm.on .pf,.pf > *,.pcard,.pcard.open,.pcard .rl,.pcard.open .rl,.links .ltalk{transition:none}
     #pool .bob,.pf.ping::after{animation:none}
   }
 
@@ -2737,6 +2740,7 @@ function plain(s, max){
   let t = String(s == null ? '' : s).split(/\r?\n/).map(x => x.trim()).find(Boolean) || '';
   t = t.replace(/^(?:#+|[-*>]|\d+\.)\s+/, '')
     .replace(/https?:\/\/\S+/g, ' ')
+    .replace(/(^|[\s(])@[\w-]+:?/g, '$1')                          // a handle
     .replace(/[*_`]+/g, '')
     .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, ' ')
     .replace(/(^|[\s(])(?:~|\.{1,2})?\/[^\s)\]]*/g, '$1')         // an absolute, home or relative path
@@ -2821,7 +2825,7 @@ const lines = new Map();     // member key -> {key, base, run, id, talk, fromLea
 const seen = new Set();      // talk ids this page has already drawn or passed (only a new one plays)
 let data = {agents: [], fleet: null, taps: [], talks: []};
 let lead = null, booted = false, emptyEl = null;
-let revealed = '', hideT = 0, touch = false;
+let revealed = '', hideT = 0, touch = false, downAt = 0;
 
 const still = () => !A || RM.matches;
 function shown(){
@@ -2862,8 +2866,10 @@ function paintLead(){
   setText(leadEl.children[1], title); setText(leadEl.children[2], word);
   leadEl.setAttribute('aria-label', title + (word ? ', ' + word : ''));
 }
-function leadCenter(){
-  return {x: leadEl.offsetLeft + leadPf.offsetLeft + leadPf.offsetWidth / 2, y: leadEl.offsetTop + leadPf.offsetTop + leadPf.offsetHeight / 2};
+function leadCenter(){                   // in the pool's own coordinates (its drifting wrapper can be an offsetParent)
+  let x = leadPf.offsetWidth / 2, y = leadPf.offsetHeight / 2;
+  for (let e = leadPf; e && e !== poolEl; e = e.offsetParent){ x += e.offsetLeft; y += e.offsetTop; }
+  return {x, y};
 }
 
 // ---- the pool's faces ----
@@ -2872,13 +2878,13 @@ function makeMember(key, i){
   el.innerHTML = '<span class="bob"><button type="button" class="pf"></button></span>';
   const bob = el.firstChild, pf = bob.firstChild, b = bobOf(i);
   bob.style.animationDuration = b.dur + 's'; bob.style.animationDelay = b.delay + 's';
-  pf.addEventListener('pointerdown', e => { touch = e.pointerType === 'touch'; });
+  pf.addEventListener('pointerdown', e => { touch = e.pointerType === 'touch'; downAt = Date.now(); });
   pf.addEventListener('pointerenter', e => { if (e.pointerType !== 'touch') reveal(key); });
   pf.addEventListener('pointerleave', e => { if (e.pointerType !== 'touch') unreveal(key); });
-  pf.addEventListener('focus', () => reveal(key));
+  pf.addEventListener('focus', () => { if (Date.now() - downAt > 500) reveal(key); });   // keyboard focus; a press is hover's or touch's
   pf.addEventListener('blur', () => unreveal(key));
-  pf.addEventListener('click', () => {
-    if (touch && revealed !== key){ reveal(key); return; }   // on touch: the first tap shows the card, the second opens
+  pf.addEventListener('click', e => {
+    if ((e.pointerType === 'touch' || touch) && revealed !== key){ reveal(key); return; }   // touch: the first tap shows the card
     openThread(key);
   });
   facesEl.appendChild(el);

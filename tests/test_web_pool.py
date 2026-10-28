@@ -178,11 +178,11 @@ class RevealTests(unittest.TestCase):
 
     def test_copy_rules(self):
         said = ["See https://github.com/hperwin/tapspace/pull/14 \u2014 done", "Commit 1e18015bf4 on d7ddc5fa-55fe-4441-9d3a-1a630a5356c5",
-                "Edit ~/Developer/tapspace/space/index.html and ./run.sh", "SnappStats/snappy#3286 landed", "The pilots are up"]
+                "Edit ~/Developer/tapspace/space/index.html and ./run.sh", "SnappStats/snappy#3286 landed", "The pilots are up", "@hperwin DEBRIEF: all four goals proven"]
         got = js(f"{json.dumps(said)}.map(s => plain(s, 80))")
         for line in got:
             self.assertNotRegex(line, BAD)
-        self.assertEqual(got, ["See, done", "Commit on", "Edit and", "landed", "The taps are up"])
+        self.assertEqual(got, ["See, done", "Commit on", "Edit and", "landed", "The taps are up", "DEBRIEF: all four goals proven"])
         self.assertEqual(js("plain('Ship and/or test A/B in hperwin/tapspace 24/7', 80)"), "Ship and/or test A/B in 24/7")
         self.assertEqual(js("plain('one two three four five six', 14)"), "one two three…")
         self.assertEqual(js("[plain(null), plain(''), plain('\\n\\n  ## Second line')]"), ["", "", "Second line"])
@@ -200,7 +200,7 @@ class MarkupTests(unittest.TestCase):
     def test_sizes_and_motion(self):
         self.assertIn("const POOL = {face: 40, gap: 14, pad: 16, pitch: 48};", POOL)
         self.assertIn(".pm.on .pf{transform:scale(1.12)", CSS)
-        self.assertIn("#poolfaces.revealing .pm:not(.on) .pf{opacity:.5}", CSS)
+        self.assertIn("#poolfaces.revealing .pm:not(.on) .pf > *{opacity:.5}", CSS)
         self.assertIn("#poolfaces{position:relative;z-index:2;margin-top:28px}", CSS)
         self.assertIn(".links{position:absolute;left:0;top:0;width:100%;height:0;overflow:visible;pointer-events:none;z-index:1}", CSS)
         self.assertIn("--s:64px", MODULE)
@@ -217,7 +217,8 @@ class MarkupTests(unittest.TestCase):
         self.assertNotIn("loop: true", MODULE)                            # one chase per talk, never a loop
 
     def test_wiring(self):
-        self.assertIn("if (touch && revealed !== key){ reveal(key); return; }", MODULE)
+        self.assertIn("if ((e.pointerType === 'touch' || touch) && revealed !== key){ reveal(key); return; }", MODULE)
+        self.assertIn("if (Date.now() - downAt > 500) reveal(key);", MODULE)                 # a press never reveals by focus
         self.assertIn("openThread(key);", MODULE)
         self.assertIn("if (lead) openThread(agentKey(lead.name));", MODULE)
         self.assertIn("talks = Array.isArray(d.talks) ? d.talks : [];", block("async function pollAgents(", "async function pollChat("))
