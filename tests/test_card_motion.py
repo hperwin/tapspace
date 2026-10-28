@@ -17,7 +17,8 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 PAGE = (ROOT / "space/index.html").read_text()
 CSS = "\n".join(re.findall(r"<style>(.*?)</style>", PAGE, re.S))
 NODE = shutil.which("node")
-KEYFRAMES = {"breathe", "dot", "draw", "hlin", "msgin", "msgup", "noteout", "orbpulse", "orbswap", "railin", "ripple",
+# bob: the pool's faces drift (contract C4), the one keyframe the pool adds
+KEYFRAMES = {"bob", "breathe", "dot", "draw", "hlin", "msgin", "msgup", "noteout", "orbpulse", "orbswap", "railin", "ripple",
              "spin", "swapin", "thumbin", "thumbout"}
 CURVES = {"(.22,.9,.24,1)", "(.3,1.6,.5,1)", "(.3,1.4,.5,1)", "(.4,0,.2,1)", "(.3,.8,.3,1)"}
 
@@ -41,7 +42,7 @@ def rules():
 
 
 class VocabularyTests(unittest.TestCase):
-    def test_keyframes_are_todays_fifteen(self):
+    def test_keyframes_are_todays_sixteen(self):
         self.assertEqual(set(re.findall(r"@keyframes (\w+)", PAGE)), KEYFRAMES)
 
     def test_every_curve_is_one_the_page_had(self):
@@ -49,7 +50,9 @@ class VocabularyTests(unittest.TestCase):
         self.assertEqual(got - CURVES, set())
 
     def test_eases_and_no_springs(self):
-        self.assertEqual(set(re.findall(r"ease: '([^']*)'", PAGE)) - {"out(3)", "in(2)", "inOutSine", "linear"}, set())
+        # anime.js may also name one of the page's own CSS curves (the pool's pop and stroke draw), never a new one
+        own = {"cubicBezier" + c for c in CURVES}
+        self.assertEqual(set(re.findall(r"ease: '([^']*)'", PAGE)) - {"out(3)", "in(2)", "inOutSine", "linear"} - own, set())
         self.assertEqual(set(re.findall(r"easing: '([^']*)'", PAGE)) - {"cubic-bezier(.22,.9,.24,1)", "ease-out"}, set())
         self.assertNotIn("createSpring", PAGE)
 
@@ -57,6 +60,12 @@ class VocabularyTests(unittest.TestCase):
         line = re.search(r"window\.tsPanel = \{([^}]*)\}", PAGE).group(1)
         self.assertEqual({x.strip() for x in line.split(",")} >= {"render", "nod", "draw", "still"}, True)
         self.assertIn("function draw(el){", PAGE)
+        # the pool's render takes the agents, links, fleet, taps and talks, and every caller passes all five
+        self.assertIn("function render(agentsIn, linksIn, fleetIn, tapsIn, talksIn){", PAGE)
+        calls = re.findall(r"tsPanel\?\.render\(([^)]*)\)", PAGE)
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(set(calls), {"agents, links, fleet, taps.items, talks"})
+        self.assertIn("render(agents, links, fleet, taps.items, talks);\nsyncMotion();", PAGE)
 
     def test_reduced_motion_covers_cards(self):
         blocks = re.findall(r"@media \(prefers-reduced-motion: reduce\)\{(.*?)\n  \}", CSS, re.S)

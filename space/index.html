@@ -204,9 +204,9 @@
   .thread .tx{flex:1;min-width:0}
   .thread .nm{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .thread .sub{font-size:11.5px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}
-  .thread .unread,.plan .unread{width:8px;height:8px;border-radius:50%;background:rgb(var(--hl));flex:none;
+  .thread .unread{width:8px;height:8px;border-radius:50%;background:rgb(var(--hl));flex:none;
     transform:scale(0);transition:transform .35s cubic-bezier(.3,1.6,.5,1)}
-  .thread .unread.show,.plan .unread.show{transform:scale(1)}
+  .thread .unread.show{transform:scale(1)}
   .thread.enter{animation:railin .8s cubic-bezier(.22,.9,.24,1) both}
   @keyframes railin{from{opacity:0;filter:blur(12px);transform:translateY(8px)}to{opacity:1;filter:blur(0);transform:none}}
   .railtools{display:flex;gap:8px;padding:4px 4px 2px}
@@ -259,7 +259,8 @@
   .stopask .rbtn{padding:7px 11px;font-size:12px}
   .rbtn.danger{background:#ff3b30;color:#fff}
   /* an offline master (its session ended with the Mac): Restart always shows, on its own line under the row */
-  .agrp .restart{order:1;display:flex;padding:0 12px 6px 62px}
+  .agrp .restart{order:1;display:flex;flex-wrap:wrap;align-items:center;padding:0 12px 6px 62px}
+  .agrp .restart .why{flex-basis:100%;margin-top:5px;font-size:11px;line-height:1.4;color:var(--dim)}
   .agrp .restart .rbtn{padding:6px 11px;font-size:11.5px}
   .rbtn:disabled{opacity:.6;cursor:default}
 
@@ -596,57 +597,74 @@
     letter-spacing:.04em;pointer-events:none}
   #pane{position:relative}
 
-  /* ---- Chat tab, right column: one progress card per live agent, and the links between talking agents ---- */
+  /* ---- Chat tab, right column (contract C4): the lead's face on top and the pool of faces floating under it ---- */
   /* the presence HUD floats over this column's top: a fixed clearance for its tallest state (4 activity rows), so the
      column never slides while rows come and go */
   #progress{display:flex;flex-direction:column;min-height:0;padding-top:62px}
-  #plans{position:relative;flex:1;min-height:0;overflow-y:auto;scrollbar-width:none;
-    display:flex;flex-direction:column;gap:10px;padding:6px 10px 24px}
-  #plans .links{position:absolute;left:0;top:0;width:100%;height:0;overflow:visible;pointer-events:none;z-index:2}
-  .links path{fill:none;stroke-width:2;stroke-linecap:round}
-  .links .lbase{stroke:rgba(0,0,0,.08)}
-  .links .lrun{stroke:rgb(var(--hl))}
-  .plan{position:relative;z-index:1;flex:none;appearance:none;border:0;text-align:left;font:inherit;color:inherit;cursor:pointer;
-    width:100%;display:flex;gap:10px;align-items:flex-start;padding:14px;border-radius:18px;background:var(--card);
-    box-shadow:0 1px 2px rgba(0,0,0,.05),0 6px 18px rgba(0,0,0,.07);transition:transform .2s ease,opacity .3s ease}
-  .plan:active{transform:scale(.98)}
-  .plan .orb{width:26px;height:26px}
-  .plan .pcol{display:block;flex:1;min-width:0}
-  .plan .ptop{display:flex;align-items:center;gap:8px;height:26px}
-  .plan .nm{flex:1;min-width:0;font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .plan .ago{flex:none;font-size:10.5px;color:var(--faint);font-variant-numeric:tabular-nums}
-  .plan .star{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;
-    margin-top:2px;font-size:12.5px;line-height:1.4;color:var(--ink)}
-  .plan .star.none{color:var(--dim)}
-  .plan .track{display:flex;align-items:center;gap:3px;height:8px;margin-top:10px}
-  .plan .track:empty{display:none}
-  .plan .track i{flex:1;min-width:2px;height:4px;border-radius:2px;background:rgba(0,0,0,.08);
-    transition:height .45s cubic-bezier(.22,.9,.24,1),background-color .45s ease}
-  .plan .track i.done{background:var(--ink)}
-  .plan .track i.now{height:8px;border-radius:4px;background:rgb(var(--hl))}
-  .plan .track.all i{background:rgb(var(--hl))}
-  .plan .track.long{display:block;position:relative}
-  .plan .track.long i{position:absolute;left:0;right:0;top:2px;height:4px}
-  .plan .track.long i.fill{right:auto;background:var(--ink);transition:width .7s cubic-bezier(.22,.9,.24,1)}
-  .plan .track.long.all i{background:rgb(var(--hl))}
-  .plan .track.long b{position:absolute;top:0;width:8px;height:8px;border-radius:50%;background:rgb(var(--hl));
-    transform:translateX(-50%);transition:left .7s cubic-bezier(.22,.9,.24,1)}
-  .plan .stepline{display:block;margin-top:6px;font-size:11.5px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .plan .stepline:empty{display:none}
-  .plan .stepline b{font-weight:600;color:var(--ink);font-variant-numeric:tabular-nums}
-  .orb.ping::after{animation:ripple 1.2s ease-out 1}
-  /* the gap between two talking cards: "A → B · 2m", then what was said (two lines at most); it opens to fit its lines */
-  .pgap{flex:none;display:grid;grid-template-rows:0fr;margin-top:-10px;opacity:0;padding:0 4px 0 50px;
-    font-size:11px;line-height:15px;color:var(--dim);
-    transition:grid-template-rows .5s cubic-bezier(.22,.9,.24,1),margin-top .5s cubic-bezier(.22,.9,.24,1),opacity .35s ease}
-  .pgap.open{grid-template-rows:1fr;margin-top:0;opacity:1}
-  .pgap .pin{min-height:0;overflow:hidden}
-  .pgap .pw{display:flex;white-space:nowrap;padding-top:1px}
-  .pgap .pw b{flex:0 1 auto;min-width:0;max-width:48%;overflow:hidden;text-overflow:ellipsis;font-weight:600;color:var(--ink)}
-  .pgap .pw i{flex:none;margin:0 4px;font-style:normal}
-  .pgap .pw em{flex:none;margin-left:4px;font-style:normal;color:var(--faint);font-variant-numeric:tabular-nums}
-  .pgap .ps{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;padding-bottom:1px}
-  #progress .railempty{padding:8px 4px}
+  #pool{position:relative;flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;scrollbar-width:none;padding:6px 0 24px}
+  #pool .links{position:absolute;left:0;top:0;width:100%;height:0;overflow:visible;pointer-events:none;z-index:1}
+  .links path{fill:none;stroke-linecap:round}
+  .links .ltalk{stroke:rgb(var(--hl));stroke-width:1.5;transition:opacity 2s linear}   /* its opacity is the talk's age */
+  .links .ltalk.out{opacity:0!important;transition:opacity .4s ease}
+  .links .lrun{stroke:rgb(var(--hl));stroke-width:2.5}
+  /* the lead: 64 px face, its title, what it is doing; a click opens its thread */
+  .plead{position:relative;z-index:2;appearance:none;border:0;background:none;font:inherit;color:inherit;cursor:pointer;
+    display:flex;flex-direction:column;align-items:center;width:100%;padding:4px 16px 0;text-align:center}
+  .plead[hidden]{display:none}
+  .plead .nm,.plead .aw{max-width:100%;padding:1px 6px;border-radius:6px;background:#fff;   /* on white: a talk line passes under the words */
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .plead .nm{margin-top:10px;font-size:13px;font-weight:600}
+  .plead .aw{font-size:11.5px;color:var(--dim)}
+  /* the pool: 40 px faces in a honeycomb, each drifting on its own beat (index-set duration and delay), no labels */
+  #poolfaces{position:relative;z-index:2;margin-top:28px}
+  #poolfaces .railempty{text-align:center;padding:8px 16px}
+  .pm{position:absolute;left:0;top:0;width:40px;height:40px}
+  .pm .bob,.plead .bob{display:block;animation:bob 3.6s ease-in-out infinite}
+  .plead .bob{--bob:-2px;animation-duration:4.2s}
+  #pool.paused .bob{animation-play-state:paused}
+  @keyframes bob{0%,100%{transform:none}50%{transform:translateY(var(--bob,-3px))}}
+  /* a face sits on white, so a line under it never shows through a tint */
+  .pf{appearance:none;border:0;padding:0;cursor:pointer;position:relative;display:flex;border-radius:50%;background:#fff;
+    transition:transform .18s ease}
+  .pf > *{transition:opacity .2s ease}
+  .pf::after{content:"";position:absolute;inset:-5px;border-radius:50%;border:1.5px solid rgba(var(--hl),.35);
+    opacity:0;transform:scale(.85);pointer-events:none}
+  .pf.ping::after{animation:ripple 1.2s ease-out 1}
+  .pf:focus-visible{outline:2px solid rgba(var(--hl),.45);outline-offset:3px}
+  .pm.on .pf{transform:scale(1.12);transition:transform .5s cubic-bezier(.3,1.4,.5,1)}
+  #poolfaces.revealing .pm:not(.on) .pf > *{opacity:.5}   /* the face dims; its white disc stays, so no line shows through */
+  /* the reveal card: anchored under (or over) the face, the column's width less 24, its lines 40 ms apart */
+  .pcard{position:absolute;left:12px;top:0;z-index:3;pointer-events:none;padding:12px 14px 13px;border-radius:14px;
+    background:var(--card);box-shadow:var(--shadow);transform-origin:50% 0;
+    opacity:0;transform:translateY(6px) scale(.96);filter:blur(6px);visibility:hidden;
+    transition:opacity .18s ease,transform .18s ease,filter .18s ease,visibility 0s linear .18s}
+  .pcard.up{transform-origin:50% 100%}
+  .pcard.open{opacity:1;transform:none;filter:blur(0);visibility:visible;
+    transition:opacity .32s cubic-bezier(.22,.9,.24,1),transform .32s cubic-bezier(.22,.9,.24,1),filter .32s cubic-bezier(.22,.9,.24,1)}
+  .pcard .rl{opacity:0;transform:translateY(4px);transition:opacity .18s ease,transform .18s ease;overflow-wrap:anywhere}
+  .pcard.open .rl{opacity:1;transform:none;transition:opacity .32s cubic-bezier(.22,.9,.24,1) calc(var(--i) * 40ms),
+    transform .32s cubic-bezier(.22,.9,.24,1) calc(var(--i) * 40ms)}
+  .pcard .rt{font-size:14px;font-weight:600;line-height:1.3}
+  .pcard .rw{margin-top:7px}
+  .pcard .rg{margin-top:8px;font-size:12.5px;line-height:1.4;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+  .pcard .rn{margin-top:8px;font-size:11.5px;font-weight:600;font-variant-numeric:tabular-nums}
+  .pcard .rn + .rg{margin-top:2px}
+  .pcard .ra{margin-top:8px;font-size:12.5px;line-height:1.4;color:rgb(var(--hl));display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+  .pcard .rd{margin-top:8px;font-size:11.5px;line-height:1.4;color:var(--dim);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .pcard .rs{margin-top:10px}
+  .pcard .sl{display:block;margin-top:6px;font-size:11.5px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  /* a master's step track, segmented (one bar and a knob past 16 steps) */
+  .pcard .track{display:flex;align-items:center;gap:3px;height:8px}
+  .pcard .track:empty{display:none}
+  .pcard .track i{flex:1;min-width:2px;height:4px;border-radius:2px;background:rgba(0,0,0,.08)}
+  .pcard .track i.done{background:var(--ink)}
+  .pcard .track i.now{height:8px;border-radius:4px;background:rgb(var(--hl))}
+  .pcard .track.all i{background:rgb(var(--hl))}
+  .pcard .track.long{display:block;position:relative}
+  .pcard .track.long i{position:absolute;left:0;right:0;top:2px;height:4px}
+  .pcard .track.long i.fill{right:auto;background:var(--ink)}
+  .pcard .track.long.all i{background:rgb(var(--hl))}
+  .pcard .track.long b{position:absolute;top:0;width:8px;height:8px;border-radius:50%;background:rgb(var(--hl));transform:translateX(-50%)}
   @media (min-width:1181px){
     /* with the right column showing, only the brand row is veiled; HUD rows float above the panel's top clearance */
     body.chatmode header{background:none}
@@ -659,7 +677,8 @@
     .agrp .talk i,.note.enter,.note.out,.orb.ping::after,.stopask,.actcard.enter{animation:none}
     #rail .thread.enter,.bead,.bead *{animation:none!important}   /* unfolding re-shows rows, which replays their entrance */
     #panehead .act.working i,#panehead .aw.swap{animation:none}
-    #progress,.pgap,.plan .track i,.plan .track.long i.fill,.plan .track.long b{transition:none}
+    #progress,.pf,.pm.on .pf,.pf > *,.pcard,.pcard.open,.pcard .rl,.pcard.open .rl,.links .ltalk{transition:none}
+    #pool .bob,.pf.ping::after{animation:none}
   }
 
   @media (max-width:900px){
@@ -730,9 +749,9 @@
       <button type="submit" id="sendbtn" disabled aria-label="Send"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 16V4M4.5 9.5 10 4l5.5 5.5"/></svg></button>
     </form>
   </section>
-  <aside id="progress" aria-label="Progress">
-    <div class="railhead">Progress</div>
-    <div id="plans"><svg class="links" aria-hidden="true"></svg></div>
+  <aside id="progress" aria-label="The lead and everything under it">
+    <div id="pool"><svg class="links" aria-hidden="true"></svg><button type="button" class="plead" id="poollead" hidden></button>
+      <div id="poolfaces"></div><div class="pcard" id="poolcard" role="tooltip"></div></div>
   </aside>
 </section>
 <div class="toast" id="toast"></div>
@@ -1226,6 +1245,7 @@ let agents = [];                  // rows of GET /api/agents: name (hidden key),
 let links = [];                   // agent-to-agent links of GET /api/agents: {a, b, from, last, count, summary, active}
 let focusKey = '';                // GET /api/agents focus: the thread Hayden's newest own message went to (contract section 6)
 let fleet = null;                 // GET /api/agents fleet: what runs under the lead, in the server's order (null: none served)
+let talks = [];                   // GET /api/agents talks: who said what to whom in the last 10 minutes, newest first (contract C3)
 const notesHidden = {};           // NAME -> newest note ts this page marked read (hides the rows before the server answers)
 let chat = {agent: '', messages: []};   // the open agent thread
 const agentKey = n => 'agent:' + n;
@@ -1459,7 +1479,12 @@ const isOffline = a => !!a && a.state === 'offline';
 const stopWords = a => isOffline(a)
   ? {verb: 'Clear', tail: 'Its session already ended; the row leaves the list.', busy: 'Clearing…', done: 'Cleared '}
   : {verb: 'Spin down', tail: 'Its session ends and it leaves the list.', busy: 'Spinning down…', done: 'Spun down '};
-const restartToast = (title, r) => r && r.ok ? 'Restarting ' + title : "Couldn't restart it: " + ((r && r.error) || 'TapSpace said no');
+// Contract C1: the server answers once the launcher has a verdict: back already, still starting, or why it could not.
+const restartToast = (title, r) => r && r.ok ? (r.verdict === 'started' ? 'Back: ' : 'Restarting ') + title
+  : "Couldn't restart it: " + ((r && r.error) || 'TapSpace said no');
+// A launch that failed after the reply leaves its reason on the row (C1 `launch`); an offline row shows it under Restart.
+const launchWhy = a => { const l = a && a.launch, e = l && typeof l === 'object' && typeof l.error === 'string' ? l.error.trim() : '';
+  return e ? "Couldn't start: " + e : ''; };
 // ---- end pure: rail ----
 
 /* unread = the other side said something after you last looked at that thread */
@@ -1583,6 +1608,11 @@ function syncAgents(){
       rst.firstChild.addEventListener('click', () => restartAgent(g, rst.firstChild));
       g.appendChild(rst);
     } else if (!isOffline(a) && rst) rst.remove();
+    if (isOffline(a)){
+      const why = launchWhy(a); let w = rst.querySelector('.why');
+      if (why && !w){ w = document.createElement('div'); w.className = 'why'; rst.appendChild(w); }
+      if (w){ if (why){ if (w.textContent !== why) w.textContent = why; } else w.remove(); }
+    }
     const shown = visibleNotes(a);
     b.querySelector('.unread').classList.toggle('show', isUnread(key) || shown.length > 0);
     const tk = talkText(a.name);
@@ -2340,7 +2370,7 @@ function openThread(key){
   openMark = {key, at: readAt(key)};   // before this open marks it read: newer cards play on first view
   if (!isAgent(key)) fetch('/api/taps/refresh', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({key})});
   markRead(key); if (isAgent(key)) readNotes(agentOf(key));
-  renderRail(); window.tsPanel?.render(agents, links); restoreDraft();   // the opened card's reply dot clears now, not on the next poll
+  renderRail(); window.tsPanel?.render(agents, links, fleet, taps.items, talks); restoreDraft();   // the opened card's reply dot clears now, not on the next poll
   if (isAgent(key)) pollChat(); else renderThread();
   ta.focus();
 }
@@ -2435,11 +2465,11 @@ function askStop(g){
 async function restartAgent(g, btn){
   const a = agents.find(x => agentKey(x.name) === g.dataset.key);
   if (!a || btn.disabled) return;
-  btn.disabled = true;
+  btn.disabled = true; btn.textContent = 'Restarting…';   // the reply waits for the launcher's verdict, up to about 6 s
   const r = await postJ('/api/agents/restart', {name: a.name});
-  btn.disabled = false;
+  btn.disabled = false; btn.textContent = 'Restart';
   toast(restartToast(a.title || 'Claude', r));
-  if (r.ok) pollAgents();
+  pollAgents();                                           // either way the row moved: back or starting, or offline with why
 }
 
 // ---- Clear all (Visual): two taps archive every card on the space ----
@@ -2466,12 +2496,13 @@ async function pollAgents(){
   const key = current, had = agentsLoaded && isAgent(key) ? newestNote(agentOf(key)) : null;
   agents = d.agents; links = Array.isArray(d.links) ? d.links : []; agentsLoaded = true;
   focusKey = typeof d.focus === 'string' ? d.focus : ''; fleet = Array.isArray(d.fleet) ? d.fleet : null;
+  talks = Array.isArray(d.talks) ? d.talks : [];
   // A note that lands while its master's thread is open and the page is in front is read at once. Rows already listed
   // wait for an explicit open: switching to Chat or the window coming forward never reads them.
   if (had !== null && current === key && document.body.classList.contains("chatmode") && document.hasFocus() &&
       newestNote(agentOf(key)) > had) readNotes(agentOf(key));
   renderRail(); renderThread();
-  window.tsPanel?.render(agents, links);
+  window.tsPanel?.render(agents, links, fleet, taps.items, talks);
 }
 async function pollChat(){
   if (!isAgent(current)) return;
@@ -2487,6 +2518,7 @@ async function pollChat(){
 async function pollTaps(){
   try{ taps = tapsIn(await (await fetch('/api/taps')).json()); }catch(e){ return; }
   renderRail(); renderThread();
+  window.tsPanel?.render(agents, links, fleet, taps.items, talks);   // a tap's face and its card read the taps
 }
 // Visual tab badge: cards waiting on you
 setInterval(() => {
@@ -2649,80 +2681,151 @@ setInterval(hudTick, 2000);
 </script>
 
 <script type="module">
-/* ---- progress panel (Chat tab, right column) + agent-to-agent links ----
-   One card per live agent: its goal, a segmented step track and where it is now.
-   Two agents talking to each other sit next to each other, joined in the face
-   column by a line that carries the HUD's chasing draw from sender to receiver.
-   Data rides script 2's /api/agents poll (window.tsPanel.render). Without
-   anime.js, or with Reduce Motion, everything renders still. */
+/* ---- the pool (Chat tab, right column): the lead's face on top, everything under it floating below (contract C4) ----
+   The lead (role "lead") sits on top with its title and what it is doing. Under it every member of the server's fleet
+   floats in a honeycomb of faces, masters first, then taps, each block in the server's order. When the lead and a
+   member talk (GET /api/agents talks), a line draws between their faces from the sender's end, one chase runs along
+   it and the receiver ripples; the line fades with the talk's age and leaves after 10 minutes. Pointing at a face (or
+   focusing it) opens a card that says what that agent or tap is about; a click opens its thread (on touch the first
+   tap opens the card, the second the thread). Data rides script 2's polls (window.tsPanel.render). Without anime.js,
+   or with Reduce Motion, everything renders still. */
 let A = null;
 try{ A = await import('/anime.esm.js'); }catch(e){}
 
-// ---- pure: who gets a card, the order, the talking pairs, the step line (no DOM) ----
-const LIVE_STATES = new Set(['thinking', 'here', 'switching', 'starting']);
-const KEEP = 600;     // an away agent keeps its card 10 minutes after it was last seen or spoke
-const WINDOW = 600;   // a pair draws while the server calls its link active and the newest message is under 10 minutes old
-function isLive(a, now){
-  return !!(a.progress && typeof a.progress === 'object') || LIVE_STATES.has(a.state) ||
-    now - Math.max(+a.seen || 0, +a.last_master || 0) < KEEP;
+// ---- pure: pool (no DOM, no page globals; tests/test_web_pool.py runs this block in node) ----
+const POOL = {face: 40, gap: 14, pad: 16, pitch: 48};   // 40 px faces 14 px apart, 16 px in from each side, rows 48 px apart
+const TALK_FULL = 60, TALK_LIVE = 600;                  // a talk's line is full for a minute, 0.15 at 10 minutes, then gone
+// The honeycomb: n faces fit a row of `width`; odd rows hold one fewer, so they sit half a cell over; every row is
+// centered. Slots are face centers from the pool's top left.
+function poolLayout(count, width){
+  const cell = POOL.face + POOL.gap;
+  const n = Math.max(1, Math.floor((width - 2 * POOL.pad + POOL.gap) / cell));
+  const slots = [];
+  for (let r = 0; slots.length < count; r++){
+    const k = Math.min(r % 2 ? Math.max(1, n - 1) : n, count - slots.length);
+    const x0 = (width - (k * cell - POOL.gap)) / 2 + POOL.face / 2;
+    for (let j = 0; j < k; j++) slots.push({x: x0 + j * cell, y: r * POOL.pitch + POOL.face / 2, row: r});
+  }
+  const rows = count ? slots[count - 1].row + 1 : 0;
+  return {n, rows, slots, height: rows ? (rows - 1) * POOL.pitch + POOL.face : 0};
 }
+// Each face drifts on its own beat (3.6 s plus 0.35 s per index mod 5), started 0.6 s per index into its cycle.
+const bobOf = i => ({dur: +(3.6 + (i % 5) * 0.35).toFixed(2), delay: +(-i * 0.6).toFixed(2)});
+function talkAlpha(age){
+  const s = Math.max(0, +age || 0);
+  if (s > TALK_LIVE) return 0;
+  return s <= TALK_FULL ? 0.9 : +(0.9 - 0.75 * (s - TALK_FULL) / (TALK_LIVE - TALK_FULL)).toFixed(4);
+}
+// Face keys as talks name them: a master is agent:NAME; a tap's key matches whatever its case (Muddi writes both).
+const faceKey = k => { const s = String(k || ''); return s.startsWith('agent:') ? s : s.toLowerCase(); };
+const poolOrder = list => { const all = (Array.isArray(list) ? list : []).filter(f => f && f.key);
+  return [...all.filter(f => f.kind !== 'tap'), ...all.filter(f => f.kind === 'tap')]; };
+// The newest live talk per pool member with the lead (either way); talks between two others, or with a key that is
+// not in the pool, draw nothing.
+function poolTalks(talks, lead, keys, now){
+  const L = faceKey(lead), want = new Map(keys.map(k => [faceKey(k), k])), out = new Map();
+  for (const t of Array.isArray(talks) ? talks : []){
+    if (!t || typeof t !== 'object') continue;
+    const from = faceKey(t.from), to = faceKey(t.to), ts = +t.ts || 0;
+    const other = from === L ? to : to === L ? from : '';
+    if (!other || other === L || !want.has(other) || now - ts > TALK_LIVE) continue;
+    const key = want.get(other), had = out.get(key);
+    if (!had || ts > had.ts) out.set(key, {id: String(t.id || key + '@' + ts), ts, text: plain(t.text, 80), fromLead: from === L});
+  }
+  return out;
+}
+// UI copy (mac/SPEC.md:56, 103, 121): one plain line; no links, paths, issue numbers, hex ids or em dashes, and a
+// flight is a tap here.
+function plain(s, max){
+  let t = String(s == null ? '' : s).split(/\r?\n/).map(x => x.trim()).find(Boolean) || '';
+  t = t.replace(/^(?:#+|[-*>]|\d+\.)\s+/, '')
+    .replace(/https?:\/\/\S+/g, ' ')
+    .replace(/(^|[\s(])@[\w-]+:?/g, '$1')                          // a handle
+    .replace(/[*_`]+/g, '')
+    .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, ' ')
+    .replace(/(^|[\s(])(?:~|\.{1,2})?\/[^\s)\]]*/g, '$1')         // an absolute, home or relative path
+    .replace(/[^\s(]*\/[^\s)\]]*\/[^\s)\]]*/g, ' ')                // a/b/c
+    .replace(/[^\s(]*\/[^\s)\]]*\.[a-z]{1,5}\b[^\s)\]]*/gi, ' ')    // dir/file.ext
+    .replace(/[\w.-]+\/[\w.-]+#\d+/g, ' ')                        // owner/repo#n
+    .replace(/[\w.-]{4,}\/[\w.-]+|[\w.-]+\/[\w.-]{4,}/g, ' ')       // owner/repo (and/or, A/B and 24/7 stay)
+    .replace(/#\w*/g, ' ').replace(/#/g, '')
+    .replace(/\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,}\b/gi, ' ')
+    .replace(/\s*\u2014\s*/g, ', ').replace(/\u2013/g, '-')
+    .replace(/\bpilot(s?)\b/gi, (w, p) => (w[0] === 'P' ? 'Tap' : 'tap') + p)
+    .replace(/\(\s*\)|\[\s*\]/g, ' ').replace(/\s+([,.;:!?)])/g, '$1').replace(/([(])\s+/g, '$1')
+    .replace(/\s{2,}/g, ' ').replace(/^[\s,;:.·-]+|[\s,;:·-]+$/g, '').trim();
+  if (max && t.length > max){                   // clipped at a word when one ends in reach
+    const cut = t.slice(0, max - 1);
+    t = (/\s/.test(t[max - 1]) ? cut : cut.replace(/\s+\S*$/, '') || cut).replace(/[\s,;:·-]+$/, '') + '…';
+  }
+  return t;
+}
+const agoWord = s => s < 50 ? 'now' : s < 3600 ? Math.round(s / 60) + 'm' : Math.round(s / 3600) + 'h';   // when()'s words
 function planOf(a){
-  const p = a.progress;
+  const p = a && a.progress;
   if (!p || typeof p !== 'object') return null;
   const steps = (Array.isArray(p.steps) ? p.steps : []).filter(s => typeof s === 'string' && s.trim()).map(s => s.trim());
   const n = steps.length, c = Math.floor(+p.current);
   const cur = Math.max(0, Math.min(Number.isFinite(c) ? c : 0, n));
-  return {goal: typeof p.goal === 'string' ? p.goal.trim() : '', steps, n, cur, done: n > 0 && cur >= n,
-          note: typeof p.note === 'string' ? p.note.trim() : '', updated: +p.updated || 0};
+  return {goal: typeof p.goal === 'string' ? p.goal.trim() : '', steps, n, cur, done: n > 0 && cur >= n};
 }
-function stepLine(m){
-  if (!m || !m.n) return null;
-  return m.done ? {count: 'Done', text: m.n + ' of ' + m.n} : {count: (m.cur + 1) + ' of ' + m.n, text: m.steps[m.cur]};
+function talkLine(t, sender, now){
+  const said = plain(t.text, 80);
+  return (said ? sender + ': ' + said : 'Message from ' + sender) + ' · ' + agoWord(Math.max(0, now - t.ts));
 }
-function byFirst(x, y){
-  return ((+x.first || +x.seen || 0) - (+y.first || +y.seen || 0)) || (x.name < y.name ? -1 : x.name > y.name ? 1 : 0);
-}
-function board(list, links, now){
-  const live = (Array.isArray(list) ? list : []).filter(a => a && a.name && isLive(a, now)).sort(byFirst);
-  const li = live.findIndex(a => a.role === 'lead'); if (li > 0) live.unshift(live.splice(li, 1)[0]);   // the lead's card first
-  const names = new Set(live.map(a => a.name));
-  const best = new Map();                          // one link per pair, the newest
-  for (const l of Array.isArray(links) ? links : []){
-    if (!l || !l.active || now - (+l.last || 0) >= WINDOW || !l.a || !l.b || l.a === l.b || !names.has(l.a) || !names.has(l.b)) continue;
-    const k = l.a < l.b ? l.a + '|' + l.b : l.b + '|' + l.a;
-    if (!best.has(k) || (+l.last || 0) > (+best.get(k).last || 0)) best.set(k, l);
+// A master's card: title, state word, its goal (else the order it started with), the step it is on, its talk with the lead.
+function masterLines(a, f, word, talk, lead, now){
+  const row = a || {}, m = planOf(row);
+  const title = plain(row.title || (f && f.title), 60) || 'Claude';
+  const out = [{k: 'title', text: title}];
+  if (word) out.push({k: 'word', text: word});
+  const about = (m && plain(m.goal, 200)) || plain(row.brief, 140);
+  if (about) out.push({k: 'about', text: about});
+  if (m && m.n){
+    const step = plain(m.steps[Math.min(m.cur, m.n - 1)], 80);
+    out.push({k: 'step', plan: m, text: m.done ? 'All ' + m.n + ' steps done' : 'Step ' + (m.cur + 1) + ' of ' + m.n + (step ? ' · ' + step : '')});
   }
-  const partner = new Map();                       // greedy by newest: each agent joins at most one pair
-  for (const [k, l] of [...best].sort((x, y) => (+y[1].last || 0) - (+x[1].last || 0))){
-    if (partner.has(l.a) || partner.has(l.b)) continue;
-    partner.set(l.a, {k, l, other: l.b}); partner.set(l.b, {k, l, other: l.a});
-  }
-  const order = [], pairs = [], placed = new Set();
-  for (const a of live){                           // stable by first; a pair's later member moves up under the earlier
-    if (placed.has(a.name)) continue;
-    order.push(a); placed.add(a.name);
-    const p = partner.get(a.name);
-    if (p && !placed.has(p.other)){
-      order.push(live.find(x => x.name === p.other)); placed.add(p.other);
-      const from = p.l.from === p.other ? p.other : a.name;
-      pairs.push({key: p.k, upper: a.name, lower: p.other, from, to: from === a.name ? p.other : a.name, link: p.l});
-    }
-  }
-  return {order, pairs};
+  if (talk) out.push({k: 'talk', text: talkLine(talk, talk.fromLead ? (plain(lead, 60) || 'Muddi') : title, now)});
+  return out;
 }
-// ---- end pure ----
+// A tap's card: title, phase word, goals done and the next one, its question when it waits on you, its newest message.
+function tapLines(t, f){
+  const tap = t || {}, it = f || {};
+  const out = [{k: 'title', text: plain(String(tap.title || it.title || '').replace(/^\[[^\]]*\]\s*/, ''), 80) || 'Tap'}];
+  const word = plain(tap.phase_word || it.word, 40);
+  if (word) out.push({k: 'word', text: word[0].toUpperCase() + word.slice(1)});
+  const goals = (Array.isArray(tap.goals) ? tap.goals : []).filter(g => g && typeof g.text === 'string');
+  const n = goals.length || Math.max(0, Math.floor(+it.total) || 0);
+  const k = goals.length ? goals.filter(g => g.done).length : Math.max(0, Math.min(Math.floor(+it.done) || 0, n));
+  if (n){
+    out.push({k: 'goals', text: k + ' of ' + n + ' goals done'});
+    const g = goals.find(x => !x.done) || goals[goals.length - 1], gt = g ? plain(g.text, 160) : '';
+    if (gt) out.push({k: 'goal', text: gt});
+  }
+  const ask = tap.ask && typeof tap.ask === 'object' ? plain(tap.ask.text, 160) : '';
+  if (ask && (it.needs_you || tap.phase === 'holding')) out.push({k: 'ask', text: ask});
+  const msgs = Array.isArray(tap.messages) ? tap.messages : [];
+  const last = msgs.length ? plain(msgs[msgs.length - 1] && msgs[msgs.length - 1].body, 120) : '';
+  if (last) out.push({k: 'last', text: last});
+  return out;
+}
+// ---- end pure: pool ----
 
-const plansEl = document.getElementById('plans');
-const svg = plansEl.querySelector('.links');
+const poolEl = document.getElementById('pool');
+const svg = poolEl.querySelector('.links');
+const leadEl = document.getElementById('poollead');
+const facesEl = document.getElementById('poolfaces');
+const revealEl = document.getElementById('poolcard');
 const SVGNS = 'http://www.w3.org/2000/svg';
 const RM = matchMedia('(prefers-reduced-motion: reduce)');
 const NARROW = matchMedia('(max-width:1180px)');
 const lb = document.getElementById('lightbox');
-const pcards = new Map();   // agent key -> card parts
-const pgaps = new Map();    // pair key -> the gap label + its connector paths
-let emptyEl = null;
-let boardSig = '';          // the cards in order plus the pairs, as last laid out
-let wasShown = false;       // the panel was on screen at the last syncMotion
+const members = new Map();   // face key -> {key, el, bob, pf, f, x, y, sig, leaving, pingT}
+const lines = new Map();     // member key -> {key, base, run, id, talk, fromLead, anims, leaving}
+const seen = new Set();      // talk ids this page has already drawn or passed (only a new one plays)
+let data = {agents: [], fleet: null, taps: [], talks: []};
+let lead = null, booted = false, emptyEl = null;
+let revealed = '', hideT = 0, touch = false, downAt = 0;
 
 const still = () => !A || RM.matches;
 function shown(){
@@ -2731,228 +2834,261 @@ function shown(){
 }
 function cancelAll(list){ for (const a of list){ try{ a.cancel(); }catch(e){} } list.length = 0; }
 function clean(el){ el.style.opacity = ''; el.style.filter = ''; el.style.transform = ''; }
-function enter(el, i){
-  if (still()){ clean(el); return; }
-  el.style.opacity = '0';
-  A.animate(el, {opacity: [0, 1], filter: ['blur(8px)', 'blur(0px)'], translateY: [8, 0], duration: 700,
-    delay: Math.min(i, 5) * 70, ease: 'out(3)', onComplete: () => clean(el)});
-}
-function exit(el, done){
-  if (still()){ done(); return; }
-  A.animate(el, {opacity: 0, filter: 'blur(8px)', translateY: 6, duration: 450, ease: 'in(2)', onComplete: done});
-}
 function nod(el){
   if (still()) return;
   A.animate(el, {scale: [1, 1.025, 1], duration: 520, ease: 'out(3)', onComplete: () => { el.style.transform = ''; }});
 }
-function draw(el){                        // a stroke draws itself on: the link's draw-on (makeGap), for an update card's sparkline
+function draw(el){                        // a stroke draws itself on: an update card's sparkline
   if (still()) return;
   try{ A.animate(A.svg.createDrawable(el), {draw: ['0 0', '0 1'], duration: 700, ease: 'out(3)'}); }catch(e){}
 }
 function setText(el, t){ if (el.textContent !== t) el.textContent = t; }
+function pingFace(pf){                    // a talk landed on this face: the one-shot ripple
+  if (!pf || still()) return;
+  pf.classList.remove('ping'); void pf.offsetWidth; pf.classList.add('ping');
+  clearTimeout(pf.pingT); pf.pingT = setTimeout(() => pf.classList.remove('ping'), 1300);
+}
+const tapOf = key => data.taps.find(t => t && faceKey(t.key) === faceKey(key)) || null;
+const wordOf = f => f.kind === 'tap' ? String(f.word || '') : (MASTER[f.state] || '');
 
-// The connectors follow the cards for `ms` (a glide, a gap opening or closing), frame by frame, and only while the
-// panel is on screen: a window asked for while it is hidden resumes when it shows (syncMotion).
-let until = 0, raf = 0;
-function scheduleLayout(ms){
-  until = Math.max(until, performance.now() + ms);
-  if (!raf && shown()) raf = requestAnimationFrame(frame);
+// ---- the lead: its face by what it is doing (as the pane's head draws it), its title and its activity word ----
+leadEl.innerHTML = '<span class="bob"><span class="pf"></span></span><span class="nm"></span><span class="aw"></span>';
+const leadPf = leadEl.querySelector('.pf');
+leadEl.addEventListener('click', () => { if (lead) openThread(agentKey(lead.name)); });
+function paintLead(){
+  leadEl.hidden = !lead;
+  if (!lead) return;
+  const act = activityOf(lead), st = act && actKind(act.state);
+  const look = st ? Object.assign({}, lead, {state: ACT_STATE[st]}) : lead;
+  const sig = look.look + '|' + look.state;
+  if (leadPf.dataset.sig !== sig){ leadPf.dataset.sig = sig; leadPf.innerHTML = masterFace(look, ' style="--s:64px"'); }
+  const title = lead.title || 'Muddi', word = act ? act.word.trim() : (MASTER[lead.state] || '');
+  setText(leadEl.children[1], title); setText(leadEl.children[2], word);
+  leadEl.setAttribute('aria-label', title + (word ? ', ' + word : ''));
 }
-function frame(){
-  raf = 0;
-  if (!shown()) return;
-  layout();
-  if (performance.now() < until) raf = requestAnimationFrame(frame);
+function leadCenter(){                   // in the pool's own coordinates (its drifting wrapper can be an offsetParent)
+  let x = leadPf.offsetWidth / 2, y = leadPf.offsetHeight / 2;
+  for (let e = leadPf; e && e !== poolEl; e = e.offsetParent){ x += e.offsetLeft; y += e.offsetTop; }
+  return {x, y};
 }
-function layout(){
-  if (!plansEl.offsetParent) return;               // panel hidden: Visual tab or a narrow window
-  svg.style.height = plansEl.scrollHeight + 'px';
-  for (const g of pgaps.values()){
-    const up = pcards.get(agentKey(g.upper)), lo = pcards.get(agentKey(g.lower));
-    if (!up || !lo || !up.el.isConnected || !lo.el.isConnected){ g.grp.style.display = 'none'; continue; }
-    const x = up.el.offsetLeft + up.orb.offsetLeft + up.orb.offsetWidth / 2;
-    const y1 = up.el.offsetTop + up.orb.offsetTop + up.orb.offsetHeight + 6;
-    const y2 = lo.el.offsetTop + lo.orb.offsetTop - 6;
-    g.grp.style.display = y2 - y1 > 4 ? '' : 'none';
-    const d = g.down ? `M${x} ${y1}L${x} ${y2}` : `M${x} ${y2}L${x} ${y1}`;
-    if (g.d !== d){ g.base.setAttribute('d', d); g.run.setAttribute('d', d); g.d = d; }
+
+// ---- the pool's faces ----
+function makeMember(key, i){
+  const el = document.createElement('div'); el.className = 'pm'; el.dataset.key = key;
+  el.innerHTML = '<span class="bob"><button type="button" class="pf"></button></span>';
+  const bob = el.firstChild, pf = bob.firstChild, b = bobOf(i);
+  bob.style.animationDuration = b.dur + 's'; bob.style.animationDelay = b.delay + 's';
+  pf.addEventListener('pointerdown', e => { touch = e.pointerType === 'touch'; downAt = Date.now(); });
+  pf.addEventListener('pointerenter', e => { if (e.pointerType !== 'touch') reveal(key); });
+  pf.addEventListener('pointerleave', e => { if (e.pointerType !== 'touch') unreveal(key); });
+  pf.addEventListener('focus', () => { if (Date.now() - downAt > 500) reveal(key); });   // keyboard focus; a press is hover's or touch's
+  pf.addEventListener('blur', () => unreveal(key));
+  pf.addEventListener('click', e => {
+    if ((e.pointerType === 'touch' || touch) && revealed !== key){ reveal(key); return; }   // touch: the first tap shows the card
+    openThread(key);
+  });
+  facesEl.appendChild(el);
+  return {key, el, bob, pf, f: null, x: null, y: null, sig: '', leaving: false};
+}
+function fillMember(m, f){
+  m.f = f;
+  const t = f.kind === 'tap' ? tapOf(f.key) : null;
+  const sig = JSON.stringify([f.kind, f.phase, f.state, f.look, f.initial, f.working, t ? t.phase : '']);
+  if (m.sig !== sig){
+    m.sig = sig;
+    m.pf.innerHTML = f.kind === 'tap'
+      ? tapAvatar(Object.assign({key: f.key, repo: String(f.key).split('#')[0], title: f.title || '', status: ''}, t || {},
+          {phase: f.phase, initial: f.initial || (t && t.initial), replying: !!f.working}), ' style="--s:40px"')
+      : masterFace({look: f.look, state: f.state}, ' style="--s:40px"');
+  }
+  const label = String(f.title || (f.kind === 'tap' ? 'Tap' : 'Claude')) + (wordOf(f) ? ', ' + wordOf(f) : '');
+  if (m.pf.getAttribute('aria-label') !== label) m.pf.setAttribute('aria-label', label);
+}
+function place(m, slot, glide){
+  const was = m.x === null ? null : {x: m.x, y: m.y};
+  m.x = slot.x; m.y = slot.y;
+  m.el.style.left = (slot.x - POOL.face / 2) + 'px'; m.el.style.top = (slot.y - POOL.face / 2) + 'px';
+  if (!glide || !was || still() || !shown()) return;
+  const dx = was.x - slot.x, dy = was.y - slot.y;
+  if (Math.abs(dx) > 1 || Math.abs(dy) > 1) m.el.animate([{transform: `translate(${dx}px,${dy}px)`}, {transform: 'none'}],
+    {duration: 520, easing: 'cubic-bezier(.22,.9,.24,1)'});      // the others glide to their new slots
+}
+function arrive(m, i){                    // a new member springs in at its slot: the house pop, 40 ms apart
+  if (still() || !shown()){ clean(m.el); return; }
+  m.el.style.opacity = '0';
+  A.animate(m.el, {opacity: [0, 1], scale: [0.6, 1], filter: ['blur(6px)', 'blur(0px)'], duration: 500,
+    delay: Math.min(i, 6) * 40, ease: 'cubicBezier(.3,1.4,.5,1)', onComplete: () => clean(m.el)});
+}
+function leave(m){
+  m.leaving = true; m.el.style.pointerEvents = 'none';
+  if (revealed === m.key) hide();
+  const done = () => { m.el.remove(); if (members.get(m.key) === m) members.delete(m.key); };
+  if (still() || !shown()){ done(); return; }
+  A.animate(m.el, {opacity: 0, scale: 0.9, duration: 180, ease: 'in(2)', onComplete: done});
+}
+
+// ---- talk lines: one per member talking with the lead, under the faces ----
+function makeLine(key){
+  const base = document.createElementNS(SVGNS, 'path'), run = document.createElementNS(SVGNS, 'path');
+  base.setAttribute('class', 'ltalk'); run.setAttribute('class', 'lrun'); run.style.opacity = '0';
+  svg.append(base, run);
+  return {key, base, run, id: '', talk: null, fromLead: true, anims: [], leaving: false, d: ''};
+}
+function shape(ln, from, to){             // a gentle curve, its bend 18 px to one side, drawn from the sender's end
+  const dx = to.x - from.x, dy = to.y - from.y, len = Math.hypot(dx, dy) || 1;
+  const cx = (from.x + to.x) / 2 - dy / len * 18, cy = (from.y + to.y) / 2 + dx / len * 18;
+  const [s, r] = ln.fromLead ? [from, to] : [to, from];
+  const d = `M${s.x.toFixed(1)} ${s.y.toFixed(1)}Q${cx.toFixed(1)} ${cy.toFixed(1)} ${r.x.toFixed(1)} ${r.y.toFixed(1)}`;
+  if (ln.d !== d){ ln.base.setAttribute('d', d); ln.run.setAttribute('d', d); ln.d = d; }
+}
+function play(ln, m){                     // a new talk: the line draws on from the sender, one chase, the receiver ripples
+  cancelAll(ln.anims);
+  const to = ln.fromLead ? m.pf : leadPf;
+  ln.run.style.opacity = '0'; ln.base.style.visibility = 'hidden';
+  const chase = () => {
+    if (!shown() || still()){ pingFace(to); return; }
+    ln.run.style.opacity = '1';
+    try{ ln.anims.push(A.animate(A.svg.createDrawable(ln.run), {draw: ['0 0', '0 1', '1 1'], duration: 1100, ease: 'inOutSine',
+      onComplete: () => { ln.run.style.opacity = '0'; pingFace(to); }})); }
+    catch(e){ ln.run.style.opacity = '0'; pingFace(to); }
+  };
+  try{ ln.anims.push(A.animate(A.svg.createDrawable(ln.base), {draw: ['0 0', '0 1'], duration: 600, ease: 'cubicBezier(.4,0,.2,1)',
+    onBegin: () => { ln.base.style.visibility = ''; }, onComplete: chase})); }
+  catch(e){ ln.base.style.visibility = ''; chase(); }
+}
+function dropLine(ln){
+  ln.leaving = true; cancelAll(ln.anims);
+  const done = () => { ln.base.remove(); ln.run.remove(); if (lines.get(ln.key) === ln) lines.delete(ln.key); };
+  if (still() || !shown()){ done(); return; }
+  ln.run.style.opacity = '0'; ln.base.classList.add('out');
+  setTimeout(done, 450);
+}
+function paintLines(list, now, moving){
+  const tk = lead ? poolTalks(data.talks, agentKey(lead.name), list.map(f => f.key), now) : new Map();
+  for (const ln of lines.values()) if (!ln.leaving && (!tk.has(ln.key) || !members.has(ln.key))) dropLine(ln);
+  if (!lead) return;
+  const lc = leadCenter(), top = facesEl.offsetTop;
+  for (const [key, t] of tk){
+    const m = members.get(key);
+    if (!m || m.leaving) continue;
+    let ln = lines.get(key);
+    if (!ln || ln.leaving){ ln = makeLine(key); lines.set(key, ln); }
+    ln.talk = t; ln.fromLead = t.fromLead;
+    shape(ln, lc, {x: m.x, y: top + m.y});
+    ln.base.style.opacity = String(talkAlpha(now - t.ts));
+    if (ln.id !== t.id){
+      const fresh = booted && !seen.has(t.id);
+      ln.id = t.id;
+      if (fresh && moving && shown() && !still()) play(ln, m);
+    }
   }
 }
-const ro = new ResizeObserver(() => scheduleLayout(0));
-ro.observe(plansEl);
 
-function makeCard(key){
-  const el = document.createElement('button');
-  el.type = 'button'; el.className = 'plan'; el.dataset.key = key;
-  el.innerHTML = `<span class="orb"></span><span class="pcol"><span class="ptop"><span class="nm"></span>` +
-    `<span class="ago"></span><span class="unread"></span></span><span class="star"></span>` +
-    `<span class="track"></span><span class="stepline"></span></span>`;
-  el.addEventListener('click', () => openThread(key));
-  const q = s => el.querySelector(s);
-  ro.observe(el);
-  return {key, el, orb: q('.orb'), nm: q('.nm'), ago: q('.ago'), dot: q('.unread'), star: q('.star'),
-          track: q('.track'), line: q('.stepline'), tsig: null, lsig: null, cur: null, pingT: 0, fsig: null};
+// ---- the reveal: a card anchored to the face under the pointer (or focus) that says what it is about ----
+function revealLines(m){
+  const now = Date.now() / 1000, f = m.f;
+  if (f.kind === 'tap') return tapLines(tapOf(f.key), f);
+  const a = data.agents.find(x => x && agentKey(x.name) === f.key), ln = lines.get(m.key);
+  return masterLines(a, f, MASTER[(a && a.state) || f.state] || '', ln && !ln.leaving ? ln.talk : null, lead && lead.title, now);
 }
-function drawTrack(t, m){
-  if (!m || !m.n){ t.className = 'track'; t.textContent = ''; t.title = ''; return; }
-  if (m.n > 16){                                   // too many to segment: one bar, the done fraction and a knob
+function fillReveal(m){
+  const f = m.f, rows = revealLines(m);
+  const chip = f.kind === 'tap' ? 'p-' + String(f.phase || '').replace(/[^a-z]/g, '') : String(f.state || '').replace(/[^a-z]/g, '');
+  const cls = {title: 'rt', word: 'rw', about: 'rg', goal: 'rg', step: 'rs', goals: 'rn', ask: 'ra', talk: 'rd', last: 'rd'};
+  const html = rows.map((l, i) => {
+    const body = l.k === 'word' ? `<span class="chip ${chip}"><i></i>${esc(l.text)}</span>`
+      : l.k === 'step' ? `<span class="track"></span><span class="sl">${esc(l.text)}</span>` : esc(l.text);
+    return `<div class="rl ${cls[l.k]}" style="--i:${i}">${body}</div>`;
+  }).join('');
+  if (revealEl.dataset.html !== html){
+    revealEl.dataset.html = html; revealEl.innerHTML = html;
+    const s = rows.find(l => l.k === 'step');
+    if (s) drawTrack(revealEl.querySelector('.track'), s.plan);
+  }
+}
+function placeReveal(m){
+  revealEl.style.width = Math.max(0, poolEl.clientWidth - 24) + 'px';
+  const cy = facesEl.offsetTop + m.y, r = POOL.face * 1.12 / 2 + 8, h = revealEl.offsetHeight;
+  const fits = cy + r + h <= poolEl.scrollTop + poolEl.clientHeight - 8, up = !fits && cy - r - h >= poolEl.scrollTop;
+  revealEl.style.top = (up ? cy - r - h : cy + r) + 'px';
+  revealEl.classList.toggle('up', up);
+}
+function reveal(key){
+  clearTimeout(hideT);
+  const m = members.get(key);
+  if (!m || m.leaving || !m.f) return;
+  const again = revealed === key;
+  if (revealed && !again){ const was = members.get(revealed); if (was) was.el.classList.remove('on'); }
+  revealed = key; m.el.classList.add('on'); facesEl.classList.add('revealing');
+  m.pf.setAttribute('aria-describedby', 'poolcard');
+  fillReveal(m); placeReveal(m);
+  if (!again){ revealEl.classList.remove('open'); void revealEl.offsetWidth; }
+  revealEl.classList.add('open');
+}
+function hide(){
+  clearTimeout(hideT);
+  const m = members.get(revealed);
+  if (m){ m.el.classList.remove('on'); m.pf.removeAttribute('aria-describedby'); }
+  revealed = ''; facesEl.classList.remove('revealing'); revealEl.classList.remove('open');
+}
+function unreveal(key){                   // a short grace, so sliding to the next face hands the card straight over
+  if (revealed !== key) return;
+  clearTimeout(hideT); hideT = setTimeout(() => { if (revealed === key) hide(); }, 60);
+}
+document.addEventListener('pointerdown', e => { if (revealed && !e.target.closest('#poolfaces .pf')) hide(); });
+poolEl.addEventListener('scroll', () => { if (revealed){ const m = members.get(revealed); if (m) placeReveal(m); } }, {passive: true});
+
+function drawTrack(t, m){                 // the step track: segments, or one bar with a knob past 16 steps
+  if (!m || !m.n){ t.className = 'track'; t.textContent = ''; return; }
+  if (m.n > 16){
     t.className = 'track long' + (m.done ? ' all' : '');
-    if (!t.querySelector('.fill')) t.innerHTML = '<i></i><i class="fill"></i><b></b>';
+    t.innerHTML = '<i></i><i class="fill"></i><b></b>';
     t.querySelector('.fill').style.width = (100 * m.cur / m.n) + '%';
     t.querySelector('b').style.left = (m.done ? 100 : 100 * (m.cur + .5) / m.n) + '%';
-    t.title = m.done ? 'Done' : (m.cur + 1) + '. ' + m.steps[m.cur];
     return;
   }
-  t.className = 'track' + (m.done ? ' all' : ''); t.title = '';
-  if (t.querySelector('.fill')) t.textContent = '';
-  while (t.children.length < m.n) t.appendChild(document.createElement('i'));
-  while (t.children.length > m.n) t.lastChild.remove();
-  [...t.children].forEach((s, i) => { s.className = i < m.cur ? 'done' : i === m.cur ? 'now' : ''; s.title = (i + 1) + '. ' + m.steps[i]; });
-}
-function fillCard(c, a, now){
-  const m = planOf(a), sl = stepLine(m);
-  const cls = orbCls(a) + (c.orb.classList.contains('ping') ? ' ping' : '');
-  if (c.orb.className !== cls) c.orb.className = cls;      // away shows on the face only; the card keeps full ink
-  const fsig = a.look + '|' + a.state;
-  if (c.fsig !== fsig){ c.orb.innerHTML = faceArt(a.look, a.state); c.fsig = fsig; }
-  setText(c.nm, a.title || 'Claude');
-  setText(c.ago, when(Math.max(m ? m.updated : 0, +a.last_master || 0) || +a.seen || now));
-  const unread = isUnread(c.key);                   // an unread reply; change notes keep the rail's dot and rows
-  c.dot.classList.toggle('show', unread);
-  const goal = m ? m.goal : '';
-  setText(c.star, goal || 'No goal yet'); c.star.classList.toggle('none', !goal); c.star.title = goal;
-  const tsig = m && m.n ? m.cur + '|' + m.steps.join('\n') : '';
-  if (c.tsig !== tsig){ drawTrack(c.track, m); c.tsig = tsig; }
-  const lsig = sl ? sl.count + '\n' + sl.text : '';
-  if (c.lsig !== lsig){ c.line.innerHTML = sl ? `<b>${esc(sl.count)}</b> · ${esc(sl.text)}` : ''; c.lsig = lsig; }
-  c.line.title = m && m.note ? m.note : '';
-  c.el.setAttribute('aria-label', [a.title || 'Claude', MASTER[a.state] || '', goal ? 'goal: ' + goal : 'no goal yet',
-    sl ? (m.done ? 'all ' + m.n + ' steps done' : 'step ' + sl.count + ', ' + sl.text) : '',
-    'updated ' + c.ago.textContent, unread ? 'unread' : ''].filter(Boolean).join(', '));
-  if (m && c.cur !== null && m.cur > c.cur) nod(c.el);    // the step moved on
-  c.cur = m ? m.cur : null;
-}
-function ping(c){                                   // a new message landed on this agent: one ripple, one nod
-  c.orb.classList.remove('ping'); void c.orb.offsetWidth; c.orb.classList.add('ping');
-  clearTimeout(c.pingT); c.pingT = setTimeout(() => c.orb.classList.remove('ping'), 1300);
-  nod(c.el);
+  t.className = 'track' + (m.done ? ' all' : '');
+  t.innerHTML = m.steps.map((s, i) => `<i class="${i < m.cur ? 'done' : i === m.cur ? 'now' : ''}"></i>`).join('');
 }
 
-function makeGap(p){
-  const el = document.createElement('div'); el.className = 'pgap';
-  const grp = document.createElementNS(SVGNS, 'g');
-  const base = document.createElementNS(SVGNS, 'path'), run = document.createElementNS(SVGNS, 'path');
-  base.setAttribute('class', 'lbase'); run.setAttribute('class', 'lrun'); run.style.opacity = '0';
-  grp.append(base, run); svg.appendChild(grp);
-  const g = {key: p.key, el, grp, base, run, html: '', d: '', last: null, drawn: still(), chase: [], timer: 0};
-  ro.observe(el);                                   // its words wrap to a second line: the card below moves, the line follows
-  requestAnimationFrame(() => el.classList.add('open'));
-  if (!g.drawn){
-    base.style.opacity = '0';
-    g.timer = setTimeout(() => {                   // draw on once the two cards have glided together
-      base.style.opacity = '';
-      try{ A.animate(A.svg.createDrawable(base), {draw: ['0 0', '0 1'], duration: 700, ease: 'out(3)',
-        onComplete: () => { g.drawn = true; syncMotion(); }}); }
-      catch(e){ g.drawn = true; syncMotion(); }
-    }, 450);
-  }
-  return g;
-}
-function fillGap(g, p, now){                        // "A → B · 2m", then the summary under it (two lines at most)
-  const l = p.link, last = +l.last || 0, said = String(l.summary || '').replace(/\s+/g, ' ').trim();
-  const html = `<div class="pin"><div class="pw"><b>${esc(titleOf(p.from) || 'Claude')}</b><i>→</i>` +
-    `<b>${esc(titleOf(p.to) || 'Claude')}</b><em>· ${when(last || now)}</em></div>` +
-    (said ? `<div class="ps">${esc(said)}</div>` : '') + `</div>`;
-  if (g.html !== html){ g.el.innerHTML = html; g.html = html; }
-  g.el.title = said;
-  g.upper = p.upper; g.lower = p.lower; g.down = p.from === p.upper;   // the chase runs from sender to receiver
-  if (g.last !== null && last > g.last && !still()){ const rc = pcards.get(agentKey(p.to)); if (rc) ping(rc); }
-  g.last = last;
-}
-function retireGap(g){
-  g.leaving = true; g.el.classList.add('leaving'); g.el.classList.remove('open');
-  clearTimeout(g.timer); cancelAll(g.chase); g.run.style.opacity = '0';
-  const done = () => { ro.unobserve(g.el); g.grp.remove(); g.el.remove(); if (pgaps.get(g.key) === g) pgaps.delete(g.key); };
-  if (still()){ done(); return; }
-  try{ A.animate(A.svg.createDrawable(g.base), {draw: '1 1', duration: 450, ease: 'in(2)'}); }catch(e){}
-  setTimeout(done, 520);
-}
-function syncMotion(){                              // the chase runs while a pair is drawn, only where someone can see it
-  const on = shown();
-  if (on && !wasShown) scheduleLayout(0);          // back on screen: place the lines once (and finish a glide asked for while hidden)
-  wasShown = on;
-  for (const g of pgaps.values()){
-    if (g.leaving) continue;
-    const live = g.drawn;
-    if (on && live && !still()){
-      if (!g.chase.length){
-        g.run.style.opacity = '1';
-        try{ g.chase.push(A.animate(A.svg.createDrawable(g.run), {draw: ['0 0', '0 1', '1 1'],
-          duration: 1900, loop: true, ease: 'inOutSine'})); }
-        catch(e){ g.run.setAttribute('stroke-dasharray', '26 12'); }
-      }
-      continue;
-    }
-    cancelAll(g.chase);
-    if (live && still()){ g.run.removeAttribute('stroke-dasharray'); g.run.removeAttribute('stroke-dashoffset'); g.run.style.opacity = '1'; }
-    else g.run.style.opacity = '0';
-  }
-}
-
-function render(agentsIn, linksIn){
-  const now = Date.now() / 1000;
-  const {order, pairs} = board(agentsIn, linksIn, now);
-  const before = new Map();
-  for (const [k, c] of pcards) if (!c.leaving) before.set(k, c.el.offsetTop);
-  const want = new Set(order.map(a => agentKey(a.name)));
-  for (const [k, c] of pcards){
-    if (want.has(k) || c.leaving) continue;
-    c.leaving = true; c.el.classList.add('leaving'); c.el.style.pointerEvents = 'none';
-    exit(c.el, () => { ro.unobserve(c.el); c.el.remove(); if (pcards.get(k) === c) pcards.delete(k); scheduleLayout(0); });
-  }
-  const paired = new Set(pairs.map(p => p.key));
-  for (const g of pgaps.values()) if (!g.leaving && !paired.has(g.key)) retireGap(g);
-  const upperOf = new Map(pairs.map(p => [p.upper, p]));
-  const seq = [], added = [];
-  for (const a of order){
-    const k = agentKey(a.name);
-    let c = pcards.get(k);
-    if (!c || c.leaving){ c = makeCard(k); pcards.set(k, c); added.push(c); }
-    fillCard(c, a, now);
-    seq.push(c.el);
-    const p = upperOf.get(a.name);
-    if (p){
-      let g = pgaps.get(p.key);
-      if (!g || g.leaving){ g = makeGap(p); pgaps.set(p.key, g); }
-      fillGap(g, p, now);
-      seq.push(g.el);
-    }
-  }
-  if (!order.length){
-    if (!emptyEl){ emptyEl = document.createElement('div'); emptyEl.className = 'railempty'; emptyEl.textContent = 'No agents working right now.'; }
-    seq.push(emptyEl);
+// ---- one paint: the lead, the faces in their slots, the lines; `moving` is a data change (a resize only re-places) ----
+function paint(moving){
+  const now = Date.now() / 1000, W = poolEl.clientWidth;
+  lead = data.agents.find(a => a && a.role === 'lead') || null;
+  paintLead();
+  if (!W) return;                         // hidden (Visual tab, a narrow window): the resize that shows it paints again
+  const list = poolOrder(data.fleet), lay = poolLayout(list.length, W);
+  const want = new Set(list.map(f => f.key));
+  for (const m of members.values()) if (!m.leaving && !want.has(m.key)) leave(m);
+  const added = [];
+  list.forEach((f, i) => {
+    let m = members.get(f.key);
+    if (!m || m.leaving){ m = makeMember(f.key, i); members.set(f.key, m); added.push(m); }
+    fillMember(m, f);
+    place(m, lay.slots[i], moving);
+  });
+  facesEl.style.height = lay.height + 'px';
+  const empty = list.length ? '' : lead ? 'Nothing under ' + (lead.title || 'Muddi') + ' yet' : 'No lead yet';
+  if (empty){
+    if (!emptyEl){ emptyEl = document.createElement('div'); emptyEl.className = 'railempty'; }
+    setText(emptyEl, empty); if (!emptyEl.isConnected) facesEl.appendChild(emptyEl);
+    facesEl.style.height = '';
   } else if (emptyEl) emptyEl.remove();
-  let ref = svg.nextElementSibling;                  // put the DOM in order; leaving cards and closing gaps stay put
-  for (const el of seq){
-    while (ref && ref !== el && ref.classList.contains('leaving')) ref = ref.nextElementSibling;
-    if (ref === el) ref = ref.nextElementSibling;
-    else plansEl.insertBefore(el, ref);
-  }
-  if (!still()) for (const [k, top] of before){       // cards that moved glide from where they were
-    const c = pcards.get(k);
-    if (!c || c.leaving || !c.el.isConnected) continue;
-    const dy = top - c.el.offsetTop;
-    if (Math.abs(dy) > 1) c.el.animate([{transform: `translateY(${dy}px)`}, {transform: 'none'}],
-      {duration: 520, easing: 'cubic-bezier(.22,.9,.24,1)'});
-  }
-  added.forEach((c, i) => enter(c.el, i));
-  // The lines follow frame by frame only when the cards, their order or the pairs changed (glides, gaps opening or
-  // closing). A poll that changed none of that runs no frames; a card or gap that changes size asks through `ro`.
-  const sig = seq.map(el => el.dataset.key || '').join('|') + '#' + pairs.map(p => p.key + '>' + p.from).join('|');
-  if (sig !== boardSig){ boardSig = sig; scheduleLayout(700); }
-  syncMotion();
+  if (moving) added.forEach((m, i) => arrive(m, i)); else added.forEach(m => clean(m.el));
+  paintLines(list, now, moving);
+  svg.style.height = poolEl.scrollHeight + 'px';
+  if (revealed){ const m = members.get(revealed); if (m && !m.leaving){ fillReveal(m); placeReveal(m); } else hide(); }
 }
+function render(agentsIn, linksIn, fleetIn, tapsIn, talksIn){
+  data = {agents: Array.isArray(agentsIn) ? agentsIn : [], fleet: Array.isArray(fleetIn) ? fleetIn : null,
+          taps: Array.isArray(tapsIn) ? tapsIn : [], talks: Array.isArray(talksIn) ? talksIn : []};
+  paint(true);
+  for (const t of data.talks) if (t && t.id) seen.add(String(t.id));
+  if (data.agents.length) booted = true;  // talks already there when the page loads draw still; only new ones play
+}
+function syncMotion(){ poolEl.classList.toggle('paused', !shown()); }   // the faces drift only where someone can see them
 
+new ResizeObserver(() => paint(false)).observe(poolEl);
 new MutationObserver(syncMotion).observe(document.body, {attributes: true, attributeFilter: ['class']});
 new MutationObserver(syncMotion).observe(lb, {attributes: true, attributeFilter: ['class']});
 NARROW.addEventListener('change', syncMotion);
@@ -2960,7 +3096,8 @@ RM.addEventListener('change', syncMotion);
 document.addEventListener('visibilitychange', syncMotion);
 
 window.tsPanel = {render, nod, draw, still};   // script 2's update cards nod and draw through these (no-ops when still)
-render(agents, links);
+render(agents, links, fleet, taps.items, talks);
+syncMotion();
 </script>
 </body>
 </html>
