@@ -1,13 +1,16 @@
 #!/bin/bash
 # The Mac app's verification loop, on a scratch server and never on screen: build, seed real data,
 # let the two seeded masters exchange a message, check what the server serves, render every scene
-# and the link frames offscreen (the app must never come to the front or show a Dock icon), hold
-# the masters data the app decoded against the server's, render the card frames (an update card
-# arriving in the lead's thread and answered) offscreen, then stop the server.
+# and the link frames (a talk line drawing between the lead and a face in its pool) offscreen (the
+# app must never come to the front or show a Dock icon), hold the masters data the app decoded
+# against the server's, render the pool frames (a face's reveal card) and the card frames (an
+# update card arriving in the lead's thread and answered) offscreen, then stop the server.
 #
 #   Scripts/verify.sh [port=4748] [out-dir] [demo-seconds=30]
 #   LINK=0 Scripts/verify.sh ...  skip the link frames and link.mp4
 #   CARD=0 Scripts/verify.sh ...  skip the card frames and card.mp4
+#   POOL=0 Scripts/verify.sh ...  skip the pool frames (the reveal card) and pool.mp4
+#   TAPSPACE_POOL_TAPS=<file>     taps to list in the pool (a saved /api/taps; a scratch server has none)
 #   FPS=1 Scripts/verify.sh ...   also the --demo fps run, which shows a window and a second pill ON
 #                                 SCREEN and takes focus: only with the go of whoever uses this Mac
 set -euo pipefail
@@ -154,6 +157,23 @@ if [[ "${LINK:-1}" == "1" ]]; then
     fi
 fi
 
+POOLS=0
+if [[ "${POOL:-1}" == "1" ]]; then
+    echo "==> Pool frames -> $OUT/pool (offscreen), then pool.mp4 at 30 fps"
+    rm -rf "$OUT/pool"
+    offscreen "$OUT/pool" "$OUT/pool.log" TAPSPACE_POOL_FRAMES=1
+    POOLS=$RC
+    grep -E "^(POOL|SNAPSHOT)" "$OUT/pool.log" | tail -5 || true
+    if [[ $POOLS -eq 0 && -f "$OUT/pool/f000.png" ]]; then
+        ffmpeg -loglevel error -y -framerate 30 -i "$OUT/pool/f%03d.png" -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2" \
+            -c:v libx264 -pix_fmt yuv420p "$OUT/pool/pool.mp4"
+        echo "    $OUT/pool/pool.mp4: $(ffprobe -v error -show_entries format=duration -of csv=p=0 "$OUT/pool/pool.mp4") s"
+    else
+        echo "    no pool frames (exit $POOLS); see $OUT/pool.log"
+        POOLS=1
+    fi
+fi
+
 CARDS=0
 if [[ "${CARD:-1}" == "1" ]]; then
     echo "==> Card frames -> $OUT/card (offscreen), then card.mp4 at 30 fps"
@@ -179,4 +199,4 @@ fi
 echo
 echo "snapshots: $OUT/snapshots (exit $SNAP; scenes.json lists each scene and the masters data)"
 if [[ $SNAP -ne 0 ]]; then exit "$SNAP"; fi
-[[ $SEEDED -eq 0 && $MATCHED -eq 0 && $QUIET -eq 0 && $FRAMES -eq 0 && $CARDS -eq 0 ]] || exit 1
+[[ $SEEDED -eq 0 && $MATCHED -eq 0 && $QUIET -eq 0 && $FRAMES -eq 0 && $POOLS -eq 0 && $CARDS -eq 0 ]] || exit 1

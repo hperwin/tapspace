@@ -89,17 +89,25 @@ above the bubble text (1 = natural aspect up to ~340 pt tall; 2/4 = 2 columns; 3
 lightbox. Images are served at /chat-media/<file>. Tap threads are text only: hide the paperclip there and toast
 "Images go to agents. Taps take text." on a drop.
 
-### Chat: masters' progress, card notes and links (added October 2026)
-Same data as the web page and Glint: `GET /api/agents` rows carry `progress`, `notes` and `notes_read`, plus a top-level `links`.
-- A third column when the window has room: one card per live master in a stable order (face with status dot, title, updated time,
-  unread dot, the goal in at most 2 lines, a segmented step track with the current step blue, and "3 of 5 · Build"; "No goal yet"
-  in muted text before a master publishes one). A click opens that master's thread.
+### Chat: the lead's face pool, card notes and links (added October 2026; the pool replaced the progress cards)
+Same data as the web page and Glint: `GET /api/agents` rows carry `progress`, `notes`, `notes_read`, `brief` and `launch`, plus
+top-level `links`, `fleet` and `talks`.
+- A third column when the window has room (the same 288 pt slot, shown from 1190 pt): the lead's face on top (64 pt, its
+  activity expression), its title and activity word; 28 pt under it a honeycomb pool of 40 pt faces, one per member of the
+  server's `fleet` (masters, then taps, each in the server's order; no labels), every face floating on Core Animation with its
+  own period and phase. A new member springs in (scale 0.6, blur 6, staggered 40 ms); the rest glide to new slots. A click opens
+  that thread. "Nothing under <lead> yet" when the fleet is empty. The pool scrolls with the lead when it overflows.
+- Talk lines: one curve under the faces from the lead to each member it talked with in the last 10 minutes (`talks`, newest per
+  member), 0.9 opacity fading to 0.15 at 600 s. A new talk draws on from the sender, one chase runs to the receiver, and the
+  receiver pings.
+- Hover a face: it grows to 1.12, the others dim, and a card opens under it (above when it would not fit): a master's title,
+  state, goal (else its `brief`), step and its newest talk with the lead; a tap's title, phase word, goals done and the next
+  one, the question when it waits on Hayden, and its newest message.
 - Under each master in the rail: the cards Hayden sent back with notes that went to that master (thumbnail or title plus the
   note's first words, newest first, at most 4 rows then "+N more") and the blue dot on the master. A row leaves when the master
   posts a new version; opening the master's thread posts the read mark (POST /api/agents/read), so the web page, the app and
-  Glint agree.
-- Two masters messaging each other: their cards sit together, joined by a line that draws and pulses with TapSpace's chase (Core
-  Animation, paused when idle), one line "Title A → Title B · summary", and "Talking with <title>" under each in the rail.
+  Glint agree. "Talking with <title>" under two masters messaging each other. An offline master whose restart failed after the
+  reply shows "Couldn’t start: <reason>" under its row until a launch works.
 - Titles only (never a NAME with a session code, a path, a hex id or an issue number), no em dashes, flat colors.
 
 ### Menu-bar liquid pill (mirror SnappWAU as directly as possible)

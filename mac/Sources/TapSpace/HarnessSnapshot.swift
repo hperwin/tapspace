@@ -1,5 +1,6 @@
 import AppKit
 import CoreGraphics
+import SwiftUI
 
 /// `--snapshot <dir>`: poses the REAL window and pill into every scene in
 /// SPEC.md, settles all springs, renders each with `cacheDisplay` into an
@@ -155,6 +156,9 @@ final class HarnessSnapshot {
             problems.append("11-chat-card: no lead on the server")
         }
 
+        // 13-16. The face pool in the third column (the lead's thread open, Hayden's window size).
+        await poolScenes()
+
         // 6. Chat on a tap thread (real data through the server, read-only). A scratch server reads no board
         // unless TAPSPACE_BOARD_URL names one, so it serves no taps: skipped, as 05 is.
         await store.tapsPoller.now()
@@ -182,6 +186,107 @@ final class HarnessSnapshot {
         }
         app.pill.releasePose()
         finish()
+    }
+
+    /// The pool at rest, with a master's card open, with a tap's card open, and with two talk lines. Talks are
+    /// posed (HarnessPool: a scratch server has none yet), taps come from TAPSPACE_POOL_TAPS when given. At rest
+    /// only Core Animation moves (the float), so Motion.main must be still: `pool_motion_still`.
+    private func poolScenes() async {
+        guard let lead = store.agents.first(where: \.isLead) else {
+            problems.append("13-pool-idle: no lead on the server")
+            return
+        }
+        let pool = HarnessPool.shared
+        app.window.setContentSize(NSSize(width: 1512, height: 887))
+        pool.talks = []
+        await openThread(lead)
+        let members = HarnessPool.members(store)
+        let orbs = members.filter { $0.kind != "tap" }, taps = members.filter { $0.kind == "tap" }
+        self.masters["pool"] = members.count
+        shot("13-pool-idle", note: "\(orbs.count) masters and \(taps.count) taps under \(lead.title)")
+        // Real time, no settle: nothing but the Core Animation float runs, so the display link sleeps.
+        try? await Task.sleep(for: .milliseconds(1200))
+        let still = Motion.main.isStill
+        self.masters["pool_motion_still"] = still ? 1 : 0
+        Harness.log("SNAPSHOT pool at rest: Motion.main drivers=\(Motion.main.activeCount) paused=\(Motion.main.isPaused)")
+        if !still { problems.append("13-pool-idle: Motion.main still has \(Motion.main.activeCount) drivers at rest") }
+        let now = Date().timeIntervalSince1970
+        if let m = orbs.first {
+            pool.talks = [HarnessPool.talk("scene-1", from: lead.key, to: m.key, ts: now - 120,
+                                           text: "Check the build before you push")].compactMap { $0 }
+            pool.hover = m.key
+            await settle()
+            shot("14-pool-hover-master", note: "\(m.title), its card open")
+        } else {
+            Harness.log("SNAPSHOT skipped 14-pool-hover-master: no master in the pool")
+        }
+        if let t = taps.first {
+            pool.talks = [HarnessPool.talk("scene-2", from: lead.key, to: t.key, ts: now - 200,
+                                           text: "Send the proof when it lands", kind: "tap")].compactMap { $0 }
+            pool.hover = t.key
+            await settle()
+            shot("15-pool-hover-tap", note: "\(t.title), its card open")
+        } else {
+            Harness.log("SNAPSHOT skipped 15-pool-hover-tap: no taps (set TAPSPACE_POOL_TAPS to a saved /api/taps)")
+        }
+        let two = Array((orbs.prefix(1) + taps.prefix(1) + orbs.dropFirst()).prefix(2))
+        if two.count == 2 {
+            pool.hover = nil
+            pool.talks = [HarnessPool.talk("scene-3", from: lead.key, to: two[0].key, ts: now - 20,
+                                           text: "Rebase on main, then run the tests"),
+                          HarnessPool.talk("scene-4", from: two[1].key, to: lead.key, ts: now - 330,
+                                           text: "Done, the proof is up", kind: two[1].kind == "tap" ? "tap" : "message")]
+                .compactMap { $0 }
+            await settle()
+            shot("16-pool-talks", note: "lines to \(two[0].title) (20 s) and \(two[1].title) (5 min)")
+        } else {
+            Harness.log("SNAPSHOT skipped 16-pool-talks: fewer than two faces in the pool")
+        }
+        pool.hover = nil
+        pool.talks = nil
+        app.window.setContentSize(NSSize(width: 1240, height: 820))
+        await settle()
+        await restartReason()
+    }
+
+    /// 17: an offline master whose restart the launcher refused after the reply (the server's `launch`, C1),
+    /// decoded through the app's own decoder and drawn as the rail draws it: the row, Restart, and the reason
+    /// under it. Rendered on its own (a scratch copy never serves a refused launch).
+    private func restartReason() async {
+        let row: [String: Any] = ["name": "scene", "title": "Muddi", "state": "offline", "seen": 0, "last": 0, "count": 1,
+                                  "look": 0, "launch": ["verdict": "refused", "error": "claude missing from PATH", "at": 1]]
+        guard let data = try? JSONSerialization.data(withJSONObject: row),
+              let a = try? JSONDecoder().decode(Agent.self, from: data), let why = RestartReason.error(a) else {
+            problems.append("17-restart-reason: an offline row with a refused launch shows no reason")
+            return
+        }
+        var here = a
+        here.state = "here"
+        if RestartReason.error(here) != nil { problems.append("17-restart-reason: a reason shows on a row that is not offline") }
+        let view = VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 12) {
+                OrbView(state: a.state, look: a.look, animated: false).frame(width: 38, height: 38)
+                RowText(title: a.title, sub: agentLabel[a.state, default: a.state])
+                RestartButton(working: false) {}
+            }
+            .padding(12)
+            RestartReason(error: why)
+        }
+        .padding(6)
+        .frame(width: 300, alignment: .leading)
+        .background(Color.white)
+        let host = NSHostingView(rootView: view)
+        host.frame = NSRect(x: 0, y: 0, width: 300, height: 110)
+        _ = Self.render(host)          // lays it out: the reason's arrival spring arms
+        for _ in 0..<3 {
+            Motion.main.settleAll()
+            try? await Task.sleep(for: .milliseconds(120))
+        }
+        guard let image = Self.render(host) else {
+            problems.append("17-restart-reason: render failed")
+            return
+        }
+        save(image, "17-restart-reason", note: "\(a.title): Couldn\u{2019}t start: \(why)")
     }
 
     /// A rail click: the thread opens and reads (Store.open), then its messages land.
