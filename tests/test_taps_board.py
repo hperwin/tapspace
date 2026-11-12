@@ -323,6 +323,18 @@ class TapsBoardTests(unittest.TestCase):
         self.assertFalse(any("search" in c for c in self.gh_calls()))
         self.assertEqual(self.pushes, [])
 
+    def test_a_follow_up_someone_else_filed_in_the_reviewers_name_is_not_a_tap(self):
+        """The board calls a pilot-filed follow-up the reviewer's; only an issue he authored is his tap."""
+        self.issue("hperwin/fixture-app#7")
+        self.issue("hperwin/fixture-app#8")
+        self.issue("hperwin/fixture-app#9")
+        self.issues["hperwin/fixture-app#8"]["author"] = {"login": "tseller"}
+        self.issues["hperwin/fixture-app#9"]["author"] = {"login": "tseller"}
+        self.board(row("hperwin/fixture-app#7", "proposed"), row("hperwin/fixture-app#8", "proposed"),
+                   row("hperwin/fixture-app#9", "en route"))
+        self.settle()
+        self.assertEqual(set(self.items()), {"hperwin/fixture-app#7"})
+
     def test_the_key_is_githubs_spelling_from_the_issue_url(self):
         self.issue("SnappStats/snappy#3313", [("tseller", "hello")])
         self.issue("SnappStats/snappy#3314", [("tseller", "hello")])

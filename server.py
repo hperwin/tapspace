@@ -2289,7 +2289,7 @@ def _residue(key, iss):
              "via": via.get(c["url"], "")} for c in iss["comments"]]
     is_open = iss["state"] == "OPEN"
     needs = is_open and _has(labels, TAP_NEEDS_REPLY)
-    return {"title": iss["title"], "url": iss["url"], "messages": msgs,
+    return {"title": iss["title"], "url": iss["url"], "messages": msgs, "mine": iss["author"]["login"] == me,
             # the tap has your latest message (👀) and has not answered yet
             "replying": is_open and bool(msgs) and msgs[-1]["who"] == "you" and msgs[-1]["seen"],
             "created": iss["createdAt"], "closed": iss.get("closedAt"),
@@ -2485,6 +2485,9 @@ def _compose():
     for key, row in live.items():
         if key not in _ISSUES:
             _ISSUES[key] = _unread(key)
+        if _ISSUES[key].get("mine") is False or (_ISSUES[key].get("unread") and row.get("phase") == "proposed"):
+            continue                # a follow-up a pilot filed in the reviewer's name is not his tap; a proposed
+                                    # row waits for its issue read to say who filed it
         was = prev.get(key)
         try:
             it = _item(key, row, _ISSUES[key], was)
