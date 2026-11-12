@@ -282,20 +282,43 @@ class Wire(unittest.TestCase):
         self.assertEqual((s["loaded"], s["error"]), (True, ""))
         self.assertGreater(s["at"], 0)
         r9 = row(9, repo="hperwin/Fixture-App")
+        Fake.rows = Fake.rows + [r9]                                   # a new journey: the fleet says whose it is
         Fake.push(change("added", r9, journey="https://github.com/hperwin/Fixture-App/issues/9"))
         until(lambda: "https://github.com/hperwin/fixture-app/issues/9" in self.b.snapshot()["rows"])
         r1 = dict(row(1), label="✈ en route", phase="en route")
         Fake.push(change("changed", r1))
         until(lambda: self.b.snapshot()["rows"][r1["journey"]]["phase"] == "en route")
+        Fake.rows = [r1, row(2), row(3), r9, row(10)]
         n = len(self.snaps)
         Fake.push(change("changed", r1))                        # the same row again
         Fake.push(b": ping\n\n")
         Fake.push(sse("message", {"x": 1}) + b"event: change\ndata: {not json\n\n")
         Fake.push(change("removed", journey="https://github.com/hperwin/fixture-app/issues/404"))
         Fake.push(change("added", row(10)))
-        until(lambda: row(10)["journey"] in self.b.snapshot()["rows"])
+
+        def placed():
+            Fake.push(b": ping\n\n")                                   # feed the 0.4 s watchdog through the check gap
+            return row(10)["journey"] in self.b.snapshot()["rows"]
+        until(placed)
         self.assertEqual(len(self.snaps), n + 1)                       # only row 10 moved anything
-        self.assertEqual(self.calls("fleet"), [])                      # an unknown removal asks nothing
+        self.assertEqual(len(self.calls("fleet")), 3)                  # the open, row 9, row 10: an unknown removal asks nothing
+
+    def test_only_the_reviewers_own_journeys_are_kept(self):
+        """The key reads colleagues' journeys too; stream rows carry no owner, so the fleet's `yours` decides."""
+        mine = lambda n: dict(row(n), yours=True)
+        theirs = lambda n: dict(row(n), yours=False)
+        Fake.stream_rows = [row(1), row(2), row(3)]
+        Fake.rows = [mine(1), theirs(2), theirs(3)]
+        self.make().start()
+        self.live(1)
+        self.assertEqual(set(self.b.snapshot()["rows"]), {row(1)["journey"]})
+        Fake.push(change("changed", dict(row(2), phase="en route")))    # a colleague's row moved: still not kept
+        Fake.rows = [mine(1), theirs(2), theirs(3), theirs(7), mine(8)]
+        Fake.push(change("added", row(7)))
+        Fake.push(change("added", row(8)))
+        until(lambda: row(8)["journey"] in self.b.snapshot()["rows"])
+        self.assertEqual(set(self.b.snapshot()["rows"]), {row(1)["journey"], row(8)["journey"]})
+        self.assertTrue(all(row(n)["journey"] not in s["rows"] for s in self.snaps for n in (2, 3, 7)))
 
     def test_removed_frames_wait_one_window_and_the_fleet_decides(self):
         self.make().start()
@@ -305,7 +328,7 @@ class Wire(unittest.TestCase):
         Fake.push(change("removed", row(2)))
         Fake.push(change("removed", row(3)))
         until(lambda: len(self.b.snapshot()["rows"]) == 2)
-        got = self.calls("fleet")
+        got = self.calls("fleet", t)
         self.assertEqual(len(got), 1)
         self.assertGreaterEqual(got[0][0] - t, board.COALESCE * 0.9)
         self.assertEqual(set(self.b.snapshot()["rows"]), {row(1)["journey"], row(3)["journey"]})
@@ -317,6 +340,7 @@ class Wire(unittest.TestCase):
         self.make().start()
         self.live(5)
         Fake.rows = [row(1), row(3), row(4), row(5)]
+        t = time.monotonic()
         Fake.push(change("removed", row(2)))
         until(lambda: len(self.b.snapshot()["rows"]) == 4, what="the first check")
         Fake.rows = [row(3), row(4), row(5)]
@@ -329,7 +353,7 @@ class Wire(unittest.TestCase):
             Fake.push(b": ping\n\n")                                   # feed the 0.4 s watchdog meanwhile
             return len(self.b.snapshot()["rows"]) == 2
         until(checked, what="the second check")
-        fleet = self.calls("fleet")
+        fleet = self.calls("fleet", t)
         self.assertEqual(len(fleet), 2)
         self.assertGreaterEqual(fleet[1][0] - fleet[0][0], board.CONFIRM_GAP * 0.9)
         self.assertEqual([len(s["rows"]) for s in self.snaps if s["loaded"]], [5, 4, 2])
@@ -354,13 +378,13 @@ class Wire(unittest.TestCase):
         Fake.stream_rows = []
         Fake.fleet = [(200, {"ok": True, "count": 3, "rows": Fake.rows})]
         Fake.push(None)
-        until(lambda: len(self.calls("stream")) == 2 and len(self.calls("fleet")) == 1, what="confirm")
+        until(lambda: len(self.calls("stream")) == 2 and len(self.calls("fleet")) == 2, what="confirm")
         until(lambda: self.b.snapshot()["state"] == "live")
         self.assertEqual(len(self.b.snapshot()["rows"]), 3)
         Fake.rows = []
         Fake.push(None)
         until(lambda: self.b.snapshot()["rows"] == {} and self.b.snapshot()["state"] == "live", what="confirmed empty")
-        self.assertEqual(len(self.calls("fleet")), 2)
+        self.assertEqual(len(self.calls("fleet")), 3)                  # one per stream opened
         self.assertTrue(all(len(s["rows"]) == 3 for s in self.snaps[:-1] if s["rows"]))
 
     def test_a_dead_key_keeps_the_rows_and_a_new_token_reconnects_at_once(self):
@@ -376,7 +400,7 @@ class Wire(unittest.TestCase):
                 Fake.push(change("removed", row(n)))
             until(lambda: any(s[3] == tok[0] for s in self.calls("stream")), what="a stream on the new token")
             self.live()
-        self.assertEqual([s[3] for s in self.calls("fleet")], ["fdk_test_old_9f3c"])
+        self.assertEqual([s[3] for s in self.calls("fleet")], ["fdk_test_old_9f3c", "fdk_test_old_9f3c", "fdk_test_new_7a1e"])
         self.assertEqual(len(reads), 2)
         self.assertTrue(all(len(s["rows"]) == 3 for s in self.snaps if s["loaded"]))
         blob = json.dumps(self.snaps)
@@ -452,7 +476,7 @@ class Wire(unittest.TestCase):
         for g, w in zip(gaps, want):
             self.assertGreaterEqual(g, w * 0.9)
             self.assertLess(g, w + 0.3)
-        polls = [s[0] for s in self.calls("fleet", t)]
+        polls = [s[0] for s in self.calls("fleet", t) if s[0] < opens[-1]]   # the stream that opens reads the fleet too
         self.assertGreaterEqual(len(polls), 5)
         self.assertGreaterEqual(polls[0] - t, 0.1 * 0.9)
         self.assertTrue(all(b - a >= 0.1 * 0.9 for a, b in zip(polls, polls[1:])))
@@ -513,7 +537,7 @@ class Wire(unittest.TestCase):
         time.sleep(0.05)
         self.assertIsNone(b.read(row(1)["journey"]))                   # held: refused without a call
         self.live()
-        self.assertEqual([s[1] for s in Fake.seen], ["stream", "stream"])
+        self.assertEqual([s[1] for s in Fake.seen], ["stream", "stream", "fleet"])
         self.assertGreaterEqual(Fake.seen[1][0] - Fake.seen[0][0], board.HOLD * 0.9)
         Fake.reads = {row(1)["journey"]: (429, slow)}                  # a read is refused 429 while live
         Fake.rows = [row(1), row(3)]
@@ -525,8 +549,8 @@ class Wire(unittest.TestCase):
             Fake.push(b": ping\n\n")                                   # the door pings; feed the 0.4 s watchdog
             return len(b.snapshot()["rows"]) == 2
         until(checked, what="the held removal check")
-        self.assertGreaterEqual(self.calls("fleet")[0][0] - t, board.HOLD * 0.9)   # the check waited out the hold
-        self.assertEqual((len(self.calls("fleet")), len(self.calls("stream")), b.snapshot()["state"]), (1, 2, "live"))
+        self.assertGreaterEqual(self.calls("fleet", t)[0][0] - t, board.HOLD * 0.9)   # the check waited out the hold
+        self.assertEqual((len(self.calls("fleet", t)), len(self.calls("stream")), b.snapshot()["state"]), (1, 2, "live"))
         idle = board.Board(base=self.url, key=KEY, poll_every=0.1)    # never started: drive one backoff by hand
         idle._reread()
         now = time.monotonic()
