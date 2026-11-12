@@ -102,10 +102,19 @@ def _verdict(status, body):
 
 
 def _keyed(rows):
-    """Board rows by lower-cased journey URL; None when the answer carries no row list."""
+    """The reviewer's own board rows by lower-cased journey URL; None when the answer carries no row list.
+    The key reads every colleague's journey too: a row the board marks `yours: false` is never kept. Only the
+    fleet says whose a row is (stream rows carry no `yours`), so the fleet decides every row the stream brings."""
     if not isinstance(rows, list):
         return None
-    return {r["journey"].lower(): r for r in rows if isinstance(r, dict) and isinstance(r.get("journey"), str)}
+    return {r["journey"].lower(): r for r in rows
+            if isinstance(r, dict) and isinstance(r.get("journey"), str) and r.get("yours") is not False}
+
+
+def _theirs(rows):
+    """The lower-cased journey URLs a fleet answer marks as a colleague's."""
+    return {r["journey"].lower() for r in rows
+            if isinstance(r, dict) and isinstance(r.get("journey"), str) and r.get("yours") is False}
 
 
 class Board:
@@ -117,6 +126,7 @@ class Board:
         self._stop = threading.Event()
         self._q = queue.Queue()
         self._rows, self._at, self._loaded, self._state, self._error = {}, 0.0, False, "off", ""
+        self._theirs = set()                                   # colleagues' journeys, as the last fleet read said
         self._token = self._base = self._dead = None
         self._exp = self._dead_at = 0
         self._hold_until = self._fleet_at = 0.0
@@ -263,12 +273,11 @@ class Board:
                 rows = _keyed(obj.get("rows"))
                 if rows is None:
                     continue
-                if not rows and self._rows:
-                    v = self._confirm("live")
-                    if v != "ok":
-                        return self._refusal(v, token, "failed")
-                else:
-                    self._put(rows, "live")
+                at = self._fleet_at
+                v = self._confirm("live")                          # the fleet's rows say whose each one is
+                self._fleet_at = at                                # CONFIRM_GAP spaces removal checks, not this read
+                if v != "ok":
+                    return self._refusal(v, token, "failed")
                 live, self._poll_at = True, None
             elif ev == "change":
                 j = str(obj.get("journey") or "").lower()
@@ -276,9 +285,16 @@ class Board:
                     if j in self._rows:                            # never applied: the fleet decides
                         due = due or time.monotonic() + COALESCE
                 elif live and obj.get("change") in ("added", "changed") and isinstance(obj.get("row"), dict) and j:
+                    yours = obj["row"].get("yours")
                     with self._lock:
                         rows = dict(self._rows)
-                    rows[j] = obj["row"]
+                    if yours is False or (yours is None and j in self._theirs):
+                        rows.pop(j, None)                          # a colleague's journey: never a tap here
+                    elif yours is True or j in rows:
+                        rows[j] = obj["row"]
+                    else:                                          # a journey the fleet has not placed yet
+                        due = due or time.monotonic() + COALESCE
+                        continue
                     self._put(rows)
 
     def _down(self, retry_at):
@@ -325,6 +341,7 @@ class Board:
         if v == "ok" and rows is None:
             return "fail"
         if v == "ok":
+            self._theirs = _theirs(obj["rows"])
             self._put(rows, state)
         return v
 
