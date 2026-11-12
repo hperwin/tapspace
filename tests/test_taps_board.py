@@ -330,6 +330,7 @@ class TapsBoardTests(unittest.TestCase):
         self.issue("hperwin/fixture-app#9")
         self.issues["hperwin/fixture-app#8"]["author"] = {"login": "tseller"}
         self.issues["hperwin/fixture-app#9"]["author"] = {"login": "tseller"}
+        (SHIM / "issues.json").write_text(json.dumps(self.issues))
         self.board(row("hperwin/fixture-app#7", "proposed"), row("hperwin/fixture-app#8", "proposed"),
                    row("hperwin/fixture-app#9", "en route"))
         self.settle()
